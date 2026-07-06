@@ -8,6 +8,7 @@ dependencies = [
   "pydantic>=2.8.0",
   "pydantic-settings>=2.4.0",
   "python-multipart>=0.0.9",
+  "pathspec>=0.12.1",
   "sqlmodel>=0.0.22",
   "uvicorn[standard]>=0.30.0",
   "pypdf>=4.3.0"
@@ -30,3 +31,6 @@ ignore = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
