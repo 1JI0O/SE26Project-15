@@ -10,6 +10,7 @@ from pathspec import PathSpec
 # Maximum number of bytes to read from a source file.
 MAX_SOURCE_BYTES = 512_000
 
+# Default ignore patterns for filtering files
 DEFAULT_IGNORE_PATTERNS = [
     ".DS_Store",
     "._*",
