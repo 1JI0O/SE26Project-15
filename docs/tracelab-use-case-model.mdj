@@ -1,0 +1,965 @@
+{
+  "_type": "Project",
+  "_id": "tracelab_project",
+  "name": "TraceLab Use Case Model",
+  "ownedElements": [
+    {
+      "_type": "UMLModel",
+      "_id": "model_tracelab",
+      "_parent": {
+        "$ref": "tracelab_project"
+      },
+      "name": "论文代码双向追溯 Web 工作台",
+      "ownedElements": [
+        {
+          "_type": "UMLUseCaseDiagram",
+          "_id": "diagram_use_cases",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "TraceLab 完整工作台用例图",
+          "ownedViews": [
+            {
+              "_type": "UMLTextBoxView",
+              "_id": "view_title",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "left": 280,
+              "top": 24,
+              "width": 560,
+              "height": 36,
+              "text": "TraceLab 论文代码双向追溯 Web 工作台 - Use Case Model",
+              "font": "Arial;18;1",
+              "horzAlign": 2
+            },
+            {
+              "_type": "UMLActorView",
+              "_id": "view_actor_researcher",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "actor_researcher"
+              },
+              "left": 40,
+              "top": 130,
+              "width": 120,
+              "height": 128
+            },
+            {
+              "_type": "UMLActorView",
+              "_id": "view_actor_owner",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "actor_owner"
+              },
+              "left": 40,
+              "top": 430,
+              "width": 120,
+              "height": 128
+            },
+            {
+              "_type": "UMLActorView",
+              "_id": "view_actor_developer",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "actor_developer"
+              },
+              "left": 40,
+              "top": 700,
+              "width": 120,
+              "height": 128
+            },
+            {
+              "_type": "UMLActorView",
+              "_id": "view_actor_ai_service",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "actor_ai_service"
+              },
+              "left": 920,
+              "top": 520,
+              "width": 130,
+              "height": 128
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_create_project",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_create_project"
+              },
+              "left": 240,
+              "top": 100,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_upload_pdf",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_upload_pdf"
+              },
+              "left": 240,
+              "top": 200,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_upload_zip",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_upload_zip"
+              },
+              "left": 240,
+              "top": 300,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_parse_paper",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_parse_paper"
+              },
+              "left": 490,
+              "top": 200,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_analyze_code",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_analyze_code"
+              },
+              "left": 490,
+              "top": 300,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_read_paper",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_read_paper"
+              },
+              "left": 240,
+              "top": 430,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_browse_code",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_browse_code"
+              },
+              "left": 240,
+              "top": 530,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_generate_trace",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_generate_trace"
+              },
+              "left": 490,
+              "top": 430,
+              "width": 190,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_review_matrix",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_review_matrix"
+              },
+              "left": 490,
+              "top": 530,
+              "width": 190,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_flow_graph",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_flow_graph"
+              },
+              "left": 730,
+              "top": 430,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_conflict",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_conflict"
+              },
+              "left": 730,
+              "top": 530,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_export_report",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_export_report"
+              },
+              "left": 730,
+              "top": 630,
+              "width": 170,
+              "height": 70
+            },
+            {
+              "_type": "UMLUseCaseView",
+              "_id": "view_uc_extend_api",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "uc_extend_api"
+              },
+              "left": 240,
+              "top": 720,
+              "width": 190,
+              "height": 70
+            },
+            {
+              "_type": "UMLAssociationView",
+              "_id": "view_assoc_researcher_create",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "assoc_researcher_create"
+              },
+              "head": {
+                "$ref": "view_uc_create_project"
+              },
+              "tail": {
+                "$ref": "view_actor_researcher"
+              },
+              "points": "160:190;240:135"
+            },
+            {
+              "_type": "UMLAssociationView",
+              "_id": "view_assoc_researcher_upload_pdf",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "assoc_researcher_upload_pdf"
+              },
+              "head": {
+                "$ref": "view_uc_upload_pdf"
+              },
+              "tail": {
+                "$ref": "view_actor_researcher"
+              },
+              "points": "160:190;240:235"
+            },
+            {
+              "_type": "UMLAssociationView",
+              "_id": "view_assoc_researcher_upload_zip",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "assoc_researcher_upload_zip"
+              },
+              "head": {
+                "$ref": "view_uc_upload_zip"
+              },
+              "tail": {
+                "$ref": "view_actor_researcher"
+              },
+              "points": "160:210;240:335"
+            },
+            {
+              "_type": "UMLAssociationView",
+              "_id": "view_assoc_researcher_read",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "assoc_researcher_read"
+              },
+              "head": {
+                "$ref": "view_uc_read_paper"
+              },
+              "tail": {
+                "$ref": "view_actor_researcher"
+              },
+              "points": "160:240;240:465"
+            },
+            {
+              "_type": "UMLAssociationView",
+              "_id": "view_assoc_researcher_code",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "assoc_researcher_code"
+              },
+              "head": {
+                "$ref": "view_uc_browse_code"
+              },
+              "tail": {
+                "$ref": "view_actor_researcher"
+              },
+              "points": "160:250;240:565"
+            },
+            {
+              "_type": "UMLAssociationView",
+              "_id": "view_assoc_owner_flow",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "assoc_owner_flow"
+              },
+              "head": {
+                "$ref": "view_uc_flow_graph"
+              },
+              "tail": {
+                "$ref": "view_actor_owner"
+              },
+              "points": "160:490;730:465"
+            },
+            {
+              "_type": "UMLAssociationView",
+              "_id": "view_assoc_owner_report",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "assoc_owner_report"
+              },
+              "head": {
+                "$ref": "view_uc_export_report"
+              },
+              "tail": {
+                "$ref": "view_actor_owner"
+              },
+              "points": "160:520;730:665"
+            },
+            {
+              "_type": "UMLAssociationView",
+              "_id": "view_assoc_dev_api",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "assoc_dev_api"
+              },
+              "head": {
+                "$ref": "view_uc_extend_api"
+              },
+              "tail": {
+                "$ref": "view_actor_developer"
+              },
+              "points": "160:764;240:755"
+            },
+            {
+              "_type": "UMLDependencyView",
+              "_id": "view_dep_pdf_parse",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "dep_pdf_parse"
+              },
+              "head": {
+                "$ref": "view_uc_parse_paper"
+              },
+              "tail": {
+                "$ref": "view_uc_upload_pdf"
+              },
+              "points": "410:235;490:235"
+            },
+            {
+              "_type": "UMLDependencyView",
+              "_id": "view_dep_zip_analyze",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "dep_zip_analyze"
+              },
+              "head": {
+                "$ref": "view_uc_analyze_code"
+              },
+              "tail": {
+                "$ref": "view_uc_upload_zip"
+              },
+              "points": "410:335;490:335"
+            },
+            {
+              "_type": "UMLDependencyView",
+              "_id": "view_dep_trace_matrix",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "dep_trace_matrix"
+              },
+              "head": {
+                "$ref": "view_uc_review_matrix"
+              },
+              "tail": {
+                "$ref": "view_uc_generate_trace"
+              },
+              "points": "585:500;585:530"
+            },
+            {
+              "_type": "UMLDependencyView",
+              "_id": "view_dep_conflict_extend",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "dep_conflict_extend"
+              },
+              "head": {
+                "$ref": "view_uc_review_matrix"
+              },
+              "tail": {
+                "$ref": "view_uc_conflict"
+              },
+              "points": "730:565;680:565"
+            },
+            {
+              "_type": "UMLDependencyView",
+              "_id": "view_dep_ai_trace",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "dep_ai_trace"
+              },
+              "head": {
+                "$ref": "view_actor_ai_service"
+              },
+              "tail": {
+                "$ref": "view_uc_generate_trace"
+              },
+              "points": "680:465;920:565"
+            },
+            {
+              "_type": "UMLDependencyView",
+              "_id": "view_dep_ai_conflict",
+              "_parent": {
+                "$ref": "diagram_use_cases"
+              },
+              "model": {
+                "$ref": "dep_ai_conflict"
+              },
+              "head": {
+                "$ref": "view_actor_ai_service"
+              },
+              "tail": {
+                "$ref": "view_uc_conflict"
+              },
+              "points": "900:565;920:590"
+            }
+          ]
+        },
+        {
+          "_type": "UMLActor",
+          "_id": "actor_researcher",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "复现研究人员",
+          "ownedElements": [
+            {
+              "_type": "UMLAssociation",
+              "_id": "assoc_researcher_create",
+              "_parent": {
+                "$ref": "actor_researcher"
+              },
+              "end1": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_create_end1",
+                "_parent": {
+                  "$ref": "assoc_researcher_create"
+                },
+                "reference": {
+                  "$ref": "actor_researcher"
+                }
+              },
+              "end2": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_create_end2",
+                "_parent": {
+                  "$ref": "assoc_researcher_create"
+                },
+                "reference": {
+                  "$ref": "uc_create_project"
+                }
+              }
+            },
+            {
+              "_type": "UMLAssociation",
+              "_id": "assoc_researcher_upload_pdf",
+              "_parent": {
+                "$ref": "actor_researcher"
+              },
+              "end1": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_upload_pdf_end1",
+                "_parent": {
+                  "$ref": "assoc_researcher_upload_pdf"
+                },
+                "reference": {
+                  "$ref": "actor_researcher"
+                }
+              },
+              "end2": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_upload_pdf_end2",
+                "_parent": {
+                  "$ref": "assoc_researcher_upload_pdf"
+                },
+                "reference": {
+                  "$ref": "uc_upload_pdf"
+                }
+              }
+            },
+            {
+              "_type": "UMLAssociation",
+              "_id": "assoc_researcher_upload_zip",
+              "_parent": {
+                "$ref": "actor_researcher"
+              },
+              "end1": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_upload_zip_end1",
+                "_parent": {
+                  "$ref": "assoc_researcher_upload_zip"
+                },
+                "reference": {
+                  "$ref": "actor_researcher"
+                }
+              },
+              "end2": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_upload_zip_end2",
+                "_parent": {
+                  "$ref": "assoc_researcher_upload_zip"
+                },
+                "reference": {
+                  "$ref": "uc_upload_zip"
+                }
+              }
+            },
+            {
+              "_type": "UMLAssociation",
+              "_id": "assoc_researcher_read",
+              "_parent": {
+                "$ref": "actor_researcher"
+              },
+              "end1": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_read_end1",
+                "_parent": {
+                  "$ref": "assoc_researcher_read"
+                },
+                "reference": {
+                  "$ref": "actor_researcher"
+                }
+              },
+              "end2": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_read_end2",
+                "_parent": {
+                  "$ref": "assoc_researcher_read"
+                },
+                "reference": {
+                  "$ref": "uc_read_paper"
+                }
+              }
+            },
+            {
+              "_type": "UMLAssociation",
+              "_id": "assoc_researcher_code",
+              "_parent": {
+                "$ref": "actor_researcher"
+              },
+              "end1": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_code_end1",
+                "_parent": {
+                  "$ref": "assoc_researcher_code"
+                },
+                "reference": {
+                  "$ref": "actor_researcher"
+                }
+              },
+              "end2": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_researcher_code_end2",
+                "_parent": {
+                  "$ref": "assoc_researcher_code"
+                },
+                "reference": {
+                  "$ref": "uc_browse_code"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "_type": "UMLActor",
+          "_id": "actor_owner",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "项目负责人",
+          "ownedElements": [
+            {
+              "_type": "UMLAssociation",
+              "_id": "assoc_owner_flow",
+              "_parent": {
+                "$ref": "actor_owner"
+              },
+              "end1": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_owner_flow_end1",
+                "_parent": {
+                  "$ref": "assoc_owner_flow"
+                },
+                "reference": {
+                  "$ref": "actor_owner"
+                }
+              },
+              "end2": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_owner_flow_end2",
+                "_parent": {
+                  "$ref": "assoc_owner_flow"
+                },
+                "reference": {
+                  "$ref": "uc_flow_graph"
+                }
+              }
+            },
+            {
+              "_type": "UMLAssociation",
+              "_id": "assoc_owner_report",
+              "_parent": {
+                "$ref": "actor_owner"
+              },
+              "end1": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_owner_report_end1",
+                "_parent": {
+                  "$ref": "assoc_owner_report"
+                },
+                "reference": {
+                  "$ref": "actor_owner"
+                }
+              },
+              "end2": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_owner_report_end2",
+                "_parent": {
+                  "$ref": "assoc_owner_report"
+                },
+                "reference": {
+                  "$ref": "uc_export_report"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "_type": "UMLActor",
+          "_id": "actor_developer",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "后端与算法开发者",
+          "ownedElements": [
+            {
+              "_type": "UMLAssociation",
+              "_id": "assoc_dev_api",
+              "_parent": {
+                "$ref": "actor_developer"
+              },
+              "end1": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_dev_api_end1",
+                "_parent": {
+                  "$ref": "assoc_dev_api"
+                },
+                "reference": {
+                  "$ref": "actor_developer"
+                }
+              },
+              "end2": {
+                "_type": "UMLAssociationEnd",
+                "_id": "assoc_dev_api_end2",
+                "_parent": {
+                  "$ref": "assoc_dev_api"
+                },
+                "reference": {
+                  "$ref": "uc_extend_api"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "_type": "UMLActor",
+          "_id": "actor_ai_service",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "外部 AI/分析服务"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_create_project",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "创建追溯项目"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_upload_pdf",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "上传论文 PDF"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_upload_zip",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "上传代码 ZIP"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_parse_paper",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "解析论文结构"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_analyze_code",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "分析代码仓库"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_read_paper",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "阅读论文原文"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_browse_code",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "浏览代码树与编辑代码"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_generate_trace",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "生成候选追溯关系"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_review_matrix",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "审阅追溯矩阵"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_flow_graph",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "查看流程图"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_conflict",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "执行魔改冲突分析"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_export_report",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "导出审阅报告"
+        },
+        {
+          "_type": "UMLUseCase",
+          "_id": "uc_extend_api",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "扩展后端占位接口"
+        },
+        {
+          "_type": "UMLDependency",
+          "_id": "dep_pdf_parse",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "include",
+          "stereotype": "include",
+          "source": {
+            "$ref": "uc_upload_pdf"
+          },
+          "target": {
+            "$ref": "uc_parse_paper"
+          }
+        },
+        {
+          "_type": "UMLDependency",
+          "_id": "dep_zip_analyze",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "include",
+          "stereotype": "include",
+          "source": {
+            "$ref": "uc_upload_zip"
+          },
+          "target": {
+            "$ref": "uc_analyze_code"
+          }
+        },
+        {
+          "_type": "UMLDependency",
+          "_id": "dep_trace_matrix",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "include",
+          "stereotype": "include",
+          "source": {
+            "$ref": "uc_generate_trace"
+          },
+          "target": {
+            "$ref": "uc_review_matrix"
+          }
+        },
+        {
+          "_type": "UMLDependency",
+          "_id": "dep_conflict_extend",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "extend",
+          "stereotype": "extend",
+          "source": {
+            "$ref": "uc_conflict"
+          },
+          "target": {
+            "$ref": "uc_review_matrix"
+          }
+        },
+        {
+          "_type": "UMLDependency",
+          "_id": "dep_ai_trace",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "service",
+          "stereotype": "service",
+          "source": {
+            "$ref": "actor_ai_service"
+          },
+          "target": {
+            "$ref": "uc_generate_trace"
+          }
+        },
+        {
+          "_type": "UMLDependency",
+          "_id": "dep_ai_conflict",
+          "_parent": {
+            "$ref": "model_tracelab"
+          },
+          "name": "service",
+          "stereotype": "service",
+          "source": {
+            "$ref": "actor_ai_service"
+          },
+          "target": {
+            "$ref": "uc_conflict"
+          }
+        }
+      ]
+    }
+  ]
+}
