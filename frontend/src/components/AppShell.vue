@@ -5,10 +5,10 @@
         <span class="brand-mark">T</span>
         <span>
           <strong>论文代码双向追溯 Web 工作台</strong>
-          <small>Iteration 1 Prototype</small>
+          <small>Full UI Prototype</small>
         </span>
       </router-link>
-      <el-tag effect="plain" type="success">接口先行</el-tag>
+      <el-tag effect="plain" type="success">完整 UI 原型</el-tag>
     </header>
     <main class="workspace">
       <slot />
@@ -83,4 +83,3 @@
   }
 }
 </style>
-

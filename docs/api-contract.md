@@ -108,3 +108,62 @@
 
 基于当前论文与代码分析结果生成候选追溯关系。第一迭代为启发式示例，后续可替换为 embedding/LLM/规则混合方案。
 
+## 完整工作台 UI 占位接口
+
+以下接口用于支撑最终形态 UI 的后续开发。当前返回稳定的占位 JSON，不代表流程图、魔改冲突分析、报告生成等算法已经实现。
+
+`GET /api/v1/projects/{project_id}/workspace`
+
+返回完整工作台聚合数据，包含导入步骤、论文页、代码文件、追溯矩阵、流程图、冲突项和报告摘要。`project_id` 可使用真实项目 ID，也可使用 `prototype` 查看占位数据。
+
+`GET /api/v1/projects/{project_id}/workspace/paper-pages`
+
+返回论文原文页占位数据：
+
+```json
+[
+  {
+    "page_number": 3,
+    "title": "3.1 Residual Building Block",
+    "body": ["Formally, a building block is defined as y = F(x, Wi) + x."],
+    "anchors": [{"id": "P3-12", "kind": "formula", "text": "y = F(x, Wi) + x"}]
+  }
+]
+```
+
+`GET /api/v1/projects/{project_id}/workspace/code-tree`
+
+返回代码文件树/文件摘要占位数据。
+
+`GET /api/v1/projects/{project_id}/workspace/code-files/{file_path}`
+
+返回指定代码文件内容、关联行和论文引用信息。`file_path` 支持斜杠路径，例如 `models/resnet.py`。
+
+`GET /api/v1/projects/{project_id}/workspace/trace-matrix`
+
+返回论文位置与代码位置的双向追溯矩阵占位数据。
+
+`GET /api/v1/projects/{project_id}/workspace/flow-graph`
+
+返回流程图节点占位数据。
+
+`GET /api/v1/projects/{project_id}/workspace/conflicts`
+
+返回魔改冲突分析占位数据。
+
+`GET /api/v1/projects/{project_id}/workspace/report-summary`
+
+返回报告摘要和质量门禁卡片占位数据。
+
+`POST /api/v1/projects/{project_id}/workspace/analyze`
+
+启动完整工作台分析任务的占位接口，当前只返回 `202 Accepted` 与 placeholder job id。
+
+请求：
+
+```json
+{
+  "mode": "full",
+  "targets": ["models/resnet.py"]
+}
+```

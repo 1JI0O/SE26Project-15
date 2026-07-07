@@ -2,14 +2,27 @@
   <div class="project-page">
     <section class="create-panel">
       <div>
-        <h1>项目列表</h1>
-        <p>创建一个追溯工作空间，然后上传论文与代码包进行分析。</p>
+        <h1>项目入口</h1>
+        <p>进入完整 UI 原型，查看论文原文、代码编辑区、追溯矩阵、流程图和冲突分析的最终工作台形态。</p>
       </div>
       <el-form class="create-form" :model="form" @submit.prevent>
         <el-input v-model="form.name" placeholder="项目名称" />
         <el-input v-model="form.description" placeholder="项目说明" />
         <el-button type="primary" @click="submit">创建项目</el-button>
       </el-form>
+    </section>
+
+    <section class="prototype-card">
+      <div>
+        <el-tag type="warning" effect="plain">Final UI Prototype</el-tag>
+        <h2>论文代码双向追溯完整工作台</h2>
+        <p>
+          这是面向最终目标的静态 UI：PDF 原文阅读、代码文件树、代码编辑页、追溯矩阵、流程图、魔改冲突分析和报告面板都已呈现。
+        </p>
+      </div>
+      <el-button type="primary" size="large" @click="openProject('prototype')">
+        进入完整 UI 原型
+      </el-button>
     </section>
 
     <el-skeleton v-if="store.loading" :rows="4" animated />
@@ -58,7 +71,7 @@ async function submit() {
   await router.push({ name: 'workspace', params: { id: project.id } })
 }
 
-function openProject(projectId: number) {
+function openProject(projectId: number | string) {
   void router.push({ name: 'workspace', params: { id: projectId } })
 }
 </script>
@@ -78,6 +91,29 @@ function openProject(projectId: number) {
   border: 1px solid #dce3ea;
   border-radius: 8px;
   background: white;
+}
+
+.prototype-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px;
+  border: 1px solid #dce3ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.prototype-card h2 {
+  margin: 10px 0 8px;
+  font-size: 22px;
+}
+
+.prototype-card p {
+  max-width: 780px;
+  margin: 0;
+  color: #667789;
+  line-height: 1.65;
 }
 
 h1 {
@@ -125,9 +161,14 @@ h1 {
 
 @media (max-width: 900px) {
   .create-panel,
-  .create-form {
+  .create-form,
+  .prototype-card {
     grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .prototype-card {
+    display: grid;
   }
 }
 </style>
-
