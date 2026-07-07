@@ -39,6 +39,24 @@ pnpm install
 pnpm dev
 ```
 
+Windows PowerShell：
+
+```powershell
+# 后端
+Copy-Item .env.example backend\.env -Force
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e '.[dev]'
+python -m uvicorn app.main:app --reload
+
+# 前端另开一个 PowerShell
+cd <项目根目录>\frontend
+$env:COREPACK_ENABLE_AUTO_PIN=0
+corepack pnpm install
+corepack pnpm dev
+```
+
 默认后端地址为 `http://127.0.0.1:8000`，接口文档为 `http://127.0.0.1:8000/docs`。
 
 ## 第一迭代交付范围
@@ -48,4 +66,3 @@ pnpm dev
 - 论文解析最小原型：标题、摘要、章节、段落、页码结构化 JSON
 - 代码分析最小原型：文件树、类、函数、导入关系、PyTorch 模型结构候选
 - Web 工作台静态原型：项目列表、上传区、论文阅读区、代码浏览区、追溯结果面板
-
