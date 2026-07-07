@@ -39,6 +39,7 @@ const codeFile = ref<File | null>(null)
 const paperLoading = ref(false)
 const codeLoading = ref(false)
 
+// Keep paper parsing and code analysis upload flows independent.
 function onPaperSelected(event: Event) {
   const input = event.target as HTMLInputElement
   paperFile.value = input.files?.[0] ?? null
