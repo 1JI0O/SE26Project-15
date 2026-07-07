@@ -8,6 +8,7 @@ from pathspec import PathSpec
 
 MAX_SOURCE_BYTES = 512_000
 
+# Default ignore patterns for filtering files
 DEFAULT_IGNORE_PATTERNS = [
     ".DS_Store",
     "._*",
