@@ -15,6 +15,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+# Paper-code bidirectional trace workbench - FastAPI backend
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
