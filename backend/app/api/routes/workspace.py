@@ -6,15 +6,22 @@ from app.schemas import (
     WorkspaceAnalyzeJob,
     WorkspaceAnalyzeRequest,
     WorkspaceCodeFileRead,
-    WorkspaceCodeFileSummary,
+    WorkspaceCodeFileSaveResult,
+    WorkspaceCodeFileUpdate,
+    WorkspaceCodeTreeNode,
     WorkspaceConflictItem,
     WorkspaceFlowNode,
     WorkspacePaperPage,
     WorkspaceRead,
     WorkspaceReportCard,
+    WorkspaceTensorFlowRead,
     WorkspaceTraceRow,
 )
-from app.services.workspace_placeholder import code_file_payload, workspace_payload
+from app.services.workspace_placeholder import (
+    code_file_payload,
+    tensor_flow_payload,
+    workspace_payload,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/workspace", tags=["workspace-prototype"])
 
@@ -30,10 +37,10 @@ def read_paper_pages(project_id: str) -> list[WorkspacePaperPage]:
     return [WorkspacePaperPage(**item) for item in payload["paper_pages"]]
 
 
-@router.get("/code-tree", response_model=list[WorkspaceCodeFileSummary])
-def read_code_tree(project_id: str) -> list[WorkspaceCodeFileSummary]:
+@router.get("/code-tree", response_model=list[WorkspaceCodeTreeNode])
+def read_code_tree(project_id: str) -> list[WorkspaceCodeTreeNode]:
     payload = workspace_payload(project_id)
-    return [WorkspaceCodeFileSummary(**item) for item in payload["code_files"]]
+    return [WorkspaceCodeTreeNode(**item) for item in payload["code_tree"]]
 
 
 @router.get("/code-files/{file_path:path}", response_model=WorkspaceCodeFileRead)
@@ -42,6 +49,22 @@ def read_code_file(project_id: str, file_path: str) -> WorkspaceCodeFileRead:
     if payload is None:
         raise HTTPException(status_code=404, detail="Code file not found in placeholder workspace")
     return WorkspaceCodeFileRead(**payload)
+
+
+@router.put("/code-files/{file_path:path}", response_model=WorkspaceCodeFileSaveResult)
+def save_code_file(
+    project_id: str,
+    file_path: str,
+    payload: WorkspaceCodeFileUpdate,
+) -> WorkspaceCodeFileSaveResult:
+    if code_file_payload(project_id, file_path) is None:
+        raise HTTPException(status_code=404, detail="Code file not found in placeholder workspace")
+    return WorkspaceCodeFileSaveResult(
+        project_id=project_id,
+        path=file_path,
+        status="accepted",
+        message=f"Placeholder save accepted with {len(payload.content)} characters.",
+    )
 
 
 @router.get("/trace-matrix", response_model=list[WorkspaceTraceRow])
@@ -54,6 +77,11 @@ def read_trace_matrix(project_id: str) -> list[WorkspaceTraceRow]:
 def read_flow_graph(project_id: str) -> list[WorkspaceFlowNode]:
     payload = workspace_payload(project_id)
     return [WorkspaceFlowNode(**item) for item in payload["flow_nodes"]]
+
+
+@router.get("/tensor-flow", response_model=WorkspaceTensorFlowRead)
+def read_tensor_flow(project_id: str) -> WorkspaceTensorFlowRead:
+    return WorkspaceTensorFlowRead(**tensor_flow_payload(project_id))
 
 
 @router.get("/conflicts", response_model=list[WorkspaceConflictItem])

@@ -1,6 +1,106 @@
 from typing import Any
 
 
+def _code_tree() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "resnet-reproduction",
+            "path": "",
+            "kind": "folder",
+            "meta": "root",
+            "children": [
+                {
+                    "name": "configs",
+                    "path": "configs",
+                    "kind": "folder",
+                    "meta": "1 file",
+                    "children": [
+                        {
+                            "name": "resnet50.yaml",
+                            "path": "configs/resnet50.yaml",
+                            "kind": "file",
+                            "meta": "config",
+                            "children": [],
+                        }
+                    ],
+                },
+                {
+                    "name": "data",
+                    "path": "data",
+                    "kind": "folder",
+                    "meta": "2 files",
+                    "children": [
+                        {
+                            "name": "imagenet.py",
+                            "path": "data/imagenet.py",
+                            "kind": "file",
+                            "meta": "loader",
+                            "children": [],
+                        },
+                        {
+                            "name": "transforms.py",
+                            "path": "data/transforms.py",
+                            "kind": "file",
+                            "meta": "pipeline",
+                            "children": [],
+                        },
+                    ],
+                },
+                {
+                    "name": "models",
+                    "path": "models",
+                    "kind": "folder",
+                    "meta": "3 files",
+                    "children": [
+                        {
+                            "name": "__init__.py",
+                            "path": "models/__init__.py",
+                            "kind": "file",
+                            "meta": "module",
+                            "children": [],
+                        },
+                        {
+                            "name": "layers.py",
+                            "path": "models/layers.py",
+                            "kind": "file",
+                            "meta": "ops",
+                            "children": [],
+                        },
+                        {
+                            "name": "resnet.py",
+                            "path": "models/resnet.py",
+                            "kind": "file",
+                            "meta": "8 links",
+                            "children": [],
+                        },
+                    ],
+                },
+                {
+                    "name": "train.py",
+                    "path": "train.py",
+                    "kind": "file",
+                    "meta": "entry",
+                    "children": [],
+                },
+                {
+                    "name": "evaluate.py",
+                    "path": "evaluate.py",
+                    "kind": "file",
+                    "meta": "script",
+                    "children": [],
+                },
+                {
+                    "name": "README.md",
+                    "path": "README.md",
+                    "kind": "file",
+                    "meta": "doc",
+                    "children": [],
+                },
+            ],
+        }
+    ]
+
+
 def _code_files() -> list[dict[str, Any]]:
     return [
         {
@@ -39,6 +139,32 @@ def _code_files() -> list[dict[str, Any]]:
                     "            identity = self.downsample(x)",
                     "        out += identity",
                     "        return self.relu(out)",
+                ]
+            ),
+        },
+        {
+            "path": "models/layers.py",
+            "name": "models/layers.py",
+            "badge": "ops",
+            "status": "张量操作候选",
+            "status_type": "primary",
+            "symbol": "conv3x3",
+            "paper_ref": "P3-10",
+            "linked_lines": [1, 2, 3],
+            "content": "\n".join(
+                [
+                    "import torch.nn as nn",
+                    "",
+                    "",
+                    "def conv3x3(in_planes, out_planes, stride=1):",
+                    "    return nn.Conv2d(",
+                    "        in_planes,",
+                    "        out_planes,",
+                    "        kernel_size=3,",
+                    "        stride=stride,",
+                    "        padding=1,",
+                    "        bias=False,",
+                    "    )",
                 ]
             ),
         },
@@ -94,6 +220,143 @@ def _code_files() -> list[dict[str, Any]]:
     ]
 
 
+def tensor_flow_payload(project_id: str) -> dict[str, Any]:
+    return {
+        "project_id": project_id,
+        "renderer": "trace-svg",
+        "nodes": [
+            {
+                "id": "images",
+                "label": "images",
+                "kind": "input",
+                "description": "训练循环中从 dataloader 取出的输入张量。",
+                "source_path": "train.py",
+                "line_start": 5,
+                "line_end": 7,
+                "tensor_shape": "N x 3 x 224 x 224",
+                "x": 32,
+                "y": 72,
+                "width": 170,
+                "height": 104,
+            },
+            {
+                "id": "conv1",
+                "label": "conv1 -> bn1 -> relu",
+                "kind": "operation",
+                "description": "BasicBlock.forward 中的第一段卷积、归一化和激活。",
+                "source_path": "models/resnet.py",
+                "line_start": 20,
+                "line_end": 20,
+                "tensor_shape": "N x C x H x W",
+                "x": 286,
+                "y": 72,
+                "width": 210,
+                "height": 104,
+            },
+            {
+                "id": "conv2",
+                "label": "conv2 -> bn2",
+                "kind": "operation",
+                "description": "残差分支中的第二段卷积和归一化。",
+                "source_path": "models/resnet.py",
+                "line_start": 21,
+                "line_end": 21,
+                "tensor_shape": "N x C x H x W",
+                "x": 580,
+                "y": 72,
+                "width": 190,
+                "height": 104,
+            },
+            {
+                "id": "shortcut",
+                "label": "identity / projection shortcut",
+                "kind": "branch",
+                "description": "当维度变化时进入 downsample，否则保留 identity 分支。",
+                "source_path": "models/resnet.py",
+                "line_start": 22,
+                "line_end": 23,
+                "tensor_shape": "N x C x H x W",
+                "x": 286,
+                "y": 306,
+                "width": 300,
+                "height": 108,
+            },
+            {
+                "id": "add",
+                "label": "out += identity",
+                "kind": "merge",
+                "description": "残差张量与 shortcut 张量相加，对应论文公式 y = F(x, Wi) + x。",
+                "source_path": "models/resnet.py",
+                "line_start": 24,
+                "line_end": 24,
+                "tensor_shape": "N x C x H x W",
+                "x": 812,
+                "y": 198,
+                "width": 180,
+                "height": 108,
+            },
+            {
+                "id": "logits",
+                "label": "model(images) -> logits",
+                "kind": "output",
+                "description": "模型前向输出，随后进入 loss 和 backward 训练链路。",
+                "source_path": "train.py",
+                "line_start": 7,
+                "line_end": 8,
+                "tensor_shape": "N x classes",
+                "x": 812,
+                "y": 360,
+                "width": 180,
+                "height": 104,
+            },
+        ],
+        "edges": [
+            {
+                "id": "images-conv1",
+                "source": "images",
+                "target": "conv1",
+                "label": "input tensor",
+                "points": [[202, 124], [286, 124]],
+            },
+            {
+                "id": "conv1-conv2",
+                "source": "conv1",
+                "target": "conv2",
+                "label": "feature tensor",
+                "points": [[496, 124], [580, 124]],
+            },
+            {
+                "id": "conv2-add",
+                "source": "conv2",
+                "target": "add",
+                "label": "residual",
+                "points": [[770, 124], [792, 124], [792, 252], [812, 252]],
+            },
+            {
+                "id": "images-shortcut",
+                "source": "images",
+                "target": "shortcut",
+                "label": "identity branch",
+                "points": [[118, 176], [118, 360], [286, 360]],
+            },
+            {
+                "id": "shortcut-add",
+                "source": "shortcut",
+                "target": "add",
+                "label": "shortcut tensor",
+                "points": [[586, 360], [700, 360], [700, 278], [812, 278]],
+            },
+            {
+                "id": "add-logits",
+                "source": "add",
+                "target": "logits",
+                "label": "block output",
+                "points": [[902, 306], [902, 360]],
+            },
+        ],
+    }
+
+
 def workspace_payload(project_id: str) -> dict[str, Any]:
     return {
         "project_id": project_id,
@@ -117,8 +380,8 @@ def workspace_payload(project_id: str) -> dict[str, Any]:
             },
             {
                 "index": "03",
-                "title": "生成追溯视图",
-                "description": "组合规则、向量检索和大模型解释，输出候选关系与审阅理由。",
+                "title": "生成代码追踪视图",
+                "description": "基于代码静态分析生成可交互张量流图、追溯矩阵和冲突占位结果。",
                 "status": "占位实现",
                 "tag_type": "warning",
                 "action": None,
@@ -145,6 +408,7 @@ def workspace_payload(project_id: str) -> dict[str, Any]:
                 ],
             }
         ],
+        "code_tree": _code_tree(),
         "code_files": _code_files(),
         "trace_rows": [
             {
@@ -172,25 +436,26 @@ def workspace_payload(project_id: str) -> dict[str, Any]:
         "flow_nodes": [
             {
                 "stage": "A",
-                "title": "PDF 结构化",
-                "description": "页码、段落、公式、图表、算法框与引用统一生成锚点。",
+                "title": "输入 tensor",
+                "description": "从 train.py 的 dataloader 和 model(images) 调用定位张量入口。",
             },
             {
                 "stage": "B",
-                "title": "代码静态分析",
-                "description": "文件树、符号、调用链、配置项和实验脚本进入索引。",
+                "title": "模型 forward",
+                "description": "追踪 BasicBlock.forward 中 conv、bn、relu 与 shortcut 分支。",
             },
             {
                 "stage": "C",
-                "title": "候选追溯生成",
-                "description": "规则匹配、embedding 检索和 LLM 解释共同生成候选。",
+                "title": "残差合并",
+                "description": "识别 out += identity 对应论文残差公式 y = F(x, Wi) + x。",
             },
             {
                 "stage": "D",
-                "title": "人工确认与报告",
-                "description": "确认、驳回、补充证据，最终输出可复审报告。",
+                "title": "输出与训练",
+                "description": "连接模型输出 logits、loss 和 backward 训练链路。",
             },
         ],
+        "tensor_flow": tensor_flow_payload(project_id),
         "conflict_items": [
             {
                 "level": "高风险",

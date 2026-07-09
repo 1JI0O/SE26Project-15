@@ -7,6 +7,9 @@ import type {
   TraceLink,
   TraceLinkCreate,
   TraceLinkSuggestion,
+  WorkspaceCodeFile,
+  WorkspaceCodeTreeNode,
+  WorkspaceTensorFlow,
 } from '@/types/api'
 
 export async function listProjects(): Promise<Project[]> {
@@ -68,3 +71,42 @@ export async function suggestTraceLinks(projectId: number): Promise<TraceLinkSug
   return data
 }
 
+export async function getWorkspaceCodeTree(
+  projectId: number | string,
+): Promise<WorkspaceCodeTreeNode[]> {
+  const { data } = await http.get<WorkspaceCodeTreeNode[]>(
+    `/projects/${projectId}/workspace/code-tree`,
+  )
+  return data
+}
+
+export async function getWorkspaceCodeFile(
+  projectId: number | string,
+  filePath: string,
+): Promise<WorkspaceCodeFile> {
+  const { data } = await http.get<WorkspaceCodeFile>(
+    `/projects/${projectId}/workspace/code-files/${filePath}`,
+  )
+  return data
+}
+
+export async function saveWorkspaceCodeFile(
+  projectId: number | string,
+  filePath: string,
+  content: string,
+): Promise<{ status: string; message: string }> {
+  const { data } = await http.put<{ status: string; message: string }>(
+    `/projects/${projectId}/workspace/code-files/${filePath}`,
+    { content },
+  )
+  return data
+}
+
+export async function getWorkspaceTensorFlow(
+  projectId: number | string,
+): Promise<WorkspaceTensorFlow> {
+  const { data } = await http.get<WorkspaceTensorFlow>(
+    `/projects/${projectId}/workspace/tensor-flow`,
+  )
+  return data
+}

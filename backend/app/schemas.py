@@ -106,6 +106,25 @@ class WorkspaceCodeFileRead(WorkspaceCodeFileSummary):
     linked_lines: list[int]
 
 
+class WorkspaceCodeFileUpdate(BaseModel):
+    content: str
+
+
+class WorkspaceCodeFileSaveResult(BaseModel):
+    project_id: str
+    path: str
+    status: str
+    message: str
+
+
+class WorkspaceCodeTreeNode(BaseModel):
+    name: str
+    path: str
+    kind: str
+    meta: str
+    children: list["WorkspaceCodeTreeNode"] = Field(default_factory=list)
+
+
 class WorkspaceTraceRow(BaseModel):
     paper_ref: str
     code_ref: str
@@ -118,6 +137,36 @@ class WorkspaceFlowNode(BaseModel):
     stage: str
     title: str
     description: str
+
+
+class WorkspaceTensorFlowNode(BaseModel):
+    id: str
+    label: str
+    kind: str
+    description: str
+    source_path: str
+    line_start: int
+    line_end: int
+    tensor_shape: str
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class WorkspaceTensorFlowEdge(BaseModel):
+    id: str
+    source: str
+    target: str
+    label: str
+    points: list[list[int]]
+
+
+class WorkspaceTensorFlowRead(BaseModel):
+    project_id: str
+    renderer: str
+    nodes: list[WorkspaceTensorFlowNode]
+    edges: list[WorkspaceTensorFlowEdge]
 
 
 class WorkspaceConflictItem(BaseModel):
@@ -140,9 +189,11 @@ class WorkspaceRead(BaseModel):
     project_name: str
     import_steps: list[WorkspaceImportStep]
     paper_pages: list[WorkspacePaperPage]
+    code_tree: list[WorkspaceCodeTreeNode]
     code_files: list[WorkspaceCodeFileRead]
     trace_rows: list[WorkspaceTraceRow]
     flow_nodes: list[WorkspaceFlowNode]
+    tensor_flow: WorkspaceTensorFlowRead
     conflict_items: list[WorkspaceConflictItem]
     report_cards: list[WorkspaceReportCard]
 

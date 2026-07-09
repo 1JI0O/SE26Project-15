@@ -5,11 +5,11 @@
         <el-button text @click="$router.push('/')">返回项目入口</el-button>
         <div class="title-row">
           <h1>论文代码双向追溯工作台</h1>
-          <el-tag effect="plain" type="warning">完整 UI 原型</el-tag>
+          <el-tag effect="plain" type="warning">最终 UI 演示版</el-tag>
         </div>
         <p>
-          上传论文 PDF 与代码 ZIP 后，在同一视图中阅读论文原文、浏览代码树、编辑代码，并查看追溯关系、
-          流程图和魔改冲突分析。
+          输入论文 PDF 与代码 ZIP 后，左侧只读展示论文原文，右侧以 IDE 方式展示过滤后的代码仓库、
+          可编辑代码文件，并基于项目代码生成张量流追踪图。
         </p>
       </div>
       <div class="head-meta">
@@ -46,6 +46,7 @@
       <div class="toolbar-actions">
         <el-tag type="success" effect="plain">12 条高置信追溯</el-tag>
         <el-tag type="warning" effect="plain">3 处魔改风险</el-tag>
+        <el-tag type="info" effect="plain">论文只读 / 代码可编辑</el-tag>
         <el-button type="primary">导出审阅报告</el-button>
       </div>
     </section>
@@ -55,9 +56,9 @@
         <header class="panel-title">
           <div>
             <h2>论文原文</h2>
-            <p>原始 PDF 阅读、段落定位、公式/图表锚点与追溯高亮。</p>
+            <p>只读 PDF 页视图，支持段落、公式、图表锚点高亮，不提供内容编辑。</p>
           </div>
-          <el-tag type="info" effect="plain">paper.pdf</el-tag>
+          <el-tag type="info" effect="plain">Read-only paper.pdf</el-tag>
         </header>
 
         <div class="pdf-toolbar">
@@ -82,7 +83,7 @@
             </button>
           </aside>
 
-          <div class="paper-page">
+          <div class="paper-page" aria-label="只读论文预览">
             <div class="paper-meta">CVPR 2026 Draft - Method Section</div>
             <h3>Deep Residual Learning for Image Recognition</h3>
             <p class="paper-abstract">
@@ -121,44 +122,69 @@
         <header class="panel-title">
           <div>
             <h2>代码工作区</h2>
-            <p>代码文件树、编辑页、符号定位和论文段落反向跳转。</p>
+            <p>过滤 .gitignore 与 macOS 元数据后的完整仓库树，代码文件可直接编辑。</p>
           </div>
-          <el-tag type="success" effect="plain">repo.zip</el-tag>
+          <el-tag type="success" effect="plain">Editable repo.zip</el-tag>
         </header>
 
         <div class="code-workbench">
           <aside class="file-tree">
             <div class="tree-head">
-              <strong>文件树</strong>
-              <span>已过滤 .gitignore / macOS 元数据</span>
+              <strong>Repository</strong>
+              <span>已忽略 .git、__pycache__、.DS_Store、__MACOSX、构建产物等文件</span>
             </div>
-            <button
-              v-for="file in codeFiles"
-              :key="file.path"
-              :class="['file-node', { active: file.path === selectedPath }]"
-              @click="selectedPath = file.path"
-            >
-              <span>{{ file.name }}</span>
-              <small>{{ file.badge }}</small>
-            </button>
+
+            <div class="tree-list">
+              <button
+                v-for="node in visibleCodeTree"
+                :key="node.path"
+                :class="[
+                  'file-node',
+                  `depth-${node.depth}`,
+                  { active: node.path === selectedPath, folder: node.kind === 'folder' },
+                ]"
+                @click="handleTreeNodeClick(node)"
+              >
+                <span class="node-name">
+                  <span class="node-icon">{{ node.kind === 'folder' ? '▸' : fileIcon(node.name) }}</span>
+                  {{ node.name }}
+                </span>
+                <small>{{ node.meta }}</small>
+              </button>
+            </div>
+
+            <div class="ignore-summary">
+              <strong>过滤规则</strong>
+              <span>12 个文件被隐藏，包括 .DS_Store、__MACOSX/、.venv/、dist/。</span>
+            </div>
           </aside>
 
           <div class="editor-shell">
             <div class="editor-tabs">
               <span>{{ selectedFile?.path }}</span>
-              <el-tag size="small" :type="selectedFile?.statusType" effect="plain">
-                {{ selectedFile?.status }}
-              </el-tag>
+              <div>
+                <el-tag size="small" :type="selectedFile?.statusType" effect="plain">
+                  {{ selectedFile?.status }}
+                </el-tag>
+                <el-tag size="small" type="warning" effect="plain">未保存演示</el-tag>
+              </div>
             </div>
             <div class="editor-body">
-              <div v-for="line in codeLines" :key="line.number" class="code-line">
-                <span class="line-no">{{ line.number }}</span>
-                <code :class="{ linked: line.linked }">{{ line.text || ' ' }}</code>
-              </div>
+              <aside class="line-gutter">
+                <span v-for="line in editableLineNumbers" :key="line">{{ line }}</span>
+              </aside>
+              <textarea
+                v-if="selectedFile"
+                v-model="selectedFile.content"
+                spellcheck="false"
+                class="code-editor"
+                :aria-label="`${selectedFile.path} 可编辑代码内容`"
+              />
             </div>
             <div class="editor-footer">
               <span>当前符号: {{ selectedFile?.symbol }}</span>
               <span>关联段落: {{ selectedFile?.paperRef }}</span>
+              <el-button size="small" type="primary" plain>保存到占位接口</el-button>
             </div>
           </div>
         </div>
@@ -209,11 +235,91 @@
         </article>
       </div>
 
-      <div v-else-if="activeInsight === 'flow'" class="flow-board">
-        <article v-for="node in flowNodes" :key="node.title" class="flow-node">
-          <span>{{ node.stage }}</span>
-          <strong>{{ node.title }}</strong>
-          <p>{{ node.description }}</p>
+      <div v-else-if="activeInsight === 'flow'" class="tensor-flow-layout">
+        <article class="tensor-flow-board">
+          <header>
+            <h2>代码张量流追踪图</h2>
+            <p>
+              该图由代码仓库中的模型定义、forward 函数和训练入口生成，用于展示 tensor
+              在模块之间的流动路径，不表示 PDF/代码处理流程。
+            </p>
+          </header>
+          <div class="tensor-flow-canvas">
+            <svg viewBox="0 0 1040 500" role="img" aria-label="代码张量流追踪图">
+              <defs>
+                <marker
+                  id="flow-arrow"
+                  markerHeight="10"
+                  markerWidth="10"
+                  orient="auto"
+                  refX="8"
+                  refY="5"
+                >
+                  <path d="M0,0 L10,5 L0,10 Z" fill="#1f8f78" />
+                </marker>
+              </defs>
+              <g class="edge-layer">
+                <g v-for="edge in tensorFlowEdges" :key="edge.id">
+                  <path
+                    :d="edgePath(edge.points)"
+                    class="flow-edge"
+                    marker-end="url(#flow-arrow)"
+                  />
+                  <text :x="edge.labelX" :y="edge.labelY" class="edge-label">
+                    {{ edge.label }}
+                  </text>
+                </g>
+              </g>
+              <g class="node-layer">
+                <g
+                  v-for="node in tensorFlowNodes"
+                  :key="node.id"
+                  :class="[
+                    'flow-node',
+                    node.kind,
+                    { active: selectedTensorNode?.id === node.id },
+                  ]"
+                  role="button"
+                  tabindex="0"
+                  @click="handleTensorNodeClick(node)"
+                  @keydown.enter.prevent="handleTensorNodeClick(node)"
+                >
+                  <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="10" />
+                  <text :x="node.x + 16" :y="node.y + 26" class="node-kind">{{ node.kindLabel }}</text>
+                  <text :x="node.x + 16" :y="node.y + 56" class="node-title">{{ node.title }}</text>
+                  <text :x="node.x + 16" :y="node.y + 84" class="node-detail">{{ node.detail }}</text>
+                </g>
+              </g>
+            </svg>
+          </div>
+        </article>
+        <article class="flow-inspector">
+          <header>
+            <h2>节点定位</h2>
+            <el-tag type="info" effect="plain">GET /workspace/tensor-flow</el-tag>
+          </header>
+          <div v-if="selectedTensorNode" class="inspector-body">
+            <strong>{{ selectedTensorNode.title }}</strong>
+            <span>{{ selectedTensorNode.kindLabel }} · {{ selectedTensorNode.tensorShape }}</span>
+            <p>{{ selectedTensorNode.description }}</p>
+            <dl>
+              <div>
+                <dt>代码位置</dt>
+                <dd>{{ selectedTensorNode.sourcePath }}:{{ selectedTensorNode.lineStart }}</dd>
+              </div>
+              <div>
+                <dt>当前文件</dt>
+                <dd>{{ selectedPath }}</dd>
+              </div>
+            </dl>
+            <el-button type="primary" plain @click="jumpToTensorNodeCode(selectedTensorNode)">
+              跳转到对应代码
+            </el-button>
+          </div>
+          <el-empty v-else description="点击图中节点查看代码定位" />
+          <p class="api-note">
+            接口仅返回节点、边、代码定位和张量形状占位数据；后续可由 agent 或静态分析工具生成同结构结果。
+          </p>
         </article>
       </div>
 
@@ -244,6 +350,7 @@ import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 type TagType = 'success' | 'warning' | 'info' | 'primary' | 'danger'
+type TreeNodeKind = 'folder' | 'file'
 
 interface CodeFile {
   path: string
@@ -255,6 +362,45 @@ interface CodeFile {
   paperRef: string
   linkedLines: number[]
   content: string
+}
+
+interface CodeTreeNode {
+  name: string
+  path: string
+  kind: TreeNodeKind
+  meta: string
+  children?: CodeTreeNode[]
+}
+
+interface VisibleTreeNode extends CodeTreeNode {
+  depth: number
+}
+
+interface TensorFlowNode {
+  id: string
+  kind: 'input' | 'operation' | 'branch' | 'merge' | 'output'
+  kindLabel: string
+  title: string
+  detail: string
+  description: string
+  tensorShape: string
+  sourcePath: string
+  lineStart: number
+  lineEnd: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface TensorFlowEdge {
+  id: string
+  source: string
+  target: string
+  label: string
+  labelX: number
+  labelY: number
+  points: Array<[number, number]>
 }
 
 const route = useRoute()
@@ -272,7 +418,7 @@ const importSteps = [
   {
     index: '01',
     title: '导入论文 PDF',
-    description: '保留原文页视图，抽取章节、段落、公式、图表和引用锚点。',
+    description: '保留原文页视图，抽取章节、段落、公式、图表和引用锚点；论文区只读展示。',
     status: '已解析',
     tagType: 'success' as TagType,
     action: '重新上传',
@@ -280,22 +426,71 @@ const importSteps = [
   {
     index: '02',
     title: '导入代码 ZIP',
-    description: '按 .gitignore 过滤文件，生成目录树、符号表、调用关系和配置索引。',
+    description: '按 .gitignore 和 macOS 元数据规则过滤，生成 IDE 风格完整代码仓库树。',
     status: '已分析',
     tagType: 'success' as TagType,
     action: '替换代码包',
   },
   {
     index: '03',
-    title: '生成追溯视图',
-    description: '组合规则、向量检索和大模型解释，输出候选关系与审阅理由。',
-    status: 'UI 占位',
+    title: '生成代码追踪视图',
+    description: '基于代码静态分析输出可交互张量流图、追溯矩阵和魔改冲突占位结果。',
+    status: 'UI + 接口占位',
     tagType: 'warning' as TagType,
     action: '',
   },
 ]
 
-const codeFiles: CodeFile[] = [
+const codeTree: CodeTreeNode[] = [
+  {
+    name: 'resnet-reproduction',
+    path: '',
+    kind: 'folder',
+    meta: 'root',
+    children: [
+      {
+        name: 'configs',
+        path: 'configs',
+        kind: 'folder',
+        meta: '1 file',
+        children: [
+          {
+            name: 'resnet50.yaml',
+            path: 'configs/resnet50.yaml',
+            kind: 'file',
+            meta: 'config',
+          },
+        ],
+      },
+      {
+        name: 'data',
+        path: 'data',
+        kind: 'folder',
+        meta: '2 files',
+        children: [
+          { name: 'imagenet.py', path: 'data/imagenet.py', kind: 'file', meta: 'loader' },
+          { name: 'transforms.py', path: 'data/transforms.py', kind: 'file', meta: 'pipeline' },
+        ],
+      },
+      {
+        name: 'models',
+        path: 'models',
+        kind: 'folder',
+        meta: '3 files',
+        children: [
+          { name: '__init__.py', path: 'models/__init__.py', kind: 'file', meta: 'module' },
+          { name: 'layers.py', path: 'models/layers.py', kind: 'file', meta: 'ops' },
+          { name: 'resnet.py', path: 'models/resnet.py', kind: 'file', meta: '8 links' },
+        ],
+      },
+      { name: 'train.py', path: 'train.py', kind: 'file', meta: 'entry' },
+      { name: 'evaluate.py', path: 'evaluate.py', kind: 'file', meta: 'script' },
+      { name: 'README.md', path: 'README.md', kind: 'file', meta: 'doc' },
+    ],
+  },
+]
+
+const codeFiles = ref<CodeFile[]>([
   {
     path: 'models/resnet.py',
     name: 'models/resnet.py',
@@ -332,10 +527,32 @@ class BasicBlock(nn.Module):
         return self.relu(out)`,
   },
   {
+    path: 'models/layers.py',
+    name: 'models/layers.py',
+    badge: 'ops',
+    status: '张量操作候选',
+    statusType: 'primary',
+    symbol: 'conv3x3',
+    paperRef: 'P3-10',
+    linkedLines: [1, 2, 3],
+    content: `import torch.nn as nn
+
+
+def conv3x3(in_planes, out_planes, stride=1):
+    return nn.Conv2d(
+        in_planes,
+        out_planes,
+        kernel_size=3,
+        stride=stride,
+        padding=1,
+        bias=False,
+    )`,
+  },
+  {
     path: 'train.py',
     name: 'train.py',
     badge: '3 links',
-    status: '训练流程候选',
+    status: '训练入口候选',
     statusType: 'primary',
     symbol: 'train_one_epoch',
     paperRef: 'P6-04',
@@ -389,20 +606,18 @@ This repository reproduces residual learning experiments.
 - training entry: train.py
 - default config: configs/resnet50.yaml`,
   },
-]
+])
 
-const selectedFile = computed(() => codeFiles.find((file) => file.path === selectedPath.value))
-const codeLines = computed(() =>
-  (selectedFile.value?.content.split('\n') ?? []).map((text, index) => ({
-    number: index + 1,
-    text,
-    linked: selectedFile.value?.linkedLines.includes(index + 1) ?? false,
-  })),
-)
+const visibleCodeTree = computed<VisibleTreeNode[]>(() => flattenTree(codeTree))
+const selectedFile = computed(() => codeFiles.value.find((file) => file.path === selectedPath.value))
+const editableLineNumbers = computed(() => {
+  const count = selectedFile.value?.content.split('\n').length ?? 1
+  return Array.from({ length: count }, (_, index) => index + 1)
+})
 
 const insightTabs = [
   { key: 'trace', label: '追溯矩阵' },
-  { key: 'flow', label: '流程图' },
+  { key: 'flow', label: '张量流流程图' },
   { key: 'conflict', label: '魔改冲突分析' },
   { key: 'report', label: '报告与质量门禁' },
 ]
@@ -414,35 +629,193 @@ const traceRows = [
   { paper: 'P6-04 SGD training', code: 'train_one_epoch', type: 'validates', confidence: 73 },
 ]
 
-const flowNodes = [
+const tensorFlowNodes: TensorFlowNode[] = [
   {
-    stage: 'A',
-    title: 'PDF 结构化',
-    description: '页码、段落、公式、图表、算法框与引用统一生成锚点。',
+    id: 'images',
+    kind: 'input',
+    kindLabel: 'Input',
+    title: 'images',
+    detail: 'N x 3 x 224 x 224',
+    description: '训练循环中从 dataloader 取出的输入张量。',
+    tensorShape: 'N x 3 x 224 x 224',
+    sourcePath: 'train.py',
+    lineStart: 5,
+    lineEnd: 7,
+    x: 32,
+    y: 72,
+    width: 170,
+    height: 104,
   },
   {
-    stage: 'B',
-    title: '代码静态分析',
-    description: '文件树、符号、调用链、配置项和实验脚本进入索引。',
+    id: 'conv1',
+    kind: 'operation',
+    kindLabel: 'Conv',
+    title: 'conv1 + bn1 + relu',
+    detail: 'models/resnet.py:20',
+    description: 'BasicBlock.forward 中的第一段卷积、归一化和激活。',
+    tensorShape: 'N x C x H x W',
+    sourcePath: 'models/resnet.py',
+    lineStart: 20,
+    lineEnd: 20,
+    x: 286,
+    y: 72,
+    width: 210,
+    height: 104,
   },
   {
-    stage: 'C',
-    title: '候选追溯生成',
-    description: '规则匹配、embedding 检索和 LLM 解释共同生成候选。',
+    id: 'conv2',
+    kind: 'operation',
+    kindLabel: 'Conv',
+    title: 'conv2 + bn2',
+    detail: 'models/resnet.py:21',
+    description: '残差分支中的第二段卷积和归一化。',
+    tensorShape: 'N x C x H x W',
+    sourcePath: 'models/resnet.py',
+    lineStart: 21,
+    lineEnd: 21,
+    x: 580,
+    y: 72,
+    width: 190,
+    height: 104,
   },
   {
-    stage: 'D',
-    title: '人工确认与报告',
-    description: '确认、驳回、补充证据，最终输出可复审报告。',
+    id: 'shortcut',
+    kind: 'branch',
+    kindLabel: 'Branch',
+    title: 'identity / downsample',
+    detail: 'projection shortcut',
+    description: '当维度变化时进入 downsample，否则保留 identity 分支。',
+    tensorShape: 'N x C x H x W',
+    sourcePath: 'models/resnet.py',
+    lineStart: 22,
+    lineEnd: 23,
+    x: 286,
+    y: 306,
+    width: 300,
+    height: 108,
+  },
+  {
+    id: 'add',
+    kind: 'merge',
+    kindLabel: 'Merge',
+    title: 'out += identity',
+    detail: 'models/resnet.py:24',
+    description: '残差张量与 shortcut 张量相加，对应论文公式 y = F(x, Wi) + x。',
+    tensorShape: 'N x C x H x W',
+    sourcePath: 'models/resnet.py',
+    lineStart: 24,
+    lineEnd: 24,
+    x: 812,
+    y: 198,
+    width: 180,
+    height: 108,
+  },
+  {
+    id: 'logits',
+    kind: 'output',
+    kindLabel: 'Output',
+    title: 'logits',
+    detail: 'train.py:7',
+    description: '模型前向输出，随后进入 loss 和 backward 训练链路。',
+    tensorShape: 'N x classes',
+    sourcePath: 'train.py',
+    lineStart: 7,
+    lineEnd: 8,
+    x: 812,
+    y: 360,
+    width: 180,
+    height: 104,
   },
 ]
+
+const tensorFlowEdges: TensorFlowEdge[] = [
+  {
+    id: 'images-conv1',
+    source: 'images',
+    target: 'conv1',
+    label: 'input tensor',
+    labelX: 220,
+    labelY: 116,
+    points: [
+      [202, 124],
+      [286, 124],
+    ],
+  },
+  {
+    id: 'conv1-conv2',
+    source: 'conv1',
+    target: 'conv2',
+    label: 'feature tensor',
+    labelX: 510,
+    labelY: 116,
+    points: [
+      [496, 124],
+      [580, 124],
+    ],
+  },
+  {
+    id: 'conv2-add',
+    source: 'conv2',
+    target: 'add',
+    label: 'residual',
+    labelX: 784,
+    labelY: 150,
+    points: [
+      [770, 124],
+      [792, 124],
+      [792, 252],
+      [812, 252],
+    ],
+  },
+  {
+    id: 'images-shortcut',
+    source: 'images',
+    target: 'shortcut',
+    label: 'identity branch',
+    labelX: 88,
+    labelY: 268,
+    points: [
+      [118, 176],
+      [118, 360],
+      [286, 360],
+    ],
+  },
+  {
+    id: 'shortcut-add',
+    source: 'shortcut',
+    target: 'add',
+    label: 'shortcut tensor',
+    labelX: 620,
+    labelY: 340,
+    points: [
+      [586, 360],
+      [700, 360],
+      [700, 278],
+      [812, 278],
+    ],
+  },
+  {
+    id: 'add-logits',
+    source: 'add',
+    target: 'logits',
+    label: 'block output',
+    labelX: 872,
+    labelY: 340,
+    points: [
+      [902, 306],
+      [902, 360],
+    ],
+  },
+]
+
+const selectedTensorNode = ref<TensorFlowNode | null>(tensorFlowNodes[0] ?? null)
 
 const conflictItems = [
   {
     level: '高风险',
     type: 'danger' as TagType,
     title: 'stride 下采样与论文描述不一致',
-    description: '配置中 stage3 stride 被改为 1，可能改变感受野与论文基线。',
+    description: '配置中 stage3 stride 被改为 1，可能改变张量尺寸变化路径和论文基线。',
   },
   {
     level: '中风险',
@@ -462,8 +835,43 @@ const reportCards = [
   { value: '86%', title: '追溯覆盖率', description: '方法、模型结构和训练配置已有候选链接。' },
   { value: '12', title: '已确认关系', description: '可进入报告的证据链数量。' },
   { value: '3', title: '冲突项', description: '需要人工解释或回滚的魔改影响。' },
-  { value: 'PDF', title: '报告导出', description: '支持摘要、矩阵、流程图和冲突清单。' },
+  { value: 'Flow JSON', title: '流程图接口', description: '返回节点、边、张量形状和代码定位。' },
 ]
+
+function flattenTree(nodes: CodeTreeNode[], depth = 0): VisibleTreeNode[] {
+  return nodes.flatMap((node) => [
+    { ...node, depth },
+    ...(node.children ? flattenTree(node.children, depth + 1) : []),
+  ])
+}
+
+function handleTreeNodeClick(node: VisibleTreeNode): void {
+  if (node.kind === 'file' && codeFiles.value.some((file) => file.path === node.path)) {
+    selectedPath.value = node.path
+  }
+}
+
+function handleTensorNodeClick(node: TensorFlowNode): void {
+  selectedTensorNode.value = node
+  jumpToTensorNodeCode(node)
+}
+
+function jumpToTensorNodeCode(node: TensorFlowNode): void {
+  if (codeFiles.value.some((file) => file.path === node.sourcePath)) {
+    selectedPath.value = node.sourcePath
+  }
+}
+
+function edgePath(points: TensorFlowEdge['points']): string {
+  return points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ')
+}
+
+function fileIcon(filename: string): string {
+  if (filename.endsWith('.py')) return 'PY'
+  if (filename.endsWith('.yaml') || filename.endsWith('.yml')) return 'YML'
+  if (filename.endsWith('.md')) return 'MD'
+  return 'FILE'
+}
 </script>
 
 <style scoped>
@@ -503,7 +911,9 @@ const reportCards = [
 .panel-title h2,
 .trace-matrix h2,
 .assistant-panel h2,
-.conflict-card h2 {
+.conflict-card h2,
+.tensor-flow-board h2,
+.flow-inspector h2 {
   margin: 0;
 }
 
@@ -517,7 +927,8 @@ const reportCards = [
 .assistant-panel p,
 .conflict-card p,
 .report-card p,
-.import-card p {
+.import-card p,
+.tensor-flow-board p {
   margin: 6px 0 0;
   color: #667789;
   line-height: 1.6;
@@ -566,7 +977,8 @@ const reportCards = [
 .review-toolbar,
 .panel-title,
 .editor-tabs,
-.editor-footer {
+.editor-footer,
+.flow-inspector header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -611,7 +1023,7 @@ const reportCards = [
 
 .analysis-canvas {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr);
+  grid-template-columns: minmax(460px, 0.92fr) minmax(560px, 1.08fr);
   gap: 16px;
   align-items: stretch;
 }
@@ -619,7 +1031,7 @@ const reportCards = [
 .paper-panel,
 .code-panel {
   display: flex;
-  min-height: 700px;
+  min-height: 760px;
   flex-direction: column;
   gap: 14px;
   padding: 16px;
@@ -688,7 +1100,7 @@ const reportCards = [
 }
 
 .paper-page {
-  min-height: 620px;
+  min-height: 670px;
   padding: 42px 48px;
   border: 1px solid #dce3ea;
   background: #ffffff;
@@ -743,7 +1155,7 @@ mark {
 
 .code-workbench {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
   flex: 1;
@@ -758,32 +1170,53 @@ mark {
 
 .file-tree {
   display: grid;
-  align-content: start;
-  gap: 8px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  min-height: 0;
   padding: 12px;
 }
 
-.tree-head {
+.tree-head,
+.ignore-summary {
   display: grid;
   gap: 4px;
-  margin-bottom: 4px;
 }
 
-.tree-head span {
+.tree-head span,
+.ignore-summary span {
   color: #71808f;
   font-size: 12px;
   line-height: 1.4;
 }
 
+.tree-list {
+  overflow: auto;
+}
+
 .file-node {
   display: grid;
-  gap: 4px;
   width: 100%;
-  padding: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
   border-radius: 6px;
   background: transparent;
   color: #2d3b48;
   text-align: left;
+}
+
+.file-node.depth-1 {
+  padding-left: 20px;
+}
+
+.file-node.depth-2 {
+  padding-left: 36px;
+}
+
+.file-node.folder {
+  color: #536475;
+  font-weight: 700;
 }
 
 .file-node.active {
@@ -791,8 +1224,28 @@ mark {
   color: #1f8f78;
 }
 
+.node-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-icon {
+  display: inline-block;
+  min-width: 28px;
+  color: #1f8f78;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .file-node small {
   color: #71808f;
+}
+
+.ignore-summary {
+  padding-top: 10px;
+  border-top: 1px solid #dce3ea;
 }
 
 .editor-shell {
@@ -811,6 +1264,11 @@ mark {
   border-bottom: 1px solid #dce3ea;
 }
 
+.editor-tabs div {
+  display: inline-flex;
+  gap: 6px;
+}
+
 .editor-footer {
   border-top: 1px solid #dce3ea;
   color: #667789;
@@ -818,36 +1276,43 @@ mark {
 }
 
 .editor-body {
-  overflow: auto;
-  padding: 12px 0;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
   background: #fbfcfd;
 }
 
-.code-line {
-  display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  min-height: 24px;
-  padding: 0 12px;
+.line-gutter {
+  overflow: hidden;
+  padding: 14px 10px;
+  border-right: 1px solid #e4e9ee;
+  color: #9aa7b4;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
-  line-height: 24px;
-}
-
-.line-no {
-  color: #9aa7b4;
+  line-height: 22px;
+  text-align: right;
   user-select: none;
 }
 
-.code-line code {
-  white-space: pre;
+.line-gutter span {
+  display: block;
 }
 
-.code-line code.linked {
-  display: block;
-  margin: 0 -8px;
-  padding: 0 8px;
-  border-radius: 4px;
-  background: #fff0bf;
+.code-editor {
+  width: 100%;
+  height: 100%;
+  min-height: 620px;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 14px;
+  background: #fbfcfd;
+  color: #16232f;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 22px;
+  white-space: pre;
 }
 
 .insight-dock {
@@ -872,7 +1337,7 @@ mark {
 .dock-grid,
 .conflict-grid,
 .report-layout,
-.flow-board {
+.tensor-flow-layout {
   padding: 16px;
 }
 
@@ -885,14 +1350,18 @@ mark {
 .trace-matrix,
 .assistant-panel,
 .conflict-card,
-.report-card {
+.report-card,
+.tensor-flow-board,
+.flow-inspector {
   border: 1px solid #dce3ea;
   border-radius: 8px;
   background: #ffffff;
 }
 
 .trace-matrix,
-.assistant-panel {
+.assistant-panel,
+.tensor-flow-board,
+.flow-inspector {
   padding: 16px;
 }
 
@@ -918,41 +1387,149 @@ mark {
   margin-top: 18px;
 }
 
-.flow-board {
+.tensor-flow-layout {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
+  gap: 16px;
 }
 
-.flow-node {
-  position: relative;
-  min-height: 170px;
-  padding: 16px;
+.tensor-flow-canvas {
+  margin-top: 16px;
+  overflow: hidden;
   border: 1px solid #dce3ea;
   border-radius: 8px;
-  background: #ffffff;
+  background: #fbfcfd;
 }
 
-.flow-node span {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  margin-bottom: 12px;
-  border-radius: 50%;
-  background: #1f8f78;
-  color: #ffffff;
+.tensor-flow-canvas svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.flow-edge {
+  fill: none;
+  stroke: #1f8f78;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+.edge-label {
+  fill: #667789;
+  font-size: 12px;
   font-weight: 700;
 }
 
-.flow-node strong {
-  display: block;
-  font-size: 16px;
+.flow-node {
+  cursor: pointer;
+  outline: none;
 }
 
-.flow-node p {
+.flow-node rect {
+  fill: #ffffff;
+  stroke: #cfd9e3;
+  stroke-width: 2;
+  transition:
+    fill 0.16s ease,
+    stroke 0.16s ease;
+}
+
+.flow-node:hover rect,
+.flow-node.active rect {
+  fill: #f0faf7;
+  stroke: #1f8f78;
+}
+
+.flow-node.input rect,
+.flow-node.output rect {
+  fill: #f0faf7;
+}
+
+.flow-node.branch rect {
+  fill: #fff8e6;
+}
+
+.flow-node.merge rect {
+  fill: #eef3ff;
+}
+
+.node-kind {
+  fill: #1f8f78;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.node-title {
+  fill: #24313d;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.node-detail {
+  fill: #667789;
+  font-size: 13px;
+}
+
+.flow-inspector {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.inspector-body {
+  display: grid;
+  gap: 10px;
+}
+
+.inspector-body strong,
+.inspector-body span {
+  display: block;
+}
+
+.inspector-body span,
+.api-note {
   color: #667789;
   line-height: 1.6;
+}
+
+.inspector-body p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.inspector-body dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.inspector-body dl div {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.inspector-body dt {
+  color: #667789;
+  font-size: 12px;
+}
+
+.inspector-body dd {
+  margin: 0;
+  color: #24313d;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+}
+
+.api-note {
+  margin: 0;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f0faf7;
+  font-size: 12px;
 }
 
 .conflict-grid,
@@ -992,7 +1569,8 @@ mark {
 
 @media (max-width: 1180px) {
   .analysis-canvas,
-  .dock-grid {
+  .dock-grid,
+  .tensor-flow-layout {
     grid-template-columns: 1fr;
   }
 
@@ -1001,7 +1579,6 @@ mark {
     min-height: auto;
   }
 
-  .flow-board,
   .report-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1012,7 +1589,9 @@ mark {
   .review-toolbar,
   .step-footer,
   .toolbar-actions,
-  .panel-title {
+  .panel-title,
+  .editor-tabs,
+  .editor-footer {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1022,7 +1601,6 @@ mark {
   .code-workbench,
   .pdf-reader,
   .conflict-grid,
-  .flow-board,
   .report-layout,
   .two-column-note {
     grid-template-columns: 1fr;
