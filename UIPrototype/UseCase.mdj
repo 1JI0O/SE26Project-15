@@ -162,7 +162,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -323,7 +323,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 65,
-											"top": 1352,
+											"top": 1372,
 											"width": 111,
 											"height": 13,
 											"text": "项目负责人"
@@ -337,7 +337,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -357,7 +357,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 60,
-									"top": 1345,
+									"top": 1365,
 									"width": 121,
 									"height": 25,
 									"stereotypeLabel": {
@@ -382,6 +382,7 @@
 									"model": {
 										"$ref": "actor_owner"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 60,
@@ -398,6 +399,7 @@
 									"model": {
 										"$ref": "actor_owner"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 60,
@@ -445,6 +447,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrY8i8X4k="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jB5FI="
 							},
@@ -498,7 +502,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 65,
-											"top": 1707,
+											"top": 1727,
 											"width": 111,
 											"height": 13,
 											"text": "后端与算法开发者"
@@ -512,7 +516,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -532,7 +536,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 60,
-									"top": 1700,
+									"top": 1720,
 									"width": 121,
 									"height": 25,
 									"stereotypeLabel": {
@@ -557,6 +561,7 @@
 									"model": {
 										"$ref": "actor_developer"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 60,
@@ -573,6 +578,7 @@
 									"model": {
 										"$ref": "actor_developer"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 60,
@@ -620,6 +626,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jGMz8="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jLuqI="
 							},
@@ -673,7 +681,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 1915,
-											"top": 1212,
+											"top": 1232,
 											"width": 121,
 											"height": 13,
 											"text": "外部 AI/分析服务"
@@ -687,7 +695,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -707,7 +715,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1910,
-									"top": 1205,
+									"top": 1225,
 									"width": 131,
 									"height": 25,
 									"stereotypeLabel": {
@@ -732,6 +740,7 @@
 									"model": {
 										"$ref": "actor_ai_service"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1910,
@@ -748,6 +757,7 @@
 									"model": {
 										"$ref": "actor_ai_service"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1910,
@@ -795,6 +805,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jQiWc="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jVUuM="
 							},
@@ -848,7 +860,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 467.5,
-											"top": 175.5,
+											"top": 185.5,
 											"width": 145,
 											"height": 13,
 											"text": "创建/管理项目"
@@ -862,7 +874,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -882,7 +894,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 462.5,
-									"top": 168.5,
+									"top": 178.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -907,6 +919,7 @@
 									"model": {
 										"$ref": "uc_manage_project"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -923,6 +936,7 @@
 									"model": {
 										"$ref": "uc_manage_project"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -985,6 +999,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jaztg="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jfyNw="
 							},
@@ -1041,7 +1057,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 467.5,
-											"top": 375.5,
+											"top": 385.5,
 											"width": 145,
 											"height": 13,
 											"text": "上传论文 PDF"
@@ -1055,7 +1071,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -1075,7 +1091,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 462.5,
-									"top": 368.5,
+									"top": 378.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -1100,6 +1116,7 @@
 									"model": {
 										"$ref": "uc_upload_pdf"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -1116,6 +1133,7 @@
 									"model": {
 										"$ref": "uc_upload_pdf"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -1178,6 +1196,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jlJ6A="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jqvo4="
 							},
@@ -1234,7 +1254,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 467.5,
-											"top": 575.5,
+											"top": 585.5,
 											"width": 145,
 											"height": 13,
 											"text": "上传代码 ZIP"
@@ -1248,7 +1268,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -1268,7 +1288,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 462.5,
-									"top": 568.5,
+									"top": 578.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -1293,6 +1313,7 @@
 									"model": {
 										"$ref": "uc_upload_zip"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -1309,6 +1330,7 @@
 									"model": {
 										"$ref": "uc_upload_zip"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -1371,6 +1393,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrY8jwRqo="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrY8j1GGA="
 							},
@@ -1427,7 +1451,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 957.5,
-											"top": 375.5,
+											"top": 385.5,
 											"width": 145,
 											"height": 13,
 											"text": "解析论文结构"
@@ -1441,7 +1465,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -1461,7 +1485,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 952.5,
-									"top": 368.5,
+									"top": 378.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -1486,6 +1510,7 @@
 									"model": {
 										"$ref": "uc_parse_paper"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -1502,6 +1527,7 @@
 									"model": {
 										"$ref": "uc_parse_paper"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -1564,6 +1590,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrY8j7sao="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMkAZT4="
 							},
@@ -1620,7 +1648,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 957.5,
-											"top": 575.5,
+											"top": 585.5,
 											"width": 145,
 											"height": 13,
 											"text": "分析代码仓库"
@@ -1634,7 +1662,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -1654,7 +1682,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 952.5,
-									"top": 568.5,
+									"top": 578.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -1679,6 +1707,7 @@
 									"model": {
 										"$ref": "uc_analyze_code"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -1695,6 +1724,7 @@
 									"model": {
 										"$ref": "uc_analyze_code"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -1757,6 +1787,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMkGscc="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMkLS2k="
 							},
@@ -1813,7 +1845,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 467.5,
-											"top": 825.5,
+											"top": 835.5,
 											"width": 145,
 											"height": 13,
 											"text": "阅读论文原文"
@@ -1827,7 +1859,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -1847,7 +1879,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 462.5,
-									"top": 818.5,
+									"top": 828.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -1872,6 +1904,7 @@
 									"model": {
 										"$ref": "uc_read_paper"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -1888,6 +1921,7 @@
 									"model": {
 										"$ref": "uc_read_paper"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -1950,6 +1984,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMkRjaQ="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMkWNS8="
 							},
@@ -2006,7 +2042,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 467.5,
-											"top": 1025.5,
+											"top": 1035.5,
 											"width": 145,
 											"height": 13,
 											"text": "浏览代码文件树"
@@ -2020,7 +2056,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -2040,7 +2076,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 462.5,
-									"top": 1018.5,
+									"top": 1028.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -2065,6 +2101,7 @@
 									"model": {
 										"$ref": "uc_browse_tree"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -2081,6 +2118,7 @@
 									"model": {
 										"$ref": "uc_browse_tree"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -2143,6 +2181,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMkc6d0="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMkh3EE="
 							},
@@ -2199,7 +2239,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 467.5,
-											"top": 1225.5,
+											"top": 1235.5,
 											"width": 145,
 											"height": 13,
 											"text": "查看/编辑代码文件"
@@ -2213,7 +2253,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -2233,7 +2273,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 462.5,
-									"top": 1218.5,
+									"top": 1228.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -2258,6 +2298,7 @@
 									"model": {
 										"$ref": "uc_view_code"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -2274,6 +2315,7 @@
 									"model": {
 										"$ref": "uc_view_code"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -2336,6 +2378,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMknbv0="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMksw8g="
 							},
@@ -2392,7 +2436,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 957.5,
-											"top": 825.5,
+											"top": 835.5,
 											"width": 145,
 											"height": 13,
 											"text": "定位论文锚点"
@@ -2406,7 +2450,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -2426,7 +2470,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 952.5,
-									"top": 818.5,
+									"top": 828.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -2451,6 +2495,7 @@
 									"model": {
 										"$ref": "uc_locate_paper_anchor"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -2467,6 +2512,7 @@
 									"model": {
 										"$ref": "uc_locate_paper_anchor"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -2529,6 +2575,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMkyN38="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMk3AxE="
 							},
@@ -2585,7 +2633,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 957.5,
-											"top": 1025.5,
+											"top": 1035.5,
 											"width": 145,
 											"height": 13,
 											"text": "定位代码符号"
@@ -2599,7 +2647,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -2619,7 +2667,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 952.5,
-									"top": 1018.5,
+									"top": 1028.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -2644,6 +2692,7 @@
 									"model": {
 										"$ref": "uc_locate_code_symbol"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -2660,6 +2709,7 @@
 									"model": {
 										"$ref": "uc_locate_code_symbol"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -2722,6 +2772,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMk93FU="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMlCc3o="
 							},
@@ -2778,7 +2830,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 1437.5,
-											"top": 825.5,
+											"top": 835.5,
 											"width": 145,
 											"height": 13,
 											"text": "生成候选追溯关系"
@@ -2792,7 +2844,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -2812,7 +2864,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1432.5,
-									"top": 818.5,
+									"top": 828.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -2837,6 +2889,7 @@
 									"model": {
 										"$ref": "uc_generate_trace"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -2853,6 +2906,7 @@
 									"model": {
 										"$ref": "uc_generate_trace"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -2915,6 +2969,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMlIED0="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMlNJSM="
 							},
@@ -2971,7 +3027,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 1437.5,
-											"top": 1025.5,
+											"top": 1035.5,
 											"width": 145,
 											"height": 13,
 											"text": "审阅追溯矩阵"
@@ -2985,7 +3041,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -3005,7 +3061,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1432.5,
-									"top": 1018.5,
+									"top": 1028.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -3030,6 +3086,7 @@
 									"model": {
 										"$ref": "uc_review_matrix"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -3046,6 +3103,7 @@
 									"model": {
 										"$ref": "uc_review_matrix"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -3108,6 +3166,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMlTK/o="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMlY1WM="
 							},
@@ -3164,7 +3224,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 1437.5,
-											"top": 1225.5,
+											"top": 1235.5,
 											"width": 145,
 											"height": 13,
 											"text": "人工确认/修正关系"
@@ -3178,7 +3238,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -3198,7 +3258,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1432.5,
-									"top": 1218.5,
+									"top": 1228.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -3223,6 +3283,7 @@
 									"model": {
 										"$ref": "uc_confirm_trace"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -3239,6 +3300,7 @@
 									"model": {
 										"$ref": "uc_confirm_trace"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -3301,6 +3363,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMleaW8="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMljdCw="
 							},
@@ -3357,7 +3421,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 1437.5,
-											"top": 1425.5,
+											"top": 1435.5,
 											"width": 145,
 											"height": 13,
 											"text": "查看流程图"
@@ -3371,7 +3435,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -3391,7 +3455,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1432.5,
-									"top": 1418.5,
+									"top": 1428.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -3416,6 +3480,7 @@
 									"model": {
 										"$ref": "uc_view_flow"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -3432,6 +3497,7 @@
 									"model": {
 										"$ref": "uc_view_flow"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -3494,6 +3560,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMlpdyw="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMlu2Qs="
 							},
@@ -3550,7 +3618,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 1437.5,
-											"top": 1625.5,
+											"top": 1635.5,
 											"width": 145,
 											"height": 13,
 											"text": "执行魔改冲突分析"
@@ -3564,7 +3632,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -3584,7 +3652,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1432.5,
-									"top": 1618.5,
+									"top": 1628.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -3609,6 +3677,7 @@
 									"model": {
 										"$ref": "uc_conflict_analysis"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -3625,6 +3694,7 @@
 									"model": {
 										"$ref": "uc_conflict_analysis"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 1400,
@@ -3687,6 +3757,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMl048Y="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMl5vRg="
 							},
@@ -3743,7 +3815,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 957.5,
-											"top": 1425.5,
+											"top": 1435.5,
 											"width": 145,
 											"height": 13,
 											"text": "查看质量门禁"
@@ -3757,7 +3829,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -3777,7 +3849,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 952.5,
-									"top": 1418.5,
+									"top": 1428.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -3802,6 +3874,7 @@
 									"model": {
 										"$ref": "uc_quality_gate"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -3818,6 +3891,7 @@
 									"model": {
 										"$ref": "uc_quality_gate"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -3880,6 +3954,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMl/2j0="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMmEgnk="
 							},
@@ -3936,7 +4012,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 957.5,
-											"top": 1625.5,
+											"top": 1635.5,
 											"width": 145,
 											"height": 13,
 											"text": "导出审阅报告"
@@ -3950,7 +4026,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -3970,7 +4046,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 952.5,
-									"top": 1618.5,
+									"top": 1628.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -3995,6 +4071,7 @@
 									"model": {
 										"$ref": "uc_export_report"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -4011,6 +4088,7 @@
 									"model": {
 										"$ref": "uc_export_report"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 920,
@@ -4073,6 +4151,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMmKNo8="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMmPnhw="
 							},
@@ -4129,7 +4209,7 @@
 											"font": "Arial;13;1",
 											"parentStyle": true,
 											"left": 467.5,
-											"top": 1625.5,
+											"top": 1635.5,
 											"width": 145,
 											"height": 13,
 											"text": "扩展后端占位接口"
@@ -4143,7 +4223,7 @@
 											"visible": false,
 											"font": "Arial;13;0",
 											"parentStyle": true,
-											"width": 219.8949432373047,
+											"width": 221.52685546875,
 											"height": 13,
 											"text": "(from 论文代码双向追溯 Web 工作台)"
 										},
@@ -4163,7 +4243,7 @@
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 462.5,
-									"top": 1618.5,
+									"top": 1628.5,
 									"width": 155,
 									"height": 25,
 									"stereotypeLabel": {
@@ -4188,6 +4268,7 @@
 									"model": {
 										"$ref": "uc_extend_api"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -4204,6 +4285,7 @@
 									"model": {
 										"$ref": "uc_extend_api"
 									},
+									"visible": false,
 									"font": "Arial;13;0",
 									"parentStyle": true,
 									"left": 430,
@@ -4266,6 +4348,8 @@
 							"nameCompartment": {
 								"$ref": "AAAAAAGfRLjrZMmVMwc="
 							},
+							"suppressAttributes": true,
+							"suppressOperations": true,
 							"attributeCompartment": {
 								"$ref": "AAAAAAGfRLjrZMmaBHE="
 							},
@@ -7952,9 +8036,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 757,
+									"left": 756,
 									"top": 355,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8049,9 +8133,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 757,
+									"left": 756,
 									"top": 555,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8146,9 +8230,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 757,
+									"left": 756,
 									"top": 805,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8243,9 +8327,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 757,
+									"left": 756,
 									"top": 1005,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8340,9 +8424,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 1182,
+									"left": 1181,
 									"top": 604,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8437,9 +8521,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 1282,
+									"left": 1281,
 									"top": 706,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8534,9 +8618,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 1491,
+									"left": 1490,
 									"top": 934,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8631,9 +8715,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 1531,
+									"left": 1530,
 									"top": 1134,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8728,9 +8812,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 1658,
+									"left": 1657,
 									"top": 1334,
-									"width": 55.2369384765625,
+									"width": 56.849609375,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8825,9 +8909,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 1337,
+									"left": 1336,
 									"top": 1234,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -8922,9 +9006,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 1031,
+									"left": 1030,
 									"top": 1534,
-									"width": 57.563934326171875,
+									"width": 59.59814453125,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -9021,7 +9105,7 @@
 									"parentStyle": false,
 									"left": 1787,
 									"top": 981,
-									"width": 57.134918212890625,
+									"width": 57.5478515625,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -9118,7 +9202,7 @@
 									"parentStyle": false,
 									"left": 1867,
 									"top": 1408,
-									"width": 57.134918212890625,
+									"width": 57.5478515625,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -9213,9 +9297,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 637,
+									"left": 636,
 									"top": 1009,
-									"width": 67.31391906738281,
+									"width": 69.57666015625,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -9310,9 +9394,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 742,
+									"left": 741,
 									"top": 1109,
-									"width": 67.31391906738281,
+									"width": 69.57666015625,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -9407,9 +9491,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 1117,
+									"left": 1116,
 									"top": 1873,
-									"width": 67.31391906738281,
+									"width": 69.57666015625,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -9504,9 +9588,9 @@
 									},
 									"font": "Arial;13;0",
 									"parentStyle": false,
-									"left": 1167,
+									"left": 1166,
 									"top": 1833,
-									"width": 67.31391906738281,
+									"width": 69.57666015625,
 									"height": 13,
 									"alpha": 1.5707963267948966,
 									"distance": 30,
@@ -10351,6 +10435,5 @@
 				}
 			]
 		}
-	],
-	"documentVersion": 1
+	]
 }
