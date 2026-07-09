@@ -166,7 +166,10 @@
                 <el-tag size="small" :type="selectedFile?.statusType" effect="plain">
                   {{ selectedFile?.status }}
                 </el-tag>
-                <el-tag size="small" type="warning" effect="plain">未保存演示</el-tag>
+                <el-tag v-if="isEditorDirty" size="small" type="warning" effect="plain">
+                  未保存演示
+                </el-tag>
+                <el-tag v-else size="small" type="success" effect="plain">已同步</el-tag>
               </div>
             </div>
             <div class="editor-body">
@@ -175,16 +178,19 @@
               </aside>
               <textarea
                 v-if="selectedFile"
-                v-model="selectedFile.content"
+                :value="editorContent"
                 spellcheck="false"
                 class="code-editor"
                 :aria-label="`${selectedFile.path} 可编辑代码内容`"
+                @input="handleEditorInput"
               />
             </div>
             <div class="editor-footer">
               <span>当前符号: {{ selectedFile?.symbol }}</span>
               <span>关联段落: {{ selectedFile?.paperRef }}</span>
-              <el-button size="small" type="primary" plain>保存到占位接口</el-button>
+              <el-button size="small" type="primary" plain @click="saveEditorBuffer">
+                保存到占位接口
+              </el-button>
             </div>
           </div>
         </div>
@@ -346,7 +352,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 type TagType = 'success' | 'warning' | 'info' | 'primary' | 'danger'
@@ -610,10 +616,24 @@ This repository reproduces residual learning experiments.
 
 const visibleCodeTree = computed<VisibleTreeNode[]>(() => flattenTree(codeTree))
 const selectedFile = computed(() => codeFiles.value.find((file) => file.path === selectedPath.value))
+const editorContent = ref('')
+let editorContentBuffer = ''
+const editorLineCount = ref(1)
+const isEditorDirty = ref(false)
 const editableLineNumbers = computed(() => {
-  const count = selectedFile.value?.content.split('\n').length ?? 1
-  return Array.from({ length: count }, (_, index) => index + 1)
+  return Array.from({ length: editorLineCount.value }, (_, index) => index + 1)
 })
+
+watch(
+  selectedFile,
+  (file) => {
+    editorContent.value = file?.content ?? ''
+    editorContentBuffer = editorContent.value
+    editorLineCount.value = countLines(editorContentBuffer)
+    isEditorDirty.value = false
+  },
+  { immediate: true },
+)
 
 const insightTabs = [
   { key: 'trace', label: '追溯矩阵' },
@@ -851,6 +871,25 @@ function handleTreeNodeClick(node: VisibleTreeNode): void {
   }
 }
 
+function handleEditorInput(event: Event): void {
+  const nextContent = (event.target as HTMLTextAreaElement).value
+  editorContentBuffer = nextContent
+  const nextLineCount = countLines(nextContent)
+  if (nextLineCount !== editorLineCount.value) {
+    editorLineCount.value = nextLineCount
+  }
+  if (!isEditorDirty.value) {
+    isEditorDirty.value = true
+  }
+}
+
+function saveEditorBuffer(): void {
+  if (!selectedFile.value) return
+  selectedFile.value.content = editorContentBuffer
+  editorContent.value = editorContentBuffer
+  isEditorDirty.value = false
+}
+
 function handleTensorNodeClick(node: TensorFlowNode): void {
   selectedTensorNode.value = node
   jumpToTensorNodeCode(node)
@@ -864,6 +903,15 @@ function jumpToTensorNodeCode(node: TensorFlowNode): void {
 
 function edgePath(points: TensorFlowEdge['points']): string {
   return points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ')
+}
+
+function countLines(value: string): number {
+  if (!value) return 1
+  let count = 1
+  for (const char of value) {
+    if (char === '\n') count += 1
+  }
+  return count
 }
 
 function fileIcon(filename: string): string {
