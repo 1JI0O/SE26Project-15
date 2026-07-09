@@ -88,4 +88,4 @@ def test_start_workspace_analysis_placeholder() -> None:
     data = response.json()
     assert data["project_id"] == "prototype"
     assert data["status"] == "queued"
-    assert data["job_id"].startswith("placeholder-")
+    assert data["job_id"].startswith("workspace-")

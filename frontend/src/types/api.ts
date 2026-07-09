@@ -33,6 +33,32 @@ export interface CodeRepository {
   created_at: string
 }
 
+export interface WorkspacePaperPage {
+  page_number: number
+  title: string
+  body: string[]
+  anchors: Array<Record<string, unknown>>
+}
+
+export type TagType = 'success' | 'warning' | 'info' | 'primary' | 'danger'
+
+export interface WorkspaceImportStep {
+  index: string
+  title: string
+  description: string
+  status: string
+  tag_type: TagType
+  action?: string
+}
+
+export interface WorkspaceTraceRow {
+  paper_ref: string
+  code_ref: string
+  relation_type: string
+  confidence: number
+  rationale: string
+}
+
 export interface WorkspaceCodeTreeNode {
   name: string
   path: string

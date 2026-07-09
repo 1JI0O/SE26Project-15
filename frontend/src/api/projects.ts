@@ -9,7 +9,10 @@ import type {
   TraceLinkSuggestion,
   WorkspaceCodeFile,
   WorkspaceCodeTreeNode,
+  WorkspaceImportStep,
+  WorkspacePaperPage,
   WorkspaceTensorFlow,
+  WorkspaceTraceRow,
 } from '@/types/api'
 
 export async function listProjects(): Promise<Project[]> {
@@ -67,6 +70,24 @@ export async function createTraceLink(
 export async function suggestTraceLinks(projectId: number): Promise<TraceLinkSuggestion[]> {
   const { data } = await http.post<TraceLinkSuggestion[]>(
     `/projects/${projectId}/trace-links/suggest`,
+  )
+  return data
+}
+
+export async function getWorkspacePaperPages(
+  projectId: number | string,
+): Promise<WorkspacePaperPage[]> {
+  const { data } = await http.get<WorkspacePaperPage[]>(
+    `/projects/${projectId}/workspace/paper-pages`,
+  )
+  return data
+}
+
+export async function getWorkspaceTraceMatrix(
+  projectId: number | string,
+): Promise<WorkspaceTraceRow[]> {
+  const { data } = await http.get<WorkspaceTraceRow[]>(
+    `/projects/${projectId}/workspace/trace-matrix`,
   )
   return data
 }

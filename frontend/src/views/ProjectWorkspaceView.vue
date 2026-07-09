@@ -14,9 +14,12 @@
       </div>
       <div class="head-meta">
         <span>Project {{ projectIdLabel }}</span>
-        <strong>ResNet 论文复现</strong>
+        <strong>{{ projectName }}</strong>
       </div>
     </section>
+
+    <input ref="paperInputRef" type="file" accept=".pdf,application/pdf" hidden @change="onPaperSelected" />
+    <input ref="codeInputRef" type="file" accept=".zip,application/zip" hidden @change="onCodeSelected" />
 
     <section class="import-strip">
       <article v-for="item in importSteps" :key="item.title" class="import-card">
@@ -27,7 +30,15 @@
         </div>
         <div class="step-footer">
           <el-tag :type="item.tagType" effect="plain">{{ item.status }}</el-tag>
-          <el-button v-if="item.action" type="primary" plain>{{ item.action }}</el-button>
+          <el-button
+            v-if="item.action"
+            type="primary"
+            plain
+            :loading="item.index === '01' ? uploadingPaper : item.index === '02' ? uploadingCode : false"
+            @click="handleImportAction(item.index)"
+          >
+            {{ item.action }}
+          </el-button>
         </div>
       </article>
     </section>
@@ -44,8 +55,7 @@
         </button>
       </div>
       <div class="toolbar-actions">
-        <el-tag type="success" effect="plain">12 条高置信追溯</el-tag>
-        <el-tag type="warning" effect="plain">3 处魔改风险</el-tag>
+        <el-tag type="success" effect="plain">{{ traceRows.length }} 条追溯候选</el-tag>
         <el-tag type="info" effect="plain">论文只读 / 代码可编辑</el-tag>
         <el-button type="primary">导出审阅报告</el-button>
       </div>
@@ -58,11 +68,11 @@
             <h2>论文原文</h2>
             <p>只读 PDF 页视图，支持段落、公式、图表锚点高亮，不提供内容编辑。</p>
           </div>
-          <el-tag type="info" effect="plain">Read-only paper.pdf</el-tag>
+          <el-tag type="info" effect="plain">{{ paperFilename || '未上传论文' }}</el-tag>
         </header>
 
         <div class="pdf-toolbar">
-          <span>第 {{ activePaperPage }} / 9 页</span>
+          <span>第 {{ activePaperPage }} / {{ paperPageNumbers.length || 1 }} 页</span>
           <div>
             <button>缩小</button>
             <button>100%</button>
@@ -70,10 +80,10 @@
           </div>
         </div>
 
-        <div class="pdf-reader">
+          <div class="pdf-reader">
           <aside class="page-rail">
             <button
-              v-for="page in paperPages"
+              v-for="page in paperPageNumbers"
               :key="page"
               :class="{ active: page === activePaperPage }"
               @click="activePaperPage = page"
@@ -83,37 +93,18 @@
             </button>
           </aside>
 
-          <div class="paper-page" aria-label="只读论文预览">
-            <div class="paper-meta">CVPR 2026 Draft - Method Section</div>
-            <h3>Deep Residual Learning for Image Recognition</h3>
-            <p class="paper-abstract">
-              We present a residual learning framework to ease the training of networks that are
-              substantially deeper than those used previously. The core idea is to reformulate each
-              stacked layer as a residual function with identity shortcuts.
-            </p>
-            <section class="paper-section">
-              <h4>3.1 Residual Building Block</h4>
-              <p>
-                Formally, a building block is defined as
-                <mark>y = F(x, Wi) + x</mark>. The shortcut connection performs identity mapping,
-                and its outputs are added to the outputs of the stacked layers.
+          <div class="paper-scroll">
+            <div v-if="activePaperContent" class="paper-page" aria-label="只读论文预览">
+              <div class="paper-meta">Page {{ activePaperContent.page_number }}</div>
+              <h3>{{ activePaperContent.title }}</h3>
+              <p v-if="activePaperPage === 1 && paperAbstract" class="paper-abstract">
+                {{ paperAbstract }}
               </p>
-              <p>
-                When dimensions increase, the shortcut can either perform identity mapping with
-                zero-padding or use a projection shortcut. The implementation should preserve
-                <mark>stride, downsample and expansion</mark> semantics.
-              </p>
-            </section>
-            <section class="paper-section two-column-note">
-              <div>
-                <strong>Algorithm 1</strong>
-                <p>Forward pass of the residual block, including projection branch and activation.</p>
-              </div>
-              <div>
-                <strong>Trace anchors</strong>
-                <p>P3-12 -> BasicBlock.forward, P3-17 -> downsample branch.</p>
-              </div>
-            </section>
+              <section v-for="(paragraph, index) in activePaperContent.body" :key="index" class="paper-section">
+                <p>{{ paragraph }}</p>
+              </section>
+            </div>
+            <el-empty v-else description="请先上传论文 PDF" />
           </div>
         </div>
       </article>
@@ -124,7 +115,7 @@
             <h2>代码工作区</h2>
             <p>过滤 .gitignore 与 macOS 元数据后的完整仓库树，代码文件可直接编辑。</p>
           </div>
-          <el-tag type="success" effect="plain">Editable repo.zip</el-tag>
+          <el-tag type="success" effect="plain">{{ codeFilename || '未上传代码' }}</el-tag>
         </header>
 
         <div class="code-workbench">
@@ -137,25 +128,33 @@
             <div class="tree-list">
               <button
                 v-for="node in visibleCodeTree"
-                :key="node.path"
+                :key="node.path || node.name"
                 :class="[
                   'file-node',
                   `depth-${node.depth}`,
-                  { active: node.path === selectedPath, folder: node.kind === 'folder' },
+                  {
+                    active: node.kind === 'file' && node.path === selectedPath,
+                    folder: node.kind === 'folder',
+                    expanded: node.kind === 'folder' && isFolderExpanded(node.path),
+                    blocked: node.kind === 'file' && !isEditableFile(node.path),
+                  },
                 ]"
                 @click="handleTreeNodeClick(node)"
               >
                 <span class="node-name">
-                  <span class="node-icon">{{ node.kind === 'folder' ? '▸' : fileIcon(node.name) }}</span>
+                  <span class="node-icon">
+                    <template v-if="node.kind === 'folder'">{{ folderChevron(node.path) }}</template>
+                    <template v-else>{{ fileIcon(node.name) }}</template>
+                  </span>
                   {{ node.name }}
                 </span>
-                <small>{{ node.meta }}</small>
+                <small v-if="node.kind === 'file'">{{ node.meta }}</small>
               </button>
             </div>
 
             <div class="ignore-summary">
               <strong>过滤规则</strong>
-              <span>12 个文件被隐藏，包括 .DS_Store、__MACOSX/、.venv/、dist/。</span>
+              <span>{{ ignoreSummary }}</span>
             </div>
           </aside>
 
@@ -184,12 +183,19 @@
                 :aria-label="`${selectedFile.path} 可编辑代码内容`"
                 @input="handleEditorInput"
               />
+              <el-empty v-else description="从左侧文件树选择可编辑的代码或文本文件" />
             </div>
             <div class="editor-footer">
               <span>当前符号: {{ selectedFile?.symbol }}</span>
               <span>关联段落: {{ selectedFile?.paperRef }}</span>
-              <el-button size="small" type="primary" plain @click="saveEditorBuffer">
-                保存到占位接口
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :loading="savingEditor"
+                @click="saveEditorBuffer"
+              >
+                保存编辑
               </el-button>
             </div>
           </div>
@@ -221,12 +227,13 @@
             <span>关系</span>
             <span>置信度</span>
           </div>
-          <div v-for="row in traceRows" :key="row.paper" class="trace-row">
+          <div v-for="row in traceRows" :key="`${row.paper}-${row.code}`" class="trace-row">
             <span>{{ row.paper }}</span>
             <span>{{ row.code }}</span>
             <span>{{ row.type }}</span>
             <el-progress :percentage="row.confidence" />
           </div>
+          <el-empty v-if="!traceRows.length" description="上传论文和代码后可生成追溯候选" />
         </article>
         <article class="assistant-panel">
           <h2>AI 审阅建议</h2>
@@ -251,7 +258,7 @@
             </p>
           </header>
           <div class="tensor-flow-canvas">
-            <svg viewBox="0 0 1040 500" role="img" aria-label="代码张量流追踪图">
+            <svg viewBox="0 0 1040 520" role="img" aria-label="代码张量流追踪图">
               <defs>
                 <marker
                   id="flow-arrow"
@@ -265,16 +272,13 @@
                 </marker>
               </defs>
               <g class="edge-layer">
-                <g v-for="edge in tensorFlowEdges" :key="edge.id">
-                  <path
-                    :d="edgePath(edge.points)"
-                    class="flow-edge"
-                    marker-end="url(#flow-arrow)"
-                  />
-                  <text :x="edge.labelX" :y="edge.labelY" class="edge-label">
-                    {{ edge.label }}
-                  </text>
-                </g>
+                <path
+                  v-for="edge in tensorFlowEdges"
+                  :key="`${edge.id}-path`"
+                  :d="edgePath(edge.points)"
+                  class="flow-edge"
+                  marker-end="url(#flow-arrow)"
+                />
               </g>
               <g class="node-layer">
                 <g
@@ -294,6 +298,26 @@
                   <text :x="node.x + 16" :y="node.y + 26" class="node-kind">{{ node.kindLabel }}</text>
                   <text :x="node.x + 16" :y="node.y + 56" class="node-title">{{ node.title }}</text>
                   <text :x="node.x + 16" :y="node.y + 84" class="node-detail">{{ node.detail }}</text>
+                </g>
+              </g>
+              <g class="edge-label-layer">
+                <g v-for="label in tensorFlowEdgeLabels" :key="`${label.id}-label`">
+                  <rect
+                    :x="label.rectX"
+                    :y="label.rectY"
+                    :width="label.rectWidth"
+                    :height="label.rectHeight"
+                    rx="6"
+                    class="edge-label-bg"
+                  />
+                  <text
+                    :x="label.x"
+                    :y="label.y"
+                    :text-anchor="label.anchor"
+                    class="edge-label"
+                  >
+                    {{ label.text }}
+                  </text>
                 </g>
               </g>
             </svg>
@@ -352,11 +376,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-
-type TagType = 'success' | 'warning' | 'info' | 'primary' | 'danger'
-type TreeNodeKind = 'folder' | 'file'
+import { ElMessage } from 'element-plus'
+import {
+  getProject,
+  getWorkspaceCodeFile,
+  getWorkspaceCodeTree,
+  getWorkspacePaperPages,
+  getWorkspaceTraceMatrix,
+  saveWorkspaceCodeFile,
+  uploadCode,
+  uploadPaper,
+} from '@/api/projects'
+import type { TagType, WorkspaceCodeTreeNode, WorkspaceImportStep, WorkspacePaperPage } from '@/types/api'
 
 interface CodeFile {
   path: string
@@ -370,15 +403,7 @@ interface CodeFile {
   content: string
 }
 
-interface CodeTreeNode {
-  name: string
-  path: string
-  kind: TreeNodeKind
-  meta: string
-  children?: CodeTreeNode[]
-}
-
-interface VisibleTreeNode extends CodeTreeNode {
+interface VisibleTreeNode extends WorkspaceCodeTreeNode {
   depth: number
 }
 
@@ -404,225 +429,108 @@ interface TensorFlowEdge {
   source: string
   target: string
   label: string
-  labelX: number
-  labelY: number
   points: Array<[number, number]>
 }
 
-const route = useRoute()
-const projectIdLabel = computed(() => String(route.params.id ?? 'prototype'))
+interface TensorFlowEdgeLabel {
+  id: string
+  text: string
+  x: number
+  y: number
+  anchor: 'start' | 'middle' | 'end'
+  rectX: number
+  rectY: number
+  rectWidth: number
+  rectHeight: number
+}
 
-const activePaperPage = ref(3)
+interface ImportStepView {
+  index: string
+  title: string
+  description: string
+  status: string
+  tagType: TagType
+  action: string
+}
+
+interface TraceRowView {
+  paper: string
+  code: string
+  type: string
+  confidence: number
+}
+
+const route = useRoute()
+const projectId = computed(() => Number(route.params.id))
+const projectIdLabel = computed(() => String(route.params.id ?? ''))
+const projectName = ref('加载中...')
+const paperFilename = ref('')
+const codeFilename = ref('')
+const paperAbstract = ref('')
+const ignoreSummary = ref('上传代码包后显示过滤摘要。')
+const uploadingPaper = ref(false)
+const uploadingCode = ref(false)
+const savingEditor = ref(false)
+const loadingWorkspace = ref(false)
+
+const paperInputRef = ref<HTMLInputElement | null>(null)
+const codeInputRef = ref<HTMLInputElement | null>(null)
+
+const activePaperPage = ref(1)
 const activeMode = ref('审阅模式')
 const activeInsight = ref('trace')
-const selectedPath = ref('models/resnet.py')
+const selectedPath = ref('')
 
 const reviewModes = ['审阅模式', '标注模式', '冲突模式']
-const paperPages = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-const importSteps = [
+const importSteps = ref<ImportStepView[]>([
   {
     index: '01',
     title: '导入论文 PDF',
     description: '保留原文页视图，抽取章节、段落、公式、图表和引用锚点；论文区只读展示。',
-    status: '已解析',
-    tagType: 'success' as TagType,
-    action: '重新上传',
+    status: '待上传',
+    tagType: 'info',
+    action: '上传 PDF',
   },
   {
     index: '02',
     title: '导入代码 ZIP',
     description: '按 .gitignore 和 macOS 元数据规则过滤，生成 IDE 风格完整代码仓库树。',
-    status: '已分析',
-    tagType: 'success' as TagType,
-    action: '替换代码包',
+    status: '待上传',
+    tagType: 'info',
+    action: '上传 ZIP',
   },
   {
     index: '03',
     title: '生成代码追踪视图',
     description: '基于代码静态分析输出可交互张量流图、追溯矩阵和魔改冲突占位结果。',
-    status: 'UI + 接口占位',
-    tagType: 'warning' as TagType,
+    status: '等待导入',
+    tagType: 'warning',
     action: '',
-  },
-]
-
-const codeTree: CodeTreeNode[] = [
-  {
-    name: 'resnet-reproduction',
-    path: '',
-    kind: 'folder',
-    meta: 'root',
-    children: [
-      {
-        name: 'configs',
-        path: 'configs',
-        kind: 'folder',
-        meta: '1 file',
-        children: [
-          {
-            name: 'resnet50.yaml',
-            path: 'configs/resnet50.yaml',
-            kind: 'file',
-            meta: 'config',
-          },
-        ],
-      },
-      {
-        name: 'data',
-        path: 'data',
-        kind: 'folder',
-        meta: '2 files',
-        children: [
-          { name: 'imagenet.py', path: 'data/imagenet.py', kind: 'file', meta: 'loader' },
-          { name: 'transforms.py', path: 'data/transforms.py', kind: 'file', meta: 'pipeline' },
-        ],
-      },
-      {
-        name: 'models',
-        path: 'models',
-        kind: 'folder',
-        meta: '3 files',
-        children: [
-          { name: '__init__.py', path: 'models/__init__.py', kind: 'file', meta: 'module' },
-          { name: 'layers.py', path: 'models/layers.py', kind: 'file', meta: 'ops' },
-          { name: 'resnet.py', path: 'models/resnet.py', kind: 'file', meta: '8 links' },
-        ],
-      },
-      { name: 'train.py', path: 'train.py', kind: 'file', meta: 'entry' },
-      { name: 'evaluate.py', path: 'evaluate.py', kind: 'file', meta: 'script' },
-      { name: 'README.md', path: 'README.md', kind: 'file', meta: 'doc' },
-    ],
-  },
-]
-
-const codeFiles = ref<CodeFile[]>([
-  {
-    path: 'models/resnet.py',
-    name: 'models/resnet.py',
-    badge: '8 links',
-    status: '与论文强关联',
-    statusType: 'success',
-    symbol: 'BasicBlock.forward',
-    paperRef: 'P3-12, P3-17',
-    linkedLines: [12, 13, 17, 18, 19, 21],
-    content: `import torch
-import torch.nn as nn
-
-
-class BasicBlock(nn.Module):
-    expansion = 1
-
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
-        super().__init__()
-        self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.downsample = downsample
-        self.stride = stride
-
-    def forward(self, x):
-        identity = x
-        out = self.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        if self.downsample is not None:
-            identity = self.downsample(x)
-        out += identity
-        return self.relu(out)`,
-  },
-  {
-    path: 'models/layers.py',
-    name: 'models/layers.py',
-    badge: 'ops',
-    status: '张量操作候选',
-    statusType: 'primary',
-    symbol: 'conv3x3',
-    paperRef: 'P3-10',
-    linkedLines: [1, 2, 3],
-    content: `import torch.nn as nn
-
-
-def conv3x3(in_planes, out_planes, stride=1):
-    return nn.Conv2d(
-        in_planes,
-        out_planes,
-        kernel_size=3,
-        stride=stride,
-        padding=1,
-        bias=False,
-    )`,
-  },
-  {
-    path: 'train.py',
-    name: 'train.py',
-    badge: '3 links',
-    status: '训练入口候选',
-    statusType: 'primary',
-    symbol: 'train_one_epoch',
-    paperRef: 'P6-04',
-    linkedLines: [7, 12, 13],
-    content: `def train_one_epoch(model, loader, optimizer, criterion):
-    model.train()
-    total_loss = 0.0
-
-    for images, labels in loader:
-        optimizer.zero_grad()
-        logits = model(images)
-        loss = criterion(logits, labels)
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()
-
-    return total_loss / len(loader)`,
-  },
-  {
-    path: 'configs/resnet50.yaml',
-    name: 'configs/resnet50.yaml',
-    badge: '2 risks',
-    status: '配置需复核',
-    statusType: 'warning',
-    symbol: 'model.depth',
-    paperRef: 'P5-02',
-    linkedLines: [2, 5, 7],
-    content: `model:
-  name: resnet50
-  num_classes: 1000
-training:
-  epochs: 90
-  batch_size: 256
-  base_lr: 0.1
-  weight_decay: 0.0001`,
-  },
-  {
-    path: 'README.md',
-    name: 'README.md',
-    badge: 'doc',
-    status: '说明文档',
-    statusType: 'info',
-    symbol: 'usage',
-    paperRef: '无',
-    linkedLines: [1],
-    content: `# ResNet Reproduction
-
-This repository reproduces residual learning experiments.
-
-- model definitions: models/resnet.py
-- training entry: train.py
-- default config: configs/resnet50.yaml`,
   },
 ])
 
-const visibleCodeTree = computed<VisibleTreeNode[]>(() => flattenTree(codeTree))
+const paperPageData = ref<WorkspacePaperPage[]>([])
+const codeTree = ref<WorkspaceCodeTreeNode[]>([])
+const codeFiles = ref<CodeFile[]>([])
+const traceRows = ref<TraceRowView[]>([])
+const expandedFolders = ref<Set<string>>(new Set(['__root__']))
+
+const paperPageNumbers = computed(() => paperPageData.value.map((page) => page.page_number))
+const activePaperContent = computed(() =>
+  paperPageData.value.find((page) => page.page_number === activePaperPage.value),
+)
+const visibleCodeTree = computed<VisibleTreeNode[]>(() =>
+  buildVisibleTree(codeTree.value, expandedFolders.value),
+)
 const selectedFile = computed(() => codeFiles.value.find((file) => file.path === selectedPath.value))
 const editorContent = ref('')
 let editorContentBuffer = ''
 const editorLineCount = ref(1)
 const isEditorDirty = ref(false)
-const editableLineNumbers = computed(() => {
-  return Array.from({ length: editorLineCount.value }, (_, index) => index + 1)
-})
+const editableLineNumbers = computed(() =>
+  Array.from({ length: editorLineCount.value }, (_, index) => index + 1),
+)
 
 watch(
   selectedFile,
@@ -635,18 +543,256 @@ watch(
   { immediate: true },
 )
 
+onMounted(() => {
+  void loadWorkspace()
+})
+
+async function loadWorkspace(): Promise<void> {
+  if (!projectId.value || Number.isNaN(projectId.value)) return
+  loadingWorkspace.value = true
+  try {
+    const project = await getProject(projectId.value)
+    projectName.value = project.name
+
+    await Promise.allSettled([
+      loadPaperPages(),
+      loadCodeTree(),
+      loadTraceRows(),
+    ])
+    updateImportSteps()
+  } catch (error) {
+    ElMessage.error('加载项目工作台失败')
+    console.error(error)
+  } finally {
+    loadingWorkspace.value = false
+  }
+}
+
+async function loadPaperPages(): Promise<void> {
+  try {
+    const pages = await getWorkspacePaperPages(projectId.value)
+    paperPageData.value = pages
+    paperFilename.value = 'paper.pdf'
+    activePaperPage.value = pages[0]?.page_number ?? 1
+    if (pages[0]?.body?.length) {
+      paperAbstract.value = pages[0].body[0].slice(0, 500)
+    }
+  } catch {
+    paperPageData.value = []
+    paperFilename.value = ''
+    paperAbstract.value = ''
+  }
+}
+
+async function loadCodeTree(): Promise<void> {
+  try {
+    const tree = await getWorkspaceCodeTree(projectId.value)
+    codeTree.value = tree
+    initExpandedFolders(tree)
+    codeFilename.value = 'repo.zip'
+    ignoreSummary.value = '已应用 .gitignore 与 macOS 元数据过滤规则。'
+    const firstFile = findFirstEditableFile(tree)
+    if (firstFile) {
+      await openCodeFile(firstFile.path)
+    }
+  } catch {
+    codeTree.value = []
+    codeFilename.value = ''
+  }
+}
+
+async function loadTraceRows(): Promise<void> {
+  try {
+    const rows = await getWorkspaceTraceMatrix(projectId.value)
+    traceRows.value = rows.map((row) => ({
+      paper: row.paper_ref,
+      code: row.code_ref,
+      type: row.relation_type,
+      confidence: row.confidence,
+    }))
+  } catch {
+    traceRows.value = []
+  }
+}
+
+function updateImportSteps(): void {
+  const hasPaper = paperPageData.value.length > 0
+  const hasCode = codeTree.value.length > 0
+  importSteps.value = [
+    {
+      index: '01',
+      title: '导入论文 PDF',
+      description: '保留原文页视图，抽取章节、段落和页码；论文区只读展示。',
+      status: hasPaper ? '已解析' : '待上传',
+      tagType: hasPaper ? 'success' : 'info',
+      action: hasPaper ? '重新上传' : '上传 PDF',
+    },
+    {
+      index: '02',
+      title: '导入代码 ZIP',
+      description: '按 .gitignore 和 macOS 元数据规则过滤，生成 IDE 风格完整代码仓库树。',
+      status: hasCode ? '已分析' : '待上传',
+      tagType: hasCode ? 'success' : 'info',
+      action: hasCode ? '替换代码包' : '上传 ZIP',
+    },
+    {
+      index: '03',
+      title: '生成代码追踪视图',
+      description: '基于代码静态分析输出追溯矩阵；张量流与魔改冲突仍为演示占位。',
+      status: hasPaper && hasCode ? '追溯候选已生成' : '等待导入',
+      tagType: hasPaper && hasCode ? 'success' : 'warning',
+      action: '',
+    },
+  ]
+}
+
+function handleImportAction(stepIndex: string): void {
+  if (stepIndex === '01') {
+    paperInputRef.value?.click()
+    return
+  }
+  if (stepIndex === '02') {
+    codeInputRef.value?.click()
+  }
+}
+
+async function onPaperSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  uploadingPaper.value = true
+  try {
+    const paper = await uploadPaper(projectId.value, file)
+    paperFilename.value = paper.filename
+    paperAbstract.value = paper.abstract
+    await loadPaperPages()
+    await loadTraceRows()
+    updateImportSteps()
+    ElMessage.success('论文上传并解析完成')
+  } catch (error) {
+    ElMessage.error('论文上传失败')
+    console.error(error)
+  } finally {
+    uploadingPaper.value = false
+  }
+}
+
+async function onCodeSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  uploadingCode.value = true
+  try {
+    const code = await uploadCode(projectId.value, file)
+    codeFilename.value = code.filename
+    await loadCodeTree()
+    await loadTraceRows()
+    updateImportSteps()
+    ElMessage.success('代码包上传并分析完成')
+  } catch (error) {
+    ElMessage.error('代码包上传失败')
+    console.error(error)
+  } finally {
+    uploadingCode.value = false
+  }
+}
+
+function findFirstEditableFile(nodes: WorkspaceCodeTreeNode[]): WorkspaceCodeTreeNode | null {
+  for (const node of nodes) {
+    if (node.kind === 'file' && isEditableFile(node.path)) return node
+    const child = findFirstEditableFile(node.children ?? [])
+    if (child) return child
+  }
+  return null
+}
+
+const EDITABLE_EXTENSIONS = new Set([
+  '.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.kt', '.go', '.rs',
+  '.c', '.cc', '.cpp', '.h', '.hpp', '.cs', '.swift', '.rb', '.php', '.lua',
+  '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
+  '.md', '.rst', '.txt', '.text', '.log',
+  '.yaml', '.yml', '.toml', '.json', '.jsonl',
+  '.xml', '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
+  '.ini', '.cfg', '.conf', '.env', '.properties', '.sql', '.csv', '.tsv',
+  '.gitignore', '.dockerignore', '.editorconfig',
+])
+
+const EDITABLE_BASENAMES = new Set(['makefile', 'dockerfile', 'license', 'readme', 'cmakelists.txt'])
+
+const BLOCKED_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tif', '.tiff',
+  '.pt', '.pth', '.ckpt', '.safetensors', '.bin', '.onnx', '.h5', '.hdf5', '.pb', '.tflite',
+  '.npy', '.npz', '.pkl', '.pickle', '.parquet', '.feather', '.arrow',
+  '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
+  '.mp4', '.mp3', '.wav', '.avi', '.mov',
+  '.ttf', '.otf', '.woff', '.woff2', '.pdf',
+  '.exe', '.dll', '.so', '.dylib', '.o', '.a', '.class', '.jar', '.wasm', '.db', '.sqlite',
+])
+
+function fileExtension(path: string): string {
+  const index = path.lastIndexOf('.')
+  if (index <= 0) return ''
+  return path.slice(index).toLowerCase()
+}
+
+function isEditableFile(path: string): boolean {
+  const extension = fileExtension(path)
+  const basename = path.split('/').pop()?.toLowerCase() ?? ''
+  if (extension && BLOCKED_EXTENSIONS.has(extension)) return false
+  if (extension && EDITABLE_EXTENSIONS.has(extension)) return true
+  return EDITABLE_BASENAMES.has(basename)
+}
+
+function blockedFileMessage(path: string): string {
+  const extension = fileExtension(path)
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tif', '.tiff'].includes(extension)) {
+    return '图片文件不支持在代码编辑器中打开。'
+  }
+  if (['.pt', '.pth', '.ckpt', '.safetensors', '.bin', '.onnx', '.h5', '.pkl', '.pickle', '.npy', '.npz'].includes(extension)) {
+    return '模型权重或二进制数据文件不支持在代码编辑器中打开。'
+  }
+  return '该文件类型不支持在代码编辑器中打开，请选择代码或文本文件。'
+}
+
+async function openCodeFile(path: string): Promise<void> {
+  if (!isEditableFile(path)) {
+    ElMessage.warning(blockedFileMessage(path))
+    return
+  }
+
+  const cached = codeFiles.value.find((file) => file.path === path)
+  selectedPath.value = path
+  if (cached) return
+
+  try {
+    const payload = await getWorkspaceCodeFile(projectId.value, path)
+    const mapped: CodeFile = {
+      path: payload.path,
+      name: payload.name,
+      badge: payload.badge,
+      status: payload.status,
+      statusType: payload.status_type as TagType,
+      symbol: payload.symbol,
+      paperRef: payload.paper_ref,
+      linkedLines: payload.linked_lines,
+      content: payload.content,
+    }
+    codeFiles.value = [...codeFiles.value.filter((file) => file.path !== path), mapped]
+  } catch (error) {
+    ElMessage.error(`无法加载文件 ${path}`)
+    console.error(error)
+  }
+}
+
 const insightTabs = [
   { key: 'trace', label: '追溯矩阵' },
   { key: 'flow', label: '张量流流程图' },
   { key: 'conflict', label: '魔改冲突分析' },
   { key: 'report', label: '报告与质量门禁' },
-]
-
-const traceRows = [
-  { paper: 'P3-12 残差公式', code: 'BasicBlock.forward: out += identity', type: 'implements', confidence: 94 },
-  { paper: 'P3-17 projection shortcut', code: 'downsample(x)', type: 'implements', confidence: 88 },
-  { paper: 'P5-02 ResNet-50 depth', code: 'configs/resnet50.yaml', type: 'configures', confidence: 79 },
-  { paper: 'P6-04 SGD training', code: 'train_one_epoch', type: 'validates', confidence: 73 },
 ]
 
 const tensorFlowNodes: TensorFlowNode[] = [
@@ -754,8 +900,6 @@ const tensorFlowEdges: TensorFlowEdge[] = [
     source: 'images',
     target: 'conv1',
     label: 'input tensor',
-    labelX: 220,
-    labelY: 116,
     points: [
       [202, 124],
       [286, 124],
@@ -766,8 +910,6 @@ const tensorFlowEdges: TensorFlowEdge[] = [
     source: 'conv1',
     target: 'conv2',
     label: 'feature tensor',
-    labelX: 510,
-    labelY: 116,
     points: [
       [496, 124],
       [580, 124],
@@ -778,8 +920,6 @@ const tensorFlowEdges: TensorFlowEdge[] = [
     source: 'conv2',
     target: 'add',
     label: 'residual',
-    labelX: 784,
-    labelY: 150,
     points: [
       [770, 124],
       [792, 124],
@@ -792,8 +932,6 @@ const tensorFlowEdges: TensorFlowEdge[] = [
     source: 'images',
     target: 'shortcut',
     label: 'identity branch',
-    labelX: 88,
-    labelY: 268,
     points: [
       [118, 176],
       [118, 360],
@@ -805,8 +943,6 @@ const tensorFlowEdges: TensorFlowEdge[] = [
     source: 'shortcut',
     target: 'add',
     label: 'shortcut tensor',
-    labelX: 620,
-    labelY: 340,
     points: [
       [586, 360],
       [700, 360],
@@ -819,14 +955,16 @@ const tensorFlowEdges: TensorFlowEdge[] = [
     source: 'add',
     target: 'logits',
     label: 'block output',
-    labelX: 872,
-    labelY: 340,
     points: [
       [902, 306],
       [902, 360],
     ],
   },
 ]
+
+const tensorFlowEdgeLabels = computed<TensorFlowEdgeLabel[]>(() =>
+  tensorFlowEdges.map((edge) => buildEdgeLabel(edge)),
+)
 
 const selectedTensorNode = ref<TensorFlowNode | null>(tensorFlowNodes[0] ?? null)
 
@@ -858,17 +996,131 @@ const reportCards = [
   { value: 'Flow JSON', title: '流程图接口', description: '返回节点、边、张量形状和代码定位。' },
 ]
 
-function flattenTree(nodes: CodeTreeNode[], depth = 0): VisibleTreeNode[] {
-  return nodes.flatMap((node) => [
-    { ...node, depth },
-    ...(node.children ? flattenTree(node.children, depth + 1) : []),
-  ])
+function folderKey(path: string): string {
+  return path || '__root__'
+}
+
+function isFolderExpanded(path: string): boolean {
+  return expandedFolders.value.has(folderKey(path))
+}
+
+function folderChevron(path: string): string {
+  return isFolderExpanded(path) ? '▾' : '▸'
+}
+
+function toggleFolder(path: string): void {
+  const key = folderKey(path)
+  const next = new Set(expandedFolders.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  expandedFolders.value = next
+}
+
+function initExpandedFolders(tree: WorkspaceCodeTreeNode[]): void {
+  const next = new Set<string>(['__root__'])
+  for (const root of tree) {
+    if (root.kind === 'folder') {
+      next.add(folderKey(root.path))
+      for (const child of root.children ?? []) {
+        if (child.kind === 'folder') {
+          next.add(folderKey(child.path))
+        }
+      }
+    }
+  }
+  expandedFolders.value = next
+}
+
+function buildVisibleTree(
+  nodes: WorkspaceCodeTreeNode[],
+  expanded: Set<string>,
+  depth = 0,
+  parentExpanded = true,
+): VisibleTreeNode[] {
+  if (!parentExpanded) return []
+
+  return nodes.flatMap((node) => {
+    const current: VisibleTreeNode = { ...node, depth }
+    if (node.kind !== 'folder') {
+      return [current]
+    }
+
+    const expandedFolder = expanded.has(folderKey(node.path))
+    const children = node.children ?? []
+    return [
+      current,
+      ...buildVisibleTree(children, expanded, depth + 1, expandedFolder),
+    ]
+  })
 }
 
 function handleTreeNodeClick(node: VisibleTreeNode): void {
-  if (node.kind === 'file' && codeFiles.value.some((file) => file.path === node.path)) {
-    selectedPath.value = node.path
+  if (node.kind === 'folder') {
+    toggleFolder(node.path)
+    return
   }
+  if (!isEditableFile(node.path)) {
+    ElMessage.warning(blockedFileMessage(node.path))
+    return
+  }
+  void openCodeFile(node.path)
+}
+
+function buildEdgeLabel(edge: TensorFlowEdge): TensorFlowEdgeLabel {
+  const layout = edgeLabelLayout[edge.id] ?? defaultEdgeLabelLayout(edge)
+  const rectWidth = Math.max(layout.text.length * 7.2 + 14, 72)
+  const rectHeight = 22
+  const rectX =
+    layout.anchor === 'middle'
+      ? layout.x - rectWidth / 2
+      : layout.anchor === 'end'
+        ? layout.x - rectWidth + 6
+        : layout.x - 6
+  const rectY = layout.y - 16
+
+  return {
+    id: edge.id,
+    text: layout.text,
+    x: layout.x,
+    y: layout.y,
+    anchor: layout.anchor,
+    rectX,
+    rectY,
+    rectWidth,
+    rectHeight,
+  }
+}
+
+function defaultEdgeLabelLayout(edge: TensorFlowEdge): {
+  text: string
+  x: number
+  y: number
+  anchor: 'start' | 'middle' | 'end'
+} {
+  const points = edge.points
+  const [startX, startY] = points[0]
+  const [endX, endY] = points[points.length - 1]
+  return {
+    text: edge.label,
+    x: (startX + endX) / 2,
+    y: (startY + endY) / 2 - 12,
+    anchor: 'middle',
+  }
+}
+
+const edgeLabelLayout: Record<
+  string,
+  { text: string; x: number; y: number; anchor: 'start' | 'middle' | 'end' }
+> = {
+  'images-conv1': { text: 'input tensor', x: 244, y: 108, anchor: 'middle' },
+  'conv1-conv2': { text: 'feature tensor', x: 538, y: 108, anchor: 'middle' },
+  'conv2-add': { text: 'residual', x: 804, y: 188, anchor: 'start' },
+  'images-shortcut': { text: 'identity branch', x: 48, y: 286, anchor: 'start' },
+  'shortcut-add': { text: 'shortcut tensor', x: 643, y: 382, anchor: 'middle' },
+  'add-logits': { text: 'block output', x: 952, y: 334, anchor: 'end' },
 }
 
 function handleEditorInput(event: Event): void {
@@ -883,11 +1135,21 @@ function handleEditorInput(event: Event): void {
   }
 }
 
-function saveEditorBuffer(): void {
+async function saveEditorBuffer(): Promise<void> {
   if (!selectedFile.value) return
-  selectedFile.value.content = editorContentBuffer
-  editorContent.value = editorContentBuffer
-  isEditorDirty.value = false
+  savingEditor.value = true
+  try {
+    await saveWorkspaceCodeFile(projectId.value, selectedFile.value.path, editorContentBuffer)
+    selectedFile.value.content = editorContentBuffer
+    editorContent.value = editorContentBuffer
+    isEditorDirty.value = false
+    ElMessage.success('代码编辑已保存')
+  } catch (error) {
+    ElMessage.error('保存失败')
+    console.error(error)
+  } finally {
+    savingEditor.value = false
+  }
 }
 
 function handleTensorNodeClick(node: TensorFlowNode): void {
@@ -896,9 +1158,7 @@ function handleTensorNodeClick(node: TensorFlowNode): void {
 }
 
 function jumpToTensorNodeCode(node: TensorFlowNode): void {
-  if (codeFiles.value.some((file) => file.path === node.sourcePath)) {
-    selectedPath.value = node.sourcePath
-  }
+  void openCodeFile(node.sourcePath)
 }
 
 function edgePath(points: TensorFlowEdge['points']): string {
@@ -915,6 +1175,7 @@ function countLines(value: string): number {
 }
 
 function fileIcon(filename: string): string {
+  if (!isEditableFile(filename)) return 'BIN'
   if (filename.endsWith('.py')) return 'PY'
   if (filename.endsWith('.yaml') || filename.endsWith('.yml')) return 'YML'
   if (filename.endsWith('.md')) return 'MD'
@@ -926,6 +1187,7 @@ function fileIcon(filename: string): string {
 .prototype-page {
   display: grid;
   gap: 18px;
+  --workspace-panel-height: 1040px;
 }
 
 .workspace-head,
@@ -1079,10 +1341,12 @@ function fileIcon(filename: string): string {
 .paper-panel,
 .code-panel {
   display: flex;
-  min-height: 760px;
+  height: var(--workspace-panel-height);
+  max-height: var(--workspace-panel-height);
   flex-direction: column;
   gap: 14px;
   padding: 16px;
+  overflow: hidden;
 }
 
 .panel-title {
@@ -1119,12 +1383,23 @@ function fileIcon(filename: string): string {
   gap: 12px;
   min-height: 0;
   flex: 1;
+  overflow: hidden;
+}
+
+.paper-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid #dce3ea;
+  border-radius: 8px;
+  background: #fbfcfd;
 }
 
 .page-rail {
   display: grid;
   align-content: start;
   gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .page-rail button {
@@ -1148,11 +1423,10 @@ function fileIcon(filename: string): string {
 }
 
 .paper-page {
-  min-height: 670px;
-  padding: 42px 48px;
-  border: 1px solid #dce3ea;
+  min-height: 0;
+  padding: 32px 36px;
   background: #ffffff;
-  box-shadow: 0 8px 24px rgba(36, 49, 61, 0.08);
+  box-shadow: inset 0 0 0 1px #edf1f4;
 }
 
 .paper-meta {
@@ -1262,6 +1536,18 @@ mark {
   padding-left: 36px;
 }
 
+.file-node.depth-3 {
+  padding-left: 52px;
+}
+
+.file-node.depth-4 {
+  padding-left: 68px;
+}
+
+.file-node.folder.expanded .node-icon {
+  color: #1f8f78;
+}
+
 .file-node.folder {
   color: #536475;
   font-weight: 700;
@@ -1270,6 +1556,14 @@ mark {
 .file-node.active {
   background: #e8f4f1;
   color: #1f8f78;
+}
+
+.file-node.blocked {
+  opacity: 0.72;
+}
+
+.file-node.blocked .node-icon {
+  color: #9aa7b4;
 }
 
 .node-name {
@@ -1285,6 +1579,10 @@ mark {
   color: #1f8f78;
   font-size: 11px;
   font-weight: 700;
+}
+
+.file-node.folder .node-icon {
+  font-size: 12px;
 }
 
 .file-node small {
@@ -1350,7 +1648,7 @@ mark {
 .code-editor {
   width: 100%;
   height: 100%;
-  min-height: 620px;
+  min-height: 0;
   resize: none;
   border: 0;
   outline: 0;
@@ -1361,6 +1659,7 @@ mark {
   font-size: 13px;
   line-height: 22px;
   white-space: pre;
+  overflow: auto;
 }
 
 .insight-dock {
@@ -1463,10 +1762,21 @@ mark {
   stroke-width: 3;
 }
 
+.edge-label-layer {
+  pointer-events: none;
+}
+
+.edge-label-bg {
+  fill: rgba(255, 255, 255, 0.94);
+  stroke: #d7e3de;
+  stroke-width: 1;
+}
+
 .edge-label {
-  fill: #667789;
-  font-size: 12px;
+  fill: #4d6470;
+  font-size: 11px;
   font-weight: 700;
+  dominant-baseline: middle;
 }
 
 .flow-node {
@@ -1624,7 +1934,9 @@ mark {
 
   .paper-panel,
   .code-panel {
-    min-height: auto;
+    height: auto;
+    max-height: none;
+    min-height: 840px;
   }
 
   .report-layout {
