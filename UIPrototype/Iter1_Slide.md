@@ -19,7 +19,7 @@ timer: countdown
 
 <div class="cover-mark">TraceLab · Iteration 01</div>
 
-# 让论文与代码<br/>在同一条证据链中对齐
+# 让论文与代码<br/>在同一工作区中对齐
 
 <p class="cover-lead">面向深度学习论文复现的论文—代码双向追溯 Web 工作台</p>
 
@@ -96,6 +96,27 @@ layout: default
 layout: default
 ---
 
+<div class="eyebrow">计划兑现</div>
+
+# 八项计划任务形成了分层成果
+
+<p class="bottom-claim">本轮不以“功能做全”为目标，而以“边界清楚、工程可接续、闭环可演示”为验收基准。</p>
+
+<div class="task-grid">
+  <div class="task-item doc"><span>01</span><b>定位与技术选型</b><em>文档草案</em><p>确定独立 Web 工作台主体，预留 IDE / VS Code 扩展入口。</p></div>
+  <div class="task-item done"><span>02</span><b>协作环境与工程</b><em>已完成</em><p>Git 规范、接口目录、Vue 3 + TypeScript 与 FastAPI 初始工程。</p></div>
+  <div class="task-item doc"><span>03</span><b>需求细化与原型</b><em>文档初步形成</em><p>导入、解析、分析、追溯、管理、报告等模块完成拆分。</p></div>
+  <div class="task-item prototype"><span>04</span><b>PDF 解析原型</b><em>初步实现</em><p>提取标题、摘要、章节、段落与页码等论文侧信息。</p></div>
+  <div class="task-item prototype"><span>05</span><b>代码导入与分析</b><em>初步实现</em><p>导入 ZIP，扫描文件树、类、函数、导入和模型候选。</p></div>
+  <div class="task-item design"><span>06</span><b>数据模型</b><em>设计草案</em><p>围绕项目、片段、追溯、修正记录和报告记录完成拆分。</p></div>
+  <div class="task-item done"><span>07</span><b>工作台前端骨架</b><em>已完成</em><p>项目页、双栏阅读、文件树与追溯结果面板均已具备。</p></div>
+  <div class="task-item done"><span>08</span><b>联调与展示材料</b><em>已完成</em><p>最小流程可展示，演示文档与页面截图已汇集。</p></div>
+</div>
+
+---
+layout: default
+---
+
 <div class="eyebrow">界面原型演示</div>
 
 # 项目入口页面
@@ -106,7 +127,7 @@ layout: default
     <ul>
       <li><b>项目列表：</b>以论文复现任务为单位查看状态和进入工作台。</li>
       <li><b>导入入口：</b>论文、代码与后续分析结果在同一项目下归档。</li>
-      <li><b>界面设计：</b>组件使用 Ant Design 进行设计，功能清晰，操作直观。</li>
+      <li><b>界面设计：</b>基于 Element Plus 组织页面组件，功能入口清晰、操作路径直接。</li>
       <li><b>扩展方向：</b>从外部导入项目，项目搜索与批量管理，通过 Arxiv 和 GitHub 直接拉取分析等进阶功能。</li>
     </ul>
   </div>
@@ -170,8 +191,33 @@ layout: default
 </div>
 
 <div class="two-evidence">
-  <div><b>目前的最小能力实现</b><p>基于PyPdf工具进行简单的论文文档解析，目前仅提取文字，对于论文的切分能力较差；代码文件树、类、函数、导入关系与 PyTorch 模型候选，支持在工作区内对代码文件进行简单的审阅和修改操作。</p></div>
-  <div><b>保留的可替换边界</b><p>候选追溯当前以启发式/规则为基础，未来为了确保追溯准确性和鲁棒性会引入 llm 进行辅助；向量检索、LLM 解释和动态运行追踪、流程题生成与交互实现属于后端功能实现，不在本轮完成。</p></div>
+  <div><b>目前的最小能力实现</b><p>基于 pypdf 提取论文文本和页码；基于 Python AST 产出文件树、类、函数、导入关系与 PyTorch 模型候选。工作区支持代码审阅与修改，论文保持只读。</p></div>
+  <div><b>保留的可替换边界</b><p>候选追溯当前以启发式/规则为基础；未来可引入向量检索、LLM 解释、动态运行追踪和流程图交互。它们只通过接口占位，不作为本轮后端算法交付。</p></div>
+</div>
+
+---
+layout: default
+---
+
+<div class="eyebrow">工程协作契约</div>
+
+# 用稳定接口连接可替换的分析能力
+
+<div class="contract-layout">
+  <div class="contract-panel">
+    <h2>统一 API 作为并行开发边界</h2>
+    <div class="contract-row"><code>POST /projects</code><span>创建并管理复现项目</span></div>
+    <div class="contract-row"><code>POST /paper · /code</code><span>导入论文 PDF 与代码 ZIP</span></div>
+    <div class="contract-row"><code>GET/POST /trace-links</code><span>读取、创建候选追溯关系</span></div>
+    <div class="contract-row"><code>GET /workspace/*</code><span>支撑工作台、流程图、冲突与报告占位数据</span></div>
+  </div>
+  <div class="contract-panel contract-data">
+    <h2>数据模型围绕追溯主链收敛</h2>
+    <div class="data-chain"><b>项目</b><i>→</i><b>论文文档</b><i>→</i><b>论文片段</b></div>
+    <div class="data-chain"><b>项目</b><i>→</i><b>代码仓库</b><i>→</i><b>代码片段</b></div>
+    <div class="data-chain emphasis"><b>论文片段</b><i>⇄</i><b>追溯关系</b><i>⇄</i><b>代码片段</b></div>
+    <p>人工修正、分析任务和报告记录围绕项目保存，便于后续审阅、复盘与扩展。</p>
+  </div>
 </div>
 
 ---
@@ -180,12 +226,12 @@ layout: default
 
 <div class="eyebrow">迭代评估报告概要</div>
 
-# 当前的计划进度
+# 交付物与验收证据已经汇集
 
 <div class="status-columns">
-  <section class="done"><h2>已完成</h2><p>协作环境与前后端初始工程</p><p>Web 工作台前端骨架</p><p>第一次联调与展示材料</p></section>
-  <section class="progressing"><h2>已初步形成</h2><p>项目定位与技术选型</p><p>需求细化与原型设计</p><p>PDF 解析、代码静态分析最小原型</p><p>数据库与数据模型设计草案</p></section>
-  <section class="next"><h2>问题</h2><p>项目创建和导入不便，需要手动导入</p><p>代码和窗口的宽度较窄，阅读不便</p><p>Vision 文档不够完善，主要聚焦当前阶段的任务，对未来展望不够</p></section>
+  <section class="done"><h2>可运行的工程</h2><p>前后端初始工程与协作规范</p><p>项目页、工作台与追溯面板</p><p>联调最小流程与展示材料</p></section>
+  <section class="progressing"><h2>可接续的设计</h2><p>需求细化、模块拆分与技术选型</p><p>接口契约与数据库初版设计</p><p>论文解析、代码分析最小原型</p></section>
+  <section class="next"><h2>可核验的证据</h2><p>运行截图与工作台样例</p><p>接口文档与核心 JSON 格式</p><p>测试记录、评估报告与迭代计划</p></section>
 </div>
 
 
@@ -216,16 +262,72 @@ layout: default
 layout: default
 ---
 
+<div class="eyebrow">验收矩阵</div>
+
+# 最小闭环已按六类验收项逐段验证
+
+<div class="validation-grid">
+  <div><b>项目创建</b><p>项目名称、材料来源等基础信息可保存。</p><span>OK</span></div>
+  <div><b>PDF 解析</b><p>标题、摘要、章节、段落、页码可结构化展示。</p><span>OK</span></div>
+  <div><b>代码导入</b><p>接收 ZIP、展示过滤后的文件树并识别 Python 文件。</p><span>OK</span></div>
+  <div><b>静态分析</b><p>输出类、函数、import、nn.Module 与 forward 等信息。</p><span>OK</span></div>
+  <div><b>关系展示</b><p>论文片段、代码片段、理由或占位说明可并列审阅。</p><span>OK</span></div>
+  <div><b>前端页面</b><p>项目列表、上传页、双栏页面和追溯面板均可访问。</p><span>OK</span></div>
+</div>
+
+<p class="bottom-claim">配套证据：前端生产构建通过；后端 12 项 pytest 测试覆盖核心 API、文件过滤与工作台路径。</p>
+
+---
+layout: default
+---
+
+<div class="eyebrow">范围变更与风险控制</div>
+
+# 主动收敛范围，避免智能功能阻塞迭代交付
+
+<div class="change-layout">
+  <div class="change-now">
+    <h2>本轮必须可演示</h2>
+    <p>导入论文与代码</p><p>结构化解析与静态分析</p><p>双栏阅读与候选追溯展示</p><p>人工确认/修正的结构与入口</p>
+  </div>
+  <div class="change-arrow">范围<br/>收敛</div>
+  <div class="change-later">
+    <h2>后移到后续迭代</h2>
+    <p>复杂图文代码对齐与真实张量验证</p><p>完整跨文件调用图与魔改影响分析</p><p>生产级多租户与完整 IDE 替代能力</p><p>大模型解释与向量检索的深度接入</p>
+  </div>
+</div>
+
+<div class="risk-strip"><b>降级策略：</b>复杂 PDF 先保留页码与附近文本；复杂仓库先定位核心文件；自动匹配不可用时使用规则/关键词与人工链接；接口不稳定时以前端 mock 数据保障演示。</div>
+
+---
+layout: default
+---
+
+<div class="eyebrow">经验沉淀</div>
+
+# 第一轮迭代留下四条可复用的原则
+
+<div class="lesson-grid">
+  <div><span>01</span><b>先控制范围</b><p>先跑通材料导入、解析、展示与追溯，再逐步增加智能能力。</p></div>
+  <div><span>02</span><b>文档与接口先行</b><p>项目、片段和追溯关系的 JSON 契约要先固定，减少并行返工。</p></div>
+  <div><span>03</span><b>解析分层实现</b><p>先稳定基础结构，再增强公式、图表、算法框与跨文件关系。</p></div>
+  <div><span>04</span><b>演示保持可降级</b><p>样例尽早固定，自动分析不稳定时仍能用规则和人工审阅完成闭环。</p></div>
+</div>
+
+---
+layout: default
+---
+
 <div class="eyebrow">下一步与评审请求</div>
 
-# 未来展望
+# 下一轮先补齐证据链，再提升追溯质量
 
 <div class="next-layout">
   <div class="next-steps">
-    <div><span>P0</span><b>真实材料闭环</b><p>围绕固定样例，验证导入 → 解析 → 候选 → 确认的完整链路。</p></div>
-    <div><span>P1</span><b>可解释与可修正</b><p>补全匹配理由、置信度依据、确认记录和报告输出。</p></div>
-    <div><span>P2</span><b>追溯质量增强</b><p>逐步引入规则、向量检索和 LLM 辅助解释，并保留可复核证据。</p></div>
-    <div><span>P3</span><b>导入流程简化</b><p>接入 Arxiv Api 和 GitHub，支持根据仓库名自动匹配拉取。</p></div>
+    <div><span>高</span><b>补齐仓库证据与启动说明</b><p>补充 Git 提交记录、运行样例和启动步骤。负责人：张朴、钱闵浩。</p></div>
+    <div><span>高</span><b>固定解析样例与核心 JSON</b><p>补充 PDF/代码分析样例、截图和统一字段契约。负责人：俞冠廷、钱闵浩、秦浩翔。</p></div>
+    <div><span>中</span><b>完善原型与报告输出</b><p>补充低保真页面证据、关系确认记录和可导出的复现报告。负责人：张朴、俞冠廷。</p></div>
+    <div><span>P2</span><b>增强追溯质量</b><p>在可复核证据基础上逐步接入规则、向量检索、LLM 解释和动态验证。</p></div>
   </div>
 </div>
 
