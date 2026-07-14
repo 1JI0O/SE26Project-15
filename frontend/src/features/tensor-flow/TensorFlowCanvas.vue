@@ -43,7 +43,7 @@
           </marker>
           <!-- Clip paths for each node to prevent text overflow -->
           <clipPath v-for="node in nodes" :key="`clip-${node.id}`" :id="`clip-${node.id}`">
-            <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="10" />
+            <rect :x="node.x + 4" :y="node.y + 4" :width="node.width - 8" :height="node.height - 8" />
           </clipPath>
         </defs>
         <g class="edge-layer">
@@ -70,11 +70,24 @@
             @keydown.enter.prevent="$emit('nodeClick', node)"
           >
             <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="10" />
-            <g :clip-path="`url(#clip-${node.id})`">
-              <text :x="node.x + 12" :y="node.y + 24" class="node-kind">{{ node.kindLabel }}</text>
-              <text :x="node.x + 12" :y="node.y + 48" class="node-title">{{ node.title }}</text>
-              <text :x="node.x + 12" :y="node.y + 72" class="node-detail">{{ node.detail }}</text>
-            </g>
+            <text
+              :x="node.x + 12"
+              :y="node.y + 24"
+              class="node-kind"
+              :font-size="fitFontSize(node.kindLabel, node.width - 24, 13)"
+            >{{ node.kindLabel }}</text>
+            <text
+              :x="node.x + 12"
+              :y="node.y + 50"
+              class="node-title"
+              :font-size="fitFontSize(node.title, node.width - 24, 15)"
+            >{{ truncateText(node.title, node.width - 24, 15) }}</text>
+            <text
+              :x="node.x + 12"
+              :y="node.y + 74"
+              class="node-detail"
+              :font-size="fitFontSize(node.detail, node.width - 24, 13)"
+            >{{ truncateText(node.detail, node.width - 24, 13) }}</text>
           </g>
         </g>
         <g class="edge-label-layer">
@@ -119,6 +132,30 @@ defineProps<{
 defineEmits<{
   nodeClick: [node: TensorFlowNode]
 }>()
+
+/**
+ * Estimate font size to fit text within available width.
+ * Average char width ≈ 0.6 * fontSize for sans-serif.
+ */
+function fitFontSize(text: string, availableWidth: number, maxFontSize: number): number {
+  if (!text) return maxFontSize
+  const charWidth = maxFontSize * 0.6
+  const neededWidth = text.length * charWidth
+  if (neededWidth <= availableWidth) return maxFontSize
+  const scaled = Math.floor((availableWidth / neededWidth) * maxFontSize)
+  return Math.max(scaled, 9) // minimum 9px
+}
+
+/**
+ * Truncate text with ellipsis if it's too long for the available width.
+ */
+function truncateText(text: string, availableWidth: number, fontSize: number): string {
+  if (!text) return ''
+  const charWidth = fontSize * 0.6
+  const maxChars = Math.floor(availableWidth / charWidth)
+  if (text.length <= maxChars) return text
+  return text.slice(0, maxChars - 1) + '…'
+}
 </script>
 
 <style scoped>
