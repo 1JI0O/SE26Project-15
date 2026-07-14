@@ -69,6 +69,7 @@
             @click="$emit('nodeClick', node)"
             @keydown.enter.prevent="$emit('nodeClick', node)"
           >
+            <title>{{ node.title }}\n{{ node.kindLabel }} · {{ node.tensorShape }}</title>
             <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="10" />
             <text
               :x="node.x + 12"
@@ -81,13 +82,13 @@
               :y="node.y + 50"
               class="node-title"
               :font-size="fitFontSize(node.title, node.width - 24, 15)"
-            >{{ truncateText(node.title, node.width - 24, 15) }}</text>
+            >{{ node.title }}</text>
             <text
               :x="node.x + 12"
               :y="node.y + 74"
               class="node-detail"
               :font-size="fitFontSize(node.detail, node.width - 24, 13)"
-            >{{ truncateText(node.detail, node.width - 24, 13) }}</text>
+            >{{ node.detail }}</text>
           </g>
         </g>
         <g class="edge-label-layer">
@@ -146,16 +147,6 @@ function fitFontSize(text: string, availableWidth: number, maxFontSize: number):
   return Math.max(scaled, 9) // minimum 9px
 }
 
-/**
- * Truncate text with ellipsis if it's too long for the available width.
- */
-function truncateText(text: string, availableWidth: number, fontSize: number): string {
-  if (!text) return ''
-  const charWidth = fontSize * 0.6
-  const maxChars = Math.floor(availableWidth / charWidth)
-  if (text.length <= maxChars) return text
-  return text.slice(0, maxChars - 1) + '…'
-}
 </script>
 
 <style scoped>
