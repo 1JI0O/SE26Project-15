@@ -235,11 +235,27 @@ function getEditorContent(): string {
   return editorView?.state.doc.toString() ?? ''
 }
 
+/**
+ * Go to a specific line (1-based), select it, and scroll into view.
+ * The selection highlight uses the existing green selection style.
+ */
+function goToLine(line: number): void {
+  if (!editorView) return
+  const doc = editorView.state.doc
+  const lineNum = Math.max(1, Math.min(line, doc.lines))
+  const lineObj = doc.line(lineNum)
+  editorView.dispatch({
+    selection: { anchor: lineObj.from, head: lineObj.to },
+    scrollIntoView: true,
+  })
+  editorView.focus()
+}
+
 onBeforeUnmount(() => {
   destroyEditor()
 })
 
-defineExpose({ getEditorContent })
+defineExpose({ getEditorContent, goToLine })
 </script>
 
 <style scoped>

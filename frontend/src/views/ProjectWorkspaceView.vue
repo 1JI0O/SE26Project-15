@@ -106,6 +106,7 @@
           />
 
           <CodeEditor
+            ref="codeEditorRef"
             :file="code.selectedFile.value"
             :content="code.editorContent.value"
             :is-dirty="code.isEditorDirty.value"
@@ -198,7 +199,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 // Composables
@@ -261,6 +262,9 @@ const selectedTraceRow = ref<TraceRowView | null>(null)
 
 // Paper reader ref for block scrolling
 const paperReaderRef = ref<InstanceType<typeof PaperReader> | null>(null)
+
+// Code editor ref for line jumping
+const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null)
 
 // File input refs
 const paperInputRef = ref<HTMLInputElement | null>(null)
@@ -338,11 +342,20 @@ async function onCodeSelected(event: Event): Promise<void> {
 // Tensor flow handlers
 function onTensorNodeClick(node: TensorFlowNode): void {
   tensorFlow.selectNode(node)
-  void code.openCodeFile(node.sourcePath)
+  void jumpToCode(node.sourcePath, node.lineStart)
 }
 
 function onTensorJumpToCode(node: TensorFlowNode): void {
-  void code.openCodeFile(node.sourcePath)
+  void jumpToCode(node.sourcePath, node.lineStart)
+}
+
+async function jumpToCode(path: string, line: number): Promise<void> {
+  await code.openCodeFile(path)
+  // Wait for editor to mount/update, then go to line
+  await nextTick()
+  setTimeout(() => {
+    codeEditorRef.value?.goToLine(line)
+  }, 100)
 }
 
 // Trace evidence handlers
