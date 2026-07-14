@@ -89,4 +89,4 @@ Agent 写工具采用两阶段协议：第一次返回 `confirmation_id`、工�
 
 ## 6. 开发与合并约束
 
-分支使用 `codex/iter2-trace-agent`。数据库变化单独提交并附迁移说明；LLM provider、业务编排和 Agent 工具分开提交。不得以真实付费 API 作为默认测试依赖，测试统一使用 fake provider。该分支在论文与代码的最小契约稳定后联调，合并时由秦浩翔最后注册 Agent router。
+分支使用 `iter2-trace-agent`。数据库变化单独提交并附迁移说明；LLM provider、业务编排和 Agent 工具分开提交。不得以真实付费 API 作为默认测试依赖，测试统一使用 fake provider。该分支在论文与代码的最小契约稳定后联调，合并时由秦浩翔最后注册 Agent router。
