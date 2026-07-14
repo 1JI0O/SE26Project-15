@@ -29,9 +29,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": [
-      "binaries/tracelab-backend"
-    ],
+    "resources": {
+      "resources/backend-runtime/": "backend-runtime/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,7 +41,8 @@
     ],
     "macOS": {
       "minimumSystemVersion": "10.15",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "hardenedRuntime": true
     }
   }
 }

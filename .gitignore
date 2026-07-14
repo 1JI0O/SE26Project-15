@@ -16,6 +16,7 @@ output/
 backend/.desktop-build/
 backend/.desktop-dist/
 frontend/src-tauri/binaries/
+frontend/src-tauri/resources/backend-runtime/
 dist/
 node_modules/
 coverage/

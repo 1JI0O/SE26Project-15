@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, copyFileSync, mkdirSync, rmSync } from 'node:fs'
+import { chmodSync, cpSync, mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -8,24 +8,14 @@ const repositoryRoot = path.resolve(frontendRoot, '..')
 const backendRoot = path.join(repositoryRoot, 'backend')
 const buildRoot = path.join(backendRoot, '.desktop-build')
 const distRoot = path.join(backendRoot, '.desktop-dist')
-const binariesRoot = path.join(frontendRoot, 'src-tauri', 'binaries')
+const runtimeRoot = path.join(frontendRoot, 'src-tauri', 'resources', 'backend-runtime')
 const executableSuffix = process.platform === 'win32' ? '.exe' : ''
-
-function commandOutput(command, args) {
-  return execFileSync(command, args, { encoding: 'utf8' }).trim()
-}
-
-let targetTriple
-try {
-  targetTriple = commandOutput('rustc', ['--print', 'host-tuple'])
-} catch {
-  throw new Error('Rust toolchain is required. Install rustup before building the desktop app.')
-}
 
 rmSync(buildRoot, { recursive: true, force: true })
 rmSync(distRoot, { recursive: true, force: true })
+rmSync(runtimeRoot, { recursive: true, force: true })
 mkdirSync(buildRoot, { recursive: true })
-mkdirSync(binariesRoot, { recursive: true })
+mkdirSync(path.dirname(runtimeRoot), { recursive: true })
 
 const addDataSeparator = process.platform === 'win32' ? ';' : ':'
 const migrations = path.join(backendRoot, 'app', 'db', 'migrations')
@@ -38,7 +28,7 @@ const pyinstallerArgs = [
   'pyinstaller',
   '--clean',
   '--noconfirm',
-  '--onefile',
+  '--onedir',
   '--name',
   'tracelab-backend',
   '--paths',
@@ -63,12 +53,9 @@ execFileSync('uv', pyinstallerArgs, {
   stdio: 'inherit',
 })
 
-const builtBinary = path.join(distRoot, `tracelab-backend${executableSuffix}`)
-const sidecarBinary = path.join(
-  binariesRoot,
-  `tracelab-backend-${targetTriple}${executableSuffix}`,
-)
-copyFileSync(builtBinary, sidecarBinary)
-if (process.platform !== 'win32') chmodSync(sidecarBinary, 0o755)
+const builtRuntime = path.join(distRoot, 'tracelab-backend')
+cpSync(builtRuntime, runtimeRoot, { recursive: true })
+const runtimeExecutable = path.join(runtimeRoot, `tracelab-backend${executableSuffix}`)
+if (process.platform !== 'win32') chmodSync(runtimeExecutable, 0o755)
 
-console.log(`Prepared Tauri sidecar: ${sidecarBinary}`)
+console.log(`Prepared Tauri backend runtime: ${runtimeRoot}`)

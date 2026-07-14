@@ -19,4 +19,4 @@ uv run python -m pytest -q
 
 OpenAPI：`http://127.0.0.1:8000/docs`。完整配置和前后端启动流程见仓库根目录 [README](../README.md)，接口总览见 [docs/api-contract.md](../docs/api-contract.md)。
 
-桌面构建会通过 `app.desktop` 将后端打包为 PyInstaller sidecar，并把数据库、上传文件和任务状态写入 Tauri 应用数据目录。日常后端开发仍使用上面的 Uvicorn 命令。
+桌面构建会通过 `app.desktop` 将后端打包为 PyInstaller 展开式运行目录，并作为 Tauri 资源随 App 分发；数据库、上传文件和任务状态写入 Tauri 应用数据目录。日常后端开发仍使用上面的 Uvicorn 命令。

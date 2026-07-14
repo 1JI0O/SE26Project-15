@@ -94,7 +94,7 @@ pnpm dev
 
 ## 启动桌面版
 
-开发模式会先把 FastAPI 构建为本机 sidecar，再由 Tauri 自动启动前端和后端：
+开发模式会先把 FastAPI 构建为本机后端运行目录，再由 Tauri 自动启动前端和后端：
 
 ```bash
 cd frontend
@@ -123,7 +123,7 @@ frontend/src-tauri/target/release/bundle/macos/TraceLab.app
 frontend/src-tauri/target/release/bundle/dmg/TraceLab_0.1.0_aarch64.dmg
 ```
 
-应用内已包含 FastAPI 后端和 Python 运行环境，启动和退出由 Tauri 自动管理。桌面数据保存在 `~/Library/Application Support/com.se26project.tracelab/`。当前产物面向 Apple Silicon；为 Intel Mac、Windows 或 Linux 分发时，应在对应目标平台重新构建。对外分发 macOS 安装包还应配置 Developer ID 签名与公证。
+应用内已包含 FastAPI 后端和展开后的 Python 运行目录，启动和退出由 Tauri 自动管理，不会在每次启动时重复解压。桌面数据保存在 `~/Library/Application Support/com.se26project.tracelab/`。当前本地构建使用 ad-hoc 签名并启用 Hardened Runtime，产物面向 Apple Silicon。为 Intel Mac、Windows 或 Linux 分发时，应在对应目标平台重新构建。对外分发 macOS 安装包时，应改用 Developer ID 并完成公证。
 
 MinerU 官方 API 可直接在设置窗口配置。选择“本地 MinerU”时，模型推理服务仍是可选外部依赖，需要在设置的地址运行 `mineru-api`；这不影响项目管理、代码分析和其他本地功能。
 
