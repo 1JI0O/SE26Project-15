@@ -7,11 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import settings
 from app.db.session import init_db
+from app.services.agent.service import register_analysis_enqueuer
+from app.services.analysis_jobs import run_repository_analysis
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     init_db()
+    register_analysis_enqueuer(run_repository_analysis)
     yield
 
 
@@ -32,4 +35,3 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
-

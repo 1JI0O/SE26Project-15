@@ -12,6 +12,10 @@ class PaperDocumentRead(BaseModel):
     abstract: str
     sections: list[dict[str, Any]]
     paragraphs: list[dict[str, Any]]
+    parser: str
+    parser_version: str
+    parse_status: str
+    content_hash: str
     created_at: datetime
 
 

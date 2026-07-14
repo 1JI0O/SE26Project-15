@@ -64,6 +64,17 @@ def build_paper_pages(document: PaperDocument | None) -> list[dict[str, Any]]:
     if document is None:
         return []
 
+    if document.pages_json:
+        return [
+            {
+                "page_number": int(page.get("page_number", index)),
+                "title": str(page.get("title", f"Page {index}"))[:200],
+                "body": [str(item) for item in page.get("body", [])],
+                "anchors": list(page.get("anchors", [])),
+            }
+            for index, page in enumerate(document.pages_json, start=1)
+        ]
+
     if document.storage_path:
         try:
             parsed = parse_pdf(document.storage_path)
@@ -353,11 +364,23 @@ def save_code_file(
         file_path,
         content,
     )
+    from app.services.tracing.lifecycle import record_artifact_revision_change
+
+    stale_count = record_artifact_revision_change(
+        session,
+        project_id,
+        "code",
+        code.id or 0,
+        "code_file_saved",
+    )
+    session.commit()
     return {
         "project_id": str(project_id),
         "path": file_path,
         "status": "accepted",
         "message": f"Saved edited content with {len(content)} characters.",
+        "repository_revision": code.revision,
+        "stale_trace_count": stale_count,
     }
 
 

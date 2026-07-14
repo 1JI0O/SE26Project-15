@@ -138,3 +138,33 @@ class AgentToolRequest(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     decided_at: datetime | None = Field(default=None)
     executed_at: datetime | None = Field(default=None)
+
+
+class IntegrationConfig(SQLModel, table=True):
+    __tablename__ = "integration_config"
+
+    id: int = Field(default=1, primary_key=True)
+    agent_enabled: bool = Field(default=False)
+    agent_base_url: str = Field(default="", max_length=500)
+    agent_api_key: str = Field(default="", sa_column=Column(Text, nullable=False), repr=False)
+    agent_model: str = Field(default="", max_length=160)
+    agent_thinking_mode: str = Field(default="", max_length=16)
+    agent_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    mineru_provider: str = Field(default="local", max_length=16)
+    mineru_local_url: str = Field(default="http://127.0.0.1:8001", max_length=500)
+    mineru_backend: str = Field(default="pipeline", max_length=64)
+    mineru_language: str = Field(default="ch", max_length=32)
+    mineru_parse_method: str = Field(default="auto", max_length=32)
+    mineru_official_api_url: str = Field(default="https://mineru.net/api/v4", max_length=500)
+    mineru_official_api_token: str = Field(
+        default="", sa_column=Column(Text, nullable=False), repr=False
+    )
+    mineru_official_api_model: str = Field(default="vlm", max_length=64)
+    mineru_ocr: bool = Field(default=True)
+    mineru_formula_enable: bool = Field(default=True)
+    mineru_table_enable: bool = Field(default=True)
+    mineru_request_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    mineru_request_retries: int = Field(default=3, ge=1, le=10)
+    mineru_task_timeout_seconds: float = Field(default=600.0, gt=0, le=7200)
+    mineru_poll_interval_seconds: float = Field(default=2.0, gt=0, le=30)
+    updated_at: datetime = Field(default_factory=utc_now)

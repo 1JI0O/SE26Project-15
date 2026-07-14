@@ -8,3 +8,18 @@ export interface WorkspaceImportStep {
   tag_type: TagType
   action?: string
 }
+
+export interface WorkspaceConflictItem {
+  level: string
+  type: TagType
+  title: string
+  description: string
+  affected_files: string[]
+  status: string
+}
+
+export interface WorkspaceReportCard {
+  value: string
+  title: string
+  description: string
+}

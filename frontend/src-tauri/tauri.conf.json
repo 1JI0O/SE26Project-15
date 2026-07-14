@@ -2,12 +2,12 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "TraceLab",
   "version": "0.1.0",
-  "identifier": "com.tracelab.app",
+  "identifier": "com.se26project.tracelab",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeDevCommand": "pnpm build:sidecar && pnpm dev",
+    "beforeBuildCommand": "pnpm build:desktop"
   },
   "app": {
     "windows": [
@@ -18,7 +18,8 @@
         "minWidth": 1024,
         "minHeight": 680,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {
@@ -28,6 +29,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/tracelab-backend"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -36,7 +40,8 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": "-"
     }
   }
 }

@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.models.entities import CodeRepository, PaperDocument, TraceLink, utc_now
 from app.schemas.traces import TraceLinkRead
+from app.services.integration_settings import get_effective_integration_config
 from app.services.tracing.context import build_contexts
 from app.services.tracing.lifecycle import mark_noncurrent_traces_stale
 from app.services.tracing.provider import (
@@ -92,18 +93,19 @@ def _valid_llm_evidence(explanation: LLMExplanation, candidate: StaticCandidate)
     return sides == {"paper", "code"}
 
 
-def _provider_from_settings() -> tuple[TraceExplanationProvider | None, str | None]:
-    if not settings.tracelab_llm_enabled:
+def _provider_from_settings(session: Session) -> tuple[TraceExplanationProvider | None, str | None]:
+    config, _ = get_effective_integration_config(session)
+    if not config.agent_enabled:
         return None, "llm_disabled"
-    key = settings.tracelab_llm_api_key.get_secret_value()
-    if not settings.tracelab_llm_base_url or not key or not settings.tracelab_llm_model:
+    if not config.agent_base_url or not config.agent_api_key or not config.agent_model:
         return None, "llm_not_configured"
     return (
         CompatibleRESTProvider(
-            settings.tracelab_llm_base_url,
-            key,
-            settings.tracelab_llm_model,
-            settings.tracelab_llm_timeout_seconds,
+            config.agent_base_url,
+            config.agent_api_key,
+            config.agent_model,
+            config.agent_timeout_seconds,
+            config.agent_thinking_mode,
         ),
         None,
     )
@@ -193,7 +195,7 @@ def suggest_and_persist(
     degraded_reason: str | None = None
     actual_provider = provider
     if use_llm and actual_provider is None:
-        actual_provider, degraded_reason = _provider_from_settings()
+        actual_provider, degraded_reason = _provider_from_settings(session)
     explanations: dict[str, LLMExplanation] = {}
     if use_llm and actual_provider is not None and candidates:
         explanations, validation_reason = _enhance_candidates(candidates, actual_provider)

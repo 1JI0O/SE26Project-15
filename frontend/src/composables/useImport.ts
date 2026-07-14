@@ -31,7 +31,7 @@ export function useImport(hasPaper: () => boolean, hasCode: () => boolean) {
     {
       index: '03',
       title: '生成代码追踪视图',
-      description: '基于代码静态分析输出追溯矩阵；张量流与魔改冲突仍为演示占位。',
+      description: '基于静态分析生成张量流和追溯候选；魔改冲突保留接口演示。',
       status: hasPaper() && hasCode() ? '追溯候选已生成' : '等待导入',
       tagType: hasPaper() && hasCode() ? 'success' : 'warning',
       action: '',

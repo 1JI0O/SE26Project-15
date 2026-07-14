@@ -2,7 +2,8 @@ import { http } from '@/api/http'
 import type {
   TraceLink,
   TraceLinkCreate,
-  TraceLinkSuggestion,
+  TraceStatus,
+  TraceSuggestionResponse,
   WorkspaceTraceRow,
 } from '@/types/tracing'
 
@@ -19,9 +20,25 @@ export async function createTraceLink(
   return data
 }
 
-export async function suggestTraceLinks(projectId: number): Promise<TraceLinkSuggestion[]> {
-  const { data } = await http.post<TraceLinkSuggestion[]>(
+export async function suggestTraceLinks(
+  projectId: number,
+  useLlm = true,
+): Promise<TraceSuggestionResponse> {
+  const { data } = await http.post<TraceSuggestionResponse>(
     `/projects/${projectId}/trace-links/suggest`,
+    { use_llm: useLlm },
+  )
+  return data
+}
+
+export async function updateTraceStatus(
+  projectId: number,
+  traceId: string,
+  status: Extract<TraceStatus, 'accepted' | 'rejected'>,
+): Promise<TraceLink> {
+  const { data } = await http.patch<TraceLink>(
+    `/projects/${projectId}/trace-links/${traceId}/status`,
+    { status },
   )
   return data
 }

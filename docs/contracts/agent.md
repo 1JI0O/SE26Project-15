@@ -1,7 +1,7 @@
 # Agent API contract
 
-The Agent router is exported as `app.api.routes.agent:router`. The architecture integration owner
-must register it in the shared API router; the trace branch does not modify that entrypoint.
+The Agent router is registered in the shared `/api/v1` router. Its write-tool reanalysis callback is
+registered during FastAPI startup and reuses the repository analyzer.
 
 All endpoints use `/api/v1/projects/{project_id}/agent`.
 
@@ -86,10 +86,11 @@ the repository revision and marks affected traces stale.
 
 ## Reanalysis integration
 
-The code-analysis owner registers an idempotent callback through
-`register_analysis_enqueuer(enqueuer)`. Its inputs are project ID, relative targets, and the
-confirmation ID used as the idempotency key. If the callback is not registered, accepted reanalysis
-requests fail safely with `analysis_service_not_integrated`; the Agent never fabricates a job result.
+FastAPI startup registers an idempotent callback through `register_analysis_enqueuer(enqueuer)`.
+Its inputs are project ID, relative targets, and the confirmation ID used as the idempotency key.
+The current prototype executes the repository analyzer synchronously and returns a deterministic
+job ID plus the new summary. If startup integration is missing, the request still fails safely with
+`analysis_service_not_integrated`; the Agent never fabricates a result.
 
 ## Configuration and logging
 

@@ -27,7 +27,7 @@
     <el-empty v-else description="点击图中节点查看代码定位" />
 
     <p class="api-note">
-      接口仅返回节点、边、代码定位和张量形状占位数据；后续可由 agent 或静态分析工具生成同结构结果。
+      当前接口由静态分析生成节点、边、代码定位和可推断的张量形状；后续 Agent 继续复用同一结构。
     </p>
   </article>
 </template>

@@ -28,9 +28,7 @@ def test_paper_job_api_returns_status_and_persists_result(tmp_path: Path) -> Non
             deadline = time.monotonic() + 2
             status_response = None
             while time.monotonic() < deadline:
-                status_response = client.get(
-                    f"/api/v1/projects/{project_id}/paper-jobs/{job_id}"
-                )
+                status_response = client.get(f"/api/v1/projects/{project_id}/paper-jobs/{job_id}")
                 if status_response.json()["status"] in {"succeeded", "failed"}:
                     break
                 time.sleep(0.01)
@@ -39,12 +37,16 @@ def test_paper_job_api_returns_status_and_persists_result(tmp_path: Path) -> Non
             assert status_response.json()["status"] == "succeeded"
             assert status_response.json()["document_id"] is not None
 
-            result = client.get(
-                f"/api/v1/projects/{project_id}/paper-jobs/{job_id}/result"
-            )
+            pages = client.get(f"/api/v1/projects/{project_id}/workspace/paper-pages")
+            assert pages.status_code == 200
+            assert pages.json()[0]["anchors"][0]["id"] == "p1-b1"
+
+            result = client.get(f"/api/v1/projects/{project_id}/paper-jobs/{job_id}/result")
             assert result.status_code == 200
             assert result.json()["parser"] == "stub"
             assert result.json()["pages"][0]["blocks"][0]["bbox"]
+            assert result.json()["document"]["parser"] == "stub"
+            assert result.json()["document"]["content_hash"]
     finally:
         app.dependency_overrides.pop(get_paper_parsing_service, None)
 

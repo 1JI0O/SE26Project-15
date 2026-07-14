@@ -3,7 +3,13 @@ from sqlmodel import Session, select
 
 from app.db.session import get_session
 from app.models.entities import Project
-from app.schemas.projects import ProjectCreate, ProjectRead
+from app.schemas.projects import (
+    ProjectBatchDeleteRead,
+    ProjectBatchDeleteRequest,
+    ProjectCreate,
+    ProjectRead,
+)
+from app.services.project_service import delete_projects
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -30,6 +36,21 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     return project
 
 
+@router.post("/batch-delete", response_model=ProjectBatchDeleteRead)
+def batch_delete_projects(
+    payload: ProjectBatchDeleteRequest,
+    session: Session = Depends(get_session),
+) -> ProjectBatchDeleteRead:
+    deleted_ids, missing_ids = delete_projects(session, payload.project_ids)
+    return ProjectBatchDeleteRead(deleted_ids=deleted_ids, missing_ids=missing_ids)
+
+
 @router.get("/{project_id}", response_model=ProjectRead)
 def read_project(project_id: int, session: Session = Depends(get_session)) -> Project:
     return get_project_or_404(project_id, session)
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(project_id: int, session: Session = Depends(get_session)) -> None:
+    get_project_or_404(project_id, session)
+    delete_projects(session, [project_id])

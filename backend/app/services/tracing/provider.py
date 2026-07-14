@@ -40,11 +40,19 @@ class TraceExplanationProvider(Protocol):
 class CompatibleRESTProvider:
     provider_name = "openai-compatible"
 
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: float,
+        thinking_mode: str = "",
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model_name = model
         self.timeout = timeout
+        self.thinking_mode = thinking_mode
 
     def explain(self, contexts: list[dict[str, Any]]) -> list[LLMExplanation]:
         try:
@@ -60,8 +68,16 @@ class CompatibleRESTProvider:
                     "role": "system",
                     "content": (
                         "You validate preselected paper-code trace candidates. "
-                        "Return one JSON object "
-                        "with an items array. Use only supplied refs and verbatim evidence quotes."
+                        "Return exactly one JSON object with an items array and no other keys. "
+                        "Each item must contain candidate_id, relation_type, confidence, "
+                        "rationale, evidence, and uncertainty. relation_type must be implements, "
+                        "configures, tests, or mentions. uncertainty must be an object with level "
+                        "low/medium/high and a reasons string array. evidence must be an array "
+                        "with at least one paper item and one code item; every evidence item must "
+                        "contain "
+                        "side, ref, and quote. Copy candidate_id and refs exactly from the input, "
+                        "and copy each quote verbatim as a substring of the supplied text. Return "
+                        "one item for each supplied candidate. JSON only."
                     ),
                 },
                 {
@@ -70,6 +86,8 @@ class CompatibleRESTProvider:
                 },
             ],
         }
+        if self.thinking_mode:
+            payload["thinking"] = {"type": self.thinking_mode}
         try:
             response = httpx.post(
                 f"{self.base_url}/chat/completions",

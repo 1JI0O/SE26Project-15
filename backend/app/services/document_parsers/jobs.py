@@ -182,3 +182,10 @@ def get_paper_parsing_service() -> PaperParsingService:
     if _paper_parsing_service is None:
         _paper_parsing_service = PaperParsingService()
     return _paper_parsing_service
+
+
+def reset_paper_parsing_service() -> None:
+    """Apply new parser settings to future jobs without interrupting active jobs."""
+
+    global _paper_parsing_service
+    _paper_parsing_service = None

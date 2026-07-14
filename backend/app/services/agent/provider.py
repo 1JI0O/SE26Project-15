@@ -37,11 +37,19 @@ class AgentProvider(Protocol):
 class CompatibleAgentProvider:
     provider_name = "openai-compatible"
 
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: float,
+        thinking_mode: str = "",
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model_name = model
         self.timeout = timeout
+        self.thinking_mode = thinking_mode
 
     def next_step(
         self,
@@ -62,8 +70,17 @@ class CompatibleAgentProvider:
                     "role": "system",
                     "content": (
                         "You are a restricted TraceLab agent. "
-                        "Return JSON with action final or tool. Only use the listed tools. "
-                        "Write tools are proposals and require confirmation."
+                        "Return exactly one JSON object with action, answer, citations, "
+                        "tool_name and arguments. Use an empty object for arguments when action "
+                        "is final. action must be exactly final or tool; never put a tool name "
+                        "in action. A rerun example is "
+                        '{"action":"tool","answer":"Awaiting confirmation",'
+                        '"citations":[],"tool_name":"rerun_analysis",'
+                        '"arguments":{"targets":["models/net.py"]}}. '
+                        "save_code_file arguments are path, content and optional base_sha256; "
+                        "update_trace_status arguments are trace_id and accepted/rejected status. "
+                        "Only use the listed tools. Write tools are proposals and require "
+                        "confirmation."
                     ),
                 },
                 {
@@ -91,6 +108,8 @@ class CompatibleAgentProvider:
                 },
             ],
         }
+        if self.thinking_mode:
+            payload["thinking"] = {"type": self.thinking_mode}
         try:
             response = httpx.post(
                 f"{self.base_url}/chat/completions",
@@ -110,6 +129,11 @@ class CompatibleAgentProvider:
             raise AgentProviderFailure("llm_request_rejected")
         try:
             content = response.json()["choices"][0]["message"]["content"]
-            return AgentProviderStep.model_validate(json.loads(content))
+            parsed = json.loads(content)
+            if parsed.get("arguments") is None:
+                parsed["arguments"] = {}
+            if parsed.get("citations") is None:
+                parsed["citations"] = []
+            return AgentProviderStep.model_validate(parsed)
         except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValidationError) as exc:
             raise AgentProviderFailure("llm_invalid_json") from exc

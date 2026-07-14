@@ -45,7 +45,9 @@
       <div class="toolbar-actions">
         <el-tag type="success" effect="plain">{{ trace.traceRows.value.length }} 条追溯候选</el-tag>
         <el-tag type="info" effect="plain">论文只读 / 代码可编辑</el-tag>
-        <el-button type="primary">导出审阅报告</el-button>
+        <el-tooltip content="报告导出接口已预留，当前迭代不生成文件">
+          <span><el-button type="primary" disabled>导出报告（接口预留）</el-button></span>
+        </el-tooltip>
       </div>
     </section>
 
@@ -60,6 +62,8 @@
         :has-paper="paper.hasPaper.value"
         :loading="paper.loading.value"
         :error="paper.error.value"
+        :parser="paper.parserName.value"
+        :parse-status="paper.parseStatus.value"
         @update:active-page="(p) => (paper.activePaperPage.value = p)"
         @retry="paper.loadPaperPages"
       />
@@ -72,6 +76,30 @@
           </div>
           <el-tag type="success" effect="plain">{{ code.codeFilename.value || '未上传代码' }}</el-tag>
         </header>
+
+        <div class="repository-actions">
+          <el-input
+            v-model="githubUrl"
+            placeholder="https://github.com/owner/repository"
+            clearable
+            @keyup.enter="onGitHubImport"
+          />
+          <el-button
+            :loading="code.importingGithub.value"
+            :disabled="!githubUrl.trim()"
+            @click="onGitHubImport"
+          >
+            从 GitHub 导入
+          </el-button>
+          <div v-if="code.analysisSummary.value" class="analysis-summary">
+            <el-tag effect="plain">{{ code.analysisSummary.value.file_count }} 文件</el-tag>
+            <el-tag effect="plain">{{ code.analysisSummary.value.symbol_count }} 符号</el-tag>
+            <el-tag effect="plain">{{ code.analysisSummary.value.call_count }} 调用</el-tag>
+            <el-tag type="info" effect="plain">
+              忽略 {{ code.analysisSummary.value.ignored_count }}
+            </el-tag>
+          </div>
+        </div>
 
         <div class="code-workbench">
           <RepositoryTree
@@ -95,7 +123,7 @@
             :is-dirty="code.isEditorDirty.value"
             :saving="code.saving.value"
             @change="code.handleEditorInput"
-            @save="code.saveEditorBuffer"
+            @save="onSaveCode"
           />
         </div>
       </article>
@@ -112,17 +140,22 @@
         <TraceMatrix
           :rows="trace.traceRows.value"
           :loading="trace.loading.value"
+          :generating="trace.generating.value"
           :error="trace.error.value"
+          :mode="trace.mode.value"
+          :degraded="trace.degraded.value"
+          @suggest="trace.generateSuggestions(true)"
+          @review="trace.reviewTrace"
         />
         <article class="assistant-panel">
-          <h2>AI 审阅建议</h2>
-          <p>
-            BasicBlock.forward 与论文残差公式匹配度较高；建议人工确认 projection shortcut
-            在 stride=2 时是否与论文描述一致。
-          </p>
+          <h2>候选生成状态</h2>
+          <p v-if="trace.mode.value">当前模式：{{ trace.mode.value }}</p>
+          <p v-else>上传论文和代码后，可运行静态分析与可选 LLM 增强生成候选。</p>
+          <p v-if="trace.degradedReason.value">降级原因：{{ trace.degradedReason.value }}</p>
           <div class="suggestion-actions">
-            <el-button type="primary">接受建议</el-button>
-            <el-button>标记待确认</el-button>
+            <el-button type="primary" :loading="trace.generating.value" @click="trace.generateSuggestions(true)">
+              生成追溯候选
+            </el-button>
           </div>
         </article>
       </div>
@@ -148,24 +181,34 @@
       </div>
 
       <!-- Conflict tab -->
-      <ConflictPanel v-else-if="activeInsight === 'conflict'" :items="conflictItems" />
+      <ConflictPanel v-else-if="activeInsight === 'conflict'" :items="insights.conflictItems.value" />
 
       <!-- Report tab -->
-      <ReportPanel v-else :cards="reportCards" />
+      <ReportPanel v-else-if="activeInsight === 'report'" :cards="insights.reportCards.value" />
+
+      <AgentPanel
+        v-else
+        :project-id="workspace.projectId.value"
+        :paper-ref="trace.traceRows.value[0]?.paper"
+        :code-ref="code.selectedFile.value?.symbol || code.selectedPath.value"
+        :graph-node-id="tensorFlow.selectedNode.value?.id"
+        @executed="reloadAfterAgentAction"
+      />
     </InsightDock>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 // Composables
 import { useWorkspace } from '@/composables/useWorkspace'
 import { usePaper } from '@/composables/usePaper'
 import { useCode, isEditableFile, fileIcon } from '@/composables/useCode'
-import { useTensorFlow, conflictItems, reportCards } from '@/composables/useTensorFlow'
+import { useTensorFlow } from '@/composables/useTensorFlow'
 import { useTrace } from '@/composables/useTrace'
+import { useInsights } from '@/composables/useInsights'
 import { useImport } from '@/composables/useImport'
 import { useDesktop } from '@/composables/useDesktop'
 
@@ -180,14 +223,16 @@ import InsightDock from '@/features/tracing/InsightDock.vue'
 import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
 import ConflictPanel from '@/features/tracing/ConflictPanel.vue'
 import ReportPanel from '@/features/tracing/ReportPanel.vue'
+import AgentPanel from '@/features/agent/AgentPanel.vue'
 import type { TensorFlowNode } from '@/composables/useTensorFlow'
 
 // Initialize composables
 const workspace = useWorkspace()
 const paper = usePaper(() => workspace.projectId.value)
 const code = useCode(() => workspace.projectId.value)
-const tensorFlow = useTensorFlow()
+const tensorFlow = useTensorFlow(() => workspace.projectId.value)
 const trace = useTrace(() => workspace.projectId.value)
+const insights = useInsights(() => workspace.projectId.value)
 const desktop = useDesktop()
 const { importSteps } = useImport(
   () => paper.hasPaper.value,
@@ -197,6 +242,7 @@ const { importSteps } = useImport(
 // Local state
 const activeMode = ref('审阅模式')
 const activeInsight = ref('trace')
+const githubUrl = ref('')
 const reviewModes = ['审阅模式', '标注模式', '冲突模式']
 
 const insightTabs = [
@@ -204,6 +250,7 @@ const insightTabs = [
   { key: 'flow', label: '张量流流程图' },
   { key: 'conflict', label: '魔改冲突分析' },
   { key: 'report', label: '报告与质量门禁' },
+  { key: 'agent', label: '论文与代码 Agent' },
 ]
 
 // File input refs
@@ -220,6 +267,8 @@ onMounted(async () => {
       paper.loadPaperPages(),
       code.loadCodeTree(),
       trace.loadTraceRows(),
+      tensorFlow.loadTensorFlow(),
+      insights.loadInsights(),
     ])
   } catch {
     ElMessage.error('加载项目工作台失败')
@@ -235,7 +284,7 @@ async function handleImportAction(stepIndex: string): Promise<void> {
       const file = await desktop.pickPdfFile()
       if (file) {
         const success = await paper.handleUpload(file)
-        if (success) await trace.loadTraceRows()
+        if (success) await reloadDerivedViews()
       }
     } else {
       paperInputRef.value?.click()
@@ -247,7 +296,7 @@ async function handleImportAction(stepIndex: string): Promise<void> {
       const file = await desktop.pickZipFile()
       if (file) {
         const success = await code.handleUpload(file)
-        if (success) await trace.loadTraceRows()
+        if (success) await reloadDerivedViews()
       }
     } else {
       codeInputRef.value?.click()
@@ -262,7 +311,7 @@ async function onPaperSelected(event: Event): Promise<void> {
   if (!file) return
   const success = await paper.handleUpload(file)
   if (success) {
-    await trace.loadTraceRows()
+    await reloadDerivedViews()
   }
 }
 
@@ -273,7 +322,7 @@ async function onCodeSelected(event: Event): Promise<void> {
   if (!file) return
   const success = await code.handleUpload(file)
   if (success) {
-    await trace.loadTraceRows()
+    await reloadDerivedViews()
   }
 }
 
@@ -286,6 +335,45 @@ function onTensorNodeClick(node: TensorFlowNode): void {
 function onTensorJumpToCode(node: TensorFlowNode): void {
   void code.openCodeFile(node.sourcePath)
 }
+
+async function onGitHubImport(): Promise<void> {
+  const url = githubUrl.value.trim()
+  if (!url) return
+  const success = await code.handleGitHubImport(url)
+  if (success) {
+    githubUrl.value = ''
+    await reloadDerivedViews()
+  }
+}
+
+async function onSaveCode(): Promise<void> {
+  await code.saveEditorBuffer()
+  await Promise.allSettled([
+    tensorFlow.loadTensorFlow(),
+    trace.loadTraceRows(),
+    insights.loadInsights(),
+  ])
+}
+
+async function reloadDerivedViews(): Promise<void> {
+  await Promise.allSettled([
+    trace.loadTraceRows(),
+    tensorFlow.loadTensorFlow(),
+    insights.loadInsights(),
+  ])
+}
+
+async function reloadAfterAgentAction(): Promise<void> {
+  await Promise.allSettled([
+    code.loadCodeTree(),
+    reloadDerivedViews(),
+  ])
+}
+
+watch(activeInsight, (tab) => {
+  if (tab === 'flow') void tensorFlow.loadTensorFlow()
+  if (tab === 'conflict' || tab === 'report') void insights.loadInsights()
+})
 </script>
 
 <style scoped>
@@ -426,6 +514,20 @@ function onTensorJumpToCode(node: TensorFlowNode): void {
   flex: 1;
 }
 
+.repository-actions {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.analysis-summary {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .dock-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.7fr);
@@ -488,6 +590,10 @@ function onTensorJumpToCode(node: TensorFlowNode): void {
 
   .analysis-canvas,
   .code-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .repository-actions {
     grid-template-columns: 1fr;
   }
 
