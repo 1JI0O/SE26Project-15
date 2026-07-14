@@ -243,10 +243,9 @@ export function useCode(projectId: () => number) {
     void openCodeFile(node.path)
   }
 
-  function handleEditorInput(event: Event): void {
-    const nextContent = (event.target as HTMLTextAreaElement).value
-    editorContentBuffer = nextContent
-    const nextLineCount = countLines(nextContent)
+  function handleEditorInput(content: string): void {
+    editorContentBuffer = content
+    const nextLineCount = countLines(content)
     if (nextLineCount !== editorLineCount.value) editorLineCount.value = nextLineCount
     if (!isEditorDirty.value) isEditorDirty.value = true
   }

@@ -92,10 +92,9 @@
           <CodeEditor
             :file="code.selectedFile.value"
             :content="code.editorContent.value"
-            :line-numbers="code.editableLineNumbers.value"
             :is-dirty="code.isEditorDirty.value"
             :saving="code.saving.value"
-            @input="code.handleEditorInput"
+            @change="code.handleEditorInput"
             @save="code.saveEditorBuffer"
           />
         </div>
