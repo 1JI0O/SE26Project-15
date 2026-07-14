@@ -62,6 +62,8 @@
 
 ## 代码仓库
 
+技术原型迭代的完整代码仓库、文件安全访问和张量流契约见 [`contracts/repositories.md`](contracts/repositories.md)。
+
 `POST /api/v1/projects/{project_id}/code`
 
 表单上传字段：`file`，第一迭代约定为 ZIP 包。
@@ -83,6 +85,14 @@
 `GET /api/v1/projects/{project_id}/code`
 
 返回该项目最新代码分析结果。
+
+`GET /api/v1/projects/{project_id}/code/analysis`
+
+返回稳定符号、导入、调用位置、张量语义图和仓库摘要。
+
+`POST /api/v1/projects/{project_id}/code/github`
+
+从受限的 HTTPS GitHub 仓库 URL 浅克隆并复用代码分析链路。
 
 ## 追溯关系
 

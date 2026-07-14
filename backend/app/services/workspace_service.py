@@ -5,24 +5,32 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
+from app.services.code_analysis.analyzer import analyze_code_archive
+from app.services.code_analysis.editor import FileAccessError, RepositoryFileNotFoundError
 from app.services.code_analyzer import (
     build_hierarchical_tree,
     count_filtered_files,
     is_editor_readable_file,
-    read_archive_file,
-    save_archive_file_edit,
+    read_repository_file,
+    save_repository_file,
 )
 from app.services.paper_parser import parse_pdf
+from app.services.tensor_flow.layout import layout_tensor_graph
 from app.services.trace_suggester import suggest_trace_links
 from app.services.workspace_placeholder import (
     code_file_payload,
-    tensor_flow_payload,
     workspace_payload,
 )
 
 
-def _project_edits_root(project_id: int) -> Path:
-    return Path(settings.upload_root) / f"project-{project_id}" / "code-edits"
+def _repository_edits_root(repository: CodeRepository) -> Path:
+    repository_key = repository.id or Path(repository.storage_path).stem
+    return (
+        Path(settings.upload_root)
+        / f"project-{repository.project_id}"
+        / "code-edits"
+        / str(repository_key)
+    )
 
 
 def _latest_paper(session: Session, project_id: int) -> PaperDocument | None:
@@ -166,12 +174,13 @@ def build_code_file_payload(
     if not is_editor_readable_file(file_path):
         return None
 
-    content = read_archive_file(
-        code.storage_path,
-        file_path,
-        edits_root=_project_edits_root(project_id),
-    )
-    if content is None:
+    try:
+        content = read_repository_file(
+            code.storage_path,
+            file_path,
+            edits_root=_repository_edits_root(code),
+        )
+    except RepositoryFileNotFoundError:
         return None
 
     symbol, status, status_type = _symbol_summary(code, file_path)
@@ -255,7 +264,10 @@ def build_workspace_payload(session: Session, project_id: int) -> dict[str, Any]
             file_path = str(entry.get("path", ""))
             if not file_path or entry.get("language") not in {"python", "docs", "config", "other"}:
                 continue
-            payload = build_code_file_payload(project_id, file_path, code)
+            try:
+                payload = build_code_file_payload(project_id, file_path, code)
+            except FileAccessError:
+                continue
             if payload is not None:
                 code_files.append(payload)
 
@@ -271,7 +283,7 @@ def build_workspace_payload(session: Session, project_id: int) -> dict[str, Any]
         "code_files": code_files,
         "trace_rows": trace_rows,
         "flow_nodes": placeholder["flow_nodes"],
-        "tensor_flow": tensor_flow_payload(str(project_id)),
+        "tensor_flow": build_tensor_flow_payload(code, str(project_id)),
         "conflict_items": placeholder["conflict_items"],
         "report_cards": _build_report_cards(paper, code, trace_rows),
     }
@@ -335,13 +347,45 @@ def save_code_file(
     if existing is None:
         raise FileNotFoundError(f"Code file not found: {file_path}")
 
-    save_archive_file_edit(_project_edits_root(project_id), file_path, content)
+    save_repository_file(
+        code.storage_path,
+        _repository_edits_root(code),
+        file_path,
+        content,
+    )
     return {
         "project_id": str(project_id),
         "path": file_path,
         "status": "accepted",
         "message": f"Saved edited content with {len(content)} characters.",
     }
+
+
+def build_tensor_flow_payload(
+    code: CodeRepository | None,
+    project_id: str,
+) -> dict[str, Any]:
+    if code is None:
+        return layout_tensor_graph({"nodes": [], "edges": []}, project_id)
+    analysis = analyze_code_archive(
+        code.storage_path,
+        edits_root=_repository_edits_root(code),
+    )
+    return layout_tensor_graph(analysis["tensor_graph"], project_id)
+
+
+def get_tensor_flow(session: Session, project_id: int) -> dict[str, Any]:
+    return build_tensor_flow_payload(_latest_code(session, project_id), str(project_id))
+
+
+def get_code_analysis(session: Session, project_id: int) -> dict[str, Any] | None:
+    code = _latest_code(session, project_id)
+    if code is None:
+        return None
+    return analyze_code_archive(
+        code.storage_path,
+        edits_root=_repository_edits_root(code),
+    )
 
 
 def get_trace_rows(session: Session, project_id: int) -> list[dict[str, Any]]:

@@ -5,6 +5,7 @@ description = "FastAPI backend for the paper-code bidirectional trace workbench.
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115.0",
+  "httpx>=0.27.0",
   "pydantic>=2.8.0",
   "pydantic-settings>=2.4.0",
   "python-multipart>=0.0.9",
@@ -16,7 +17,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "httpx>=0.27.0",
   "pytest>=8.3.0",
   "ruff>=0.6.0"
 ]

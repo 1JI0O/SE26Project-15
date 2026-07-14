@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     tracelab_llm_max_candidates: int = Field(default=10, ge=1, le=30)
     tracelab_llm_max_context_chars: int = Field(default=12_000, ge=1000, le=100_000)
     tracelab_agent_confirmation_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
+    github_clone_timeout_seconds: int = Field(default=60, ge=5, le=300)
     backend_cors_origins: list[str] | str = Field(
         default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
     )
