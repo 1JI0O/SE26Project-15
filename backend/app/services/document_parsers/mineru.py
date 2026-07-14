@@ -8,7 +8,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from app.services.document_parsers.base import ParseOutcome
 from app.services.document_parsers.normalizer import normalize_mineru_payload
@@ -29,7 +29,7 @@ class MinerUTimeoutError(MinerUError):
 @dataclass(frozen=True, slots=True)
 class MinerUSettings:
     base_url: str = "http://127.0.0.1:8001"
-    backend: str = "hybrid-auto-engine"
+    backend: str = "pipeline"
     language: str = "ch"
     parse_method: str = "auto"
     request_timeout_seconds: float = 20.0
@@ -88,14 +88,46 @@ class UrllibMinerUTransport:
             raise MinerUUnavailableError(f"MinerU request failed: {exc}") from exc
 
 
+class MinerUClientProtocol(Protocol):
+    cache_namespace: str
+
+    def health(self) -> dict[str, Any]: ...
+
+    def submit(self, path: Path) -> str: ...
+
+    def wait(self, task_id: str) -> dict[str, Any]: ...
+
+    def result(self, task_id: str) -> HttpResponse: ...
+
+
+class MinerUTransportProtocol(Protocol):
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float,
+    ) -> HttpResponse: ...
+
+
 class MinerUClient:
     def __init__(
         self,
         settings: MinerUSettings | None = None,
-        transport: UrllibMinerUTransport | None = None,
+        transport: MinerUTransportProtocol | None = None,
     ) -> None:
         self.settings = settings or MinerUSettings.from_env()
         self.transport = transport or UrllibMinerUTransport()
+        self.cache_namespace = ":".join(
+            (
+                "local",
+                self.settings.backend,
+                self.settings.parse_method,
+                self.settings.language,
+            )
+        )
 
     def health(self) -> dict[str, Any]:
         response = self.transport.request(
@@ -200,12 +232,9 @@ class MinerUClient:
 class MinerUParser:
     name = "mineru"
 
-    def __init__(self, client: MinerUClient | None = None) -> None:
+    def __init__(self, client: MinerUClientProtocol | None = None) -> None:
         self.client = client or MinerUClient()
-        settings = self.client.settings
-        self.cache_namespace = ":".join(
-            (self.name, settings.backend, settings.parse_method, settings.language)
-        )
+        self.cache_namespace = f"{self.name}:{self.client.cache_namespace}"
 
     def parse(self, path: Path) -> ParseOutcome:
         if not path.exists() or path.stat().st_size == 0:

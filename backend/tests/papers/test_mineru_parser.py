@@ -92,3 +92,7 @@ def test_mineru_client_times_out_pending_task() -> None:
         assert "exceeded" in str(exc)
     else:
         raise AssertionError("Expected a pending MinerU task to time out")
+
+
+def test_local_mineru_defaults_to_supported_pipeline_backend() -> None:
+    assert MinerUSettings().backend == "pipeline"
