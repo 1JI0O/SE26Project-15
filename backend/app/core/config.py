@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,6 +9,14 @@ class Settings(BaseSettings):
     app_env: str = "local"
     database_url: str = "sqlite:///./data/workbench.db"
     upload_root: str = "./uploads"
+    tracelab_llm_enabled: bool = False
+    tracelab_llm_base_url: str = ""
+    tracelab_llm_api_key: SecretStr = SecretStr("")
+    tracelab_llm_model: str = ""
+    tracelab_llm_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    tracelab_llm_max_candidates: int = Field(default=10, ge=1, le=30)
+    tracelab_llm_max_context_chars: int = Field(default=12_000, ge=1000, le=100_000)
+    tracelab_agent_confirmation_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
     github_clone_timeout_seconds: int = Field(default=60, ge=5, le=300)
     backend_cors_origins: list[str] | str = Field(
         default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
