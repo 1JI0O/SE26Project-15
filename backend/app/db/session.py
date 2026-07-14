@@ -3,9 +3,10 @@ from pathlib import Path
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.config import settings
-from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
+from app.db.migration_runner import upgrade_database
+from app.models.entities import AgentToolRequest, CodeRepository, PaperDocument, Project, TraceLink
 
-_ = (Project, PaperDocument, CodeRepository, TraceLink)
+_ = (Project, PaperDocument, CodeRepository, TraceLink, AgentToolRequest)
 
 
 def _connect_args() -> dict[str, bool]:
@@ -26,10 +27,9 @@ engine = create_engine(settings.database_url, connect_args=_connect_args(), echo
 
 
 def init_db() -> None:
-    SQLModel.metadata.create_all(engine)
+    upgrade_database(engine, SQLModel.metadata)
 
 
 def get_session() -> Session:
     with Session(engine) as session:
         yield session
-
