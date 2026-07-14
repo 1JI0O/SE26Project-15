@@ -41,6 +41,10 @@
           >
             <path d="M0,0 L10,5 L0,10 Z" fill="#1f8f78" />
           </marker>
+          <!-- Clip paths for each node to prevent text overflow -->
+          <clipPath v-for="node in nodes" :key="`clip-${node.id}`" :id="`clip-${node.id}`">
+            <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="10" />
+          </clipPath>
         </defs>
         <g class="edge-layer">
           <path
@@ -66,9 +70,11 @@
             @keydown.enter.prevent="$emit('nodeClick', node)"
           >
             <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="10" />
-            <text :x="node.x + 16" :y="node.y + 26" class="node-kind">{{ node.kindLabel }}</text>
-            <text :x="node.x + 16" :y="node.y + 56" class="node-title">{{ node.title }}</text>
-            <text :x="node.x + 16" :y="node.y + 84" class="node-detail">{{ node.detail }}</text>
+            <g :clip-path="`url(#clip-${node.id})`">
+              <text :x="node.x + 12" :y="node.y + 24" class="node-kind">{{ node.kindLabel }}</text>
+              <text :x="node.x + 12" :y="node.y + 48" class="node-title">{{ node.title }}</text>
+              <text :x="node.x + 12" :y="node.y + 72" class="node-detail">{{ node.detail }}</text>
+            </g>
           </g>
         </g>
         <g class="edge-label-layer">
@@ -225,7 +231,7 @@ defineEmits<{
 
 .node-title {
   fill: #24313d;
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
 }
 
