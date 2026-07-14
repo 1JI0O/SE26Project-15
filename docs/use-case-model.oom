@@ -1,0 +1,458 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE oom:OOM SYSTEM "file:///C:/Program Files/Sybase/PowerDesigner 16/OOM.xsd">
+<oom:OOM xmlns:oom="http://www.sap.com/oom" xmlns:a="attribute" xmlns:c="collection" xmlns:o="object">
+ <o:ObjectID>a1b2c3d4-e5f6-7890-abcd-ef1234567890</o:ObjectID>
+ <c:Children>
+  <o:RootObject ID="r1">
+   <a:Name>PaperCodeTraceWorkbench</a:Name>
+   <a:Code>PaperCodeTraceWorkbench</a:Code>
+   <a:Comment>论文代码双向追溯 Web 工作台 - 用例模型</a:Comment>
+   <c:Children>
+
+    <o:OomDiagram ID="d1">
+     <a:Name>Use Case Diagram</a:Name>
+     <a:Code>UseCaseDiagram</a:Code>
+     <c:Symbols>
+
+      <!-- 参与者：用户 -->
+      <o:ActorSymbol ID="as1">
+       <a:Name>用户</a:Name>
+       <a:Code>User</a:Code>
+       <a:Location>
+        <a:X>100</a:X>
+        <a:Y>300</a:Y>
+       </a:Location>
+       <a:Object>
+        <o:Actor ID="actor1">
+         <a:Name>用户</a:Name>
+         <a:Code>User</a:Code>
+        </o:Actor>
+       </a:Object>
+      </o:ActorSymbol>
+
+      <!-- 用例：创建项目 -->
+      <o:UseCaseSymbol ID="ucs1">
+       <a:Name>创建项目</a:Name>
+       <a:Code>CreateProject</a:Code>
+       <a:Location>
+        <a:X>350</a:X>
+        <a:Y>80</a:Y>
+       </a:Location>
+       <a:Object>
+        <o:UseCase ID="uc1">
+         <a:Name>创建项目</a:Name>
+         <a:Code>CreateProject</a:Code>
+         <a:Comment>用户创建一个新的论文复现项目，填写项目名称和描述</a:Comment>
+        </o:UseCase>
+       </a:Object>
+      </o:UseCaseSymbol>
+
+      <!-- 用例：上传论文 -->
+      <o:UseCaseSymbol ID="ucs2">
+       <a:Name>上传论文 PDF</a:Name>
+       <a:Code>UploadPaper</a:Code>
+       <a:Location>
+        <a:X>350</a:X>
+        <a:Y>160</a:Y>
+       </a:Location>
+       <a:Object>
+        <o:UseCase ID="uc2">
+         <a:Name>上传论文 PDF</a:Name>
+         <a:Code>UploadPaper</a:Code>
+         <a:Comment>用户上传论文 PDF 文件，系统自动解析论文结构（标题、摘要、章节、公式、图表）</a:Comment>
+        </o:UseCase>
+       </a:Object>
+      </o:UseCaseSymbol>
+
+      <!-- 用例：上传代码仓库 -->
+      <o:UseCaseSymbol ID="ucs3">
+       <a:Name>上传代码仓库</a:Name>
+       <a:Code>UploadCode</a:Code>
+       <a:Location>
+        <a:X>350</a:X>
+        <a:Y>240</a:Y>
+       </a:Location>
+       <a:Object>
+        <o:UseCase ID="uc3">
+         <a:Name>上传代码仓库</a:Name>
+         <a:Code>UploadCode</a:Code>
+         <a:Comment>用户上传代码压缩包或提供 GitHub 仓库链接，系统自动分析代码结构</a:Comment>
+        </o:UseCase>
+       </a:Object>
+      </o:UseCaseSymbol>
+
+      <!-- 用例：查看追溯关系 -->
+      <o:UseCaseSymbol ID="ucs4">
+       <a:Name>查看公式-代码追溯</a:Name>
+       <a:Code>ViewTracing</a:Code>
+       <a:Location>
+        <a:X>600</a:X>
+        <a:Y>80</a:Y>
+       </a:Location>
+       <a:Object>
+        <o:UseCase ID="uc4">
+         <a:Name>查看公式-代码追溯</a:Name>
+         <a:Code>ViewTracing</a:Code>
+         <a:Comment>查看论文公式与代码实现之间的对应关系，支持双向跳转</a:Comment>
+        </o:UseCase>
+       </a:Object>
+      </o:UseCaseSymbol>
+
+      <!-- 用例：一致性检查 -->
+      <o:UseCaseSymbol ID="ucs5">
+       <a:Name>一致性检查</a:Name>
+       <a:Code>ConsistencyCheck</a:Code>
+       <a:Location>
+        <a:X>600</a:X>
+        <a:Y>160</a:Y>
+       </a:Location>
+       <a:Object>
+        <o:UseCase ID="uc5">
+         <a:Name>一致性检查</a:Name>
+         <a:Code>ConsistencyCheck</a:Code>
+         <a:Comment>检测论文描述与代码实现之间的不一致，包括超参数、维度、模型结构等</a:Comment>
+        </o:UseCase>
+       </a:Object>
+      </o:UseCaseSymbol>
+
+      <!-- 用例：变更影响分析 -->
+      <o:UseCaseSymbol ID="ucs6">
+       <a:Name>变更影响分析</a:Name>
+       <a:Code>ImpactAnalysis</a:Code>
+       <a:Location>
+        <a:X>600</a:X>
+        <a:Y>240</a:Y>
+       </a:Location>
+       <a:Object>
+        <o:UseCase ID="uc6">
+         <a:Name>变更影响分析</a:Name>
+         <a:Code>ImpactAnalysis</a:Code>
+         <a:Comment>用户修改代码后，系统分析该修改对论文假设、公式、实验结论的影响</a:Comment>
+        </o:UseCase>
+       </a:Object>
+      </o:UseCaseSymbol>
+
+      <!-- 用例：AI 问答 -->
+      <o:UseCaseSymbol ID="ucs7">
+       <a:Name>AI 智能问答</a:Name>
+       <a:Code>AIQuestionAnswer</a:Code>
+       <a:Location>
+        <a:X>600</a:X>
+        <a:Y>320</a:Y>
+       </a:Location>
+       <a:Object>
+        <o:UseCase ID="uc7">
+         <a:Name>AI 智能问答</a:Name>
+         <a:Code>AIQuestionAnswer</a:Code>
+         <a:Comment>用户通过自然语言询问论文内容、公式含义、代码实现等问题，AI 基于知识库回答</a:Comment>
+        </o:UseCase>
+       </a:Object>
+      </o:UseCaseSymbol>
+
+      <!-- 用例：生成复现报告 -->
+      <o:UseCaseSymbol ID="ucs8">
+       <a:Name>生成复现报告</a:Name>
+       <a:Code>GenerateReport</a:Code>
+       <a:Location>
+        <a:X>600</a:X>
+        <a:Y>400</a:Y>
+       </a:Location>
+       <a:Object>
+        <o:UseCase ID="uc8">
+         <a:Name>生成复现报告</a:Name>
+         <a:Code>GenerateReport</a:Code>
+         <a:Comment>一键生成论文复现分析报告，包含模型结构、追溯关系、一致性检查结果等</a:Comment>
+        </o:UseCase>
+       </a:Object>
+      </o:UseCaseSymbol>
+
+      <!-- 连线：用户 → 创建项目 -->
+      <o:AssociationSymbol ID="as1_link">
+       <a:Name>创建项目</a:Name>
+       <a:Object1>
+        <o:Association ID="assoc1">
+         <a:Name>创建项目</a:Name>
+         <a:Code>Assoc_CreateProject</a:Code>
+        </o:Association>
+       </a:Object1>
+       <a:Object2>
+        <o:Actor ID="actor1"/>
+       </a:Object2>
+       <a:Object3>
+        <o:UseCase ID="uc1"/>
+       </a:Object3>
+      </o:AssociationSymbol>
+
+      <!-- 连线：用户 → 上传论文 -->
+      <o:AssociationSymbol ID="as2_link">
+       <a:Name>上传论文</a:Name>
+       <a:Object1>
+        <o:Association ID="assoc2">
+         <a:Name>上传论文</a:Name>
+         <a:Code>Assoc_UploadPaper</a:Code>
+        </o:Association>
+       </a:Object1>
+       <a:Object2>
+        <o:Actor ID="actor1"/>
+       </a:Object2>
+       <a:Object3>
+        <o:UseCase ID="uc2"/>
+       </a:Object3>
+      </o:AssociationSymbol>
+
+      <!-- 连线：用户 → 上传代码 -->
+      <o:AssociationSymbol ID="as3_link">
+       <a:Name>上传代码</a:Name>
+       <a:Object1>
+        <o:Association ID="assoc3">
+         <a:Name>上传代码</a:Name>
+         <a:Code>Assoc_UploadCode</a:Code>
+        </o:Association>
+       </a:Object1>
+       <a:Object2>
+        <o:Actor ID="actor1"/>
+       </a:Object2>
+       <a:Object3>
+        <o:UseCase ID="uc3"/>
+       </a:Object3>
+      </o:AssociationSymbol>
+
+      <!-- 连线：用户 → 查看追溯 -->
+      <o:AssociationSymbol ID="as4_link">
+       <a:Name>查看追溯</a:Name>
+       <a:Object1>
+        <o:Association ID="assoc4">
+         <a:Name>查看追溯</a:Name>
+         <a:Code>Assoc_ViewTracing</a:Code>
+        </o:Association>
+       </a:Object1>
+       <a:Object2>
+        <o:Actor ID="actor1"/>
+       </a:Object2>
+       <a:Object3>
+        <o:UseCase ID="uc4"/>
+       </a:Object3>
+      </o:AssociationSymbol>
+
+      <!-- 连线：用户 → 一致性检查 -->
+      <o:AssociationSymbol ID="as5_link">
+       <a:Name>一致性检查</a:Name>
+       <a:Object1>
+        <o:Association ID="assoc5">
+         <a:Name>一致性检查</a:Name>
+         <a:Code>Assoc_ConsistencyCheck</a:Code>
+        </o:Association>
+       </a:Object1>
+       <a:Object2>
+        <o:Actor ID="actor1"/>
+       </a:Object2>
+       <a:Object3>
+        <o:UseCase ID="uc5"/>
+       </a:Object3>
+      </o:AssociationSymbol>
+
+      <!-- 连线：用户 → 变更影响分析 -->
+      <o:AssociationSymbol ID="as6_link">
+       <a:Name>变更影响分析</a:Name>
+       <a:Object1>
+        <o:Association ID="assoc6">
+         <a:Name>变更影响分析</a:Name>
+         <a:Code>Assoc_ImpactAnalysis</a:Code>
+        </o:Association>
+       </a:Object1>
+       <a:Object2>
+        <o:Actor ID="actor1"/>
+       </a:Object2>
+       <a:Object3>
+        <o:UseCase ID="uc6"/>
+       </a:Object3>
+      </o:AssociationSymbol>
+
+      <!-- 连线：用户 → AI 问答 -->
+      <o:AssociationSymbol ID="as7_link">
+       <a:Name>AI 问答</a:Name>
+       <a:Object1>
+        <o:Association ID="assoc7">
+         <a:Name>AI 问答</a:Name>
+         <a:Code>Assoc_AIQuestionAnswer</a:Code>
+        </o:Association>
+       </a:Object1>
+       <a:Object2>
+        <o:Actor ID="actor1"/>
+       </a:Object2>
+       <a:Object3>
+        <o:UseCase ID="uc7"/>
+       </a:Object3>
+      </o:AssociationSymbol>
+
+      <!-- 连线：用户 → 生成报告 -->
+      <o:AssociationSymbol ID="as8_link">
+       <a:Name>生成报告</a:Name>
+       <a:Object1>
+        <o:Association ID="assoc8">
+         <a:Name>生成报告</a:Name>
+         <a:Code>Assoc_GenerateReport</a:Code>
+        </o:Association>
+       </a:Object1>
+       <a:Object2>
+        <o:Actor ID="actor1"/>
+       </a:Object2>
+       <a:Object3>
+        <o:UseCase ID="uc8"/>
+       </a:Object3>
+      </o:AssociationSymbol>
+
+     </c:Symbols>
+    </o:OomDiagram>
+
+    <!-- 用例详细定义 -->
+    <o:UseCase ID="uc_detail1">
+     <a:Name>创建项目</a:Name>
+     <a:Code>CreateProject</a:Code>
+     <a:Comment>
+前置条件：用户已登录系统
+主事件流：
+1. 用户点击"新建项目"按钮
+2. 系统显示项目创建表单
+3. 用户填写项目名称、描述，选择学科领域
+4. 用户点击"确认创建"
+5. 系统创建项目记录，跳转到项目详情页
+异常流：
+- 项目名称为空：提示"请输入项目名称"
+- 项目名称重复：提示"项目名称已存在"
+后置条件：新项目已创建，可进行论文和代码上传
+     </a:Comment>
+    </o:UseCase>
+
+    <o:UseCase ID="uc_detail2">
+     <a:Name>上传论文 PDF</a:Name>
+     <a:Code>UploadPaper</a:Code>
+     <a:Comment>
+前置条件：用户已创建项目
+主事件流：
+1. 用户进入项目详情页，点击"上传论文"
+2. 用户选择本地 PDF 文件
+3. 系统上传文件并启动解析任务
+4. 系统提取标题、摘要、章节、公式、图表等结构化信息
+5. 解析完成后显示论文结构化结果
+异常流：
+- 文件格式错误：提示"请上传 PDF 格式文件"
+- 文件过大：提示"文件大小超过限制"
+- 解析失败：提示"论文解析失败，请重试"
+后置条件：论文已入库，结构化数据可用于追溯分析
+     </a:Comment>
+    </o:UseCase>
+
+    <o:UseCase ID="uc_detail3">
+     <a:Name>上传代码仓库</a:Name>
+     <a:Code>UploadCode</a:Code>
+     <a:Comment>
+前置条件：用户已创建项目
+主事件流：
+1. 用户进入项目详情页，点击"上传代码"
+2. 用户选择上传 ZIP 压缩包或输入 GitHub 仓库链接
+3. 系统下载并解压代码文件
+4. 系统分析代码目录结构、类、函数、导入关系、PyTorch 模型定义
+5. 分析完成后显示代码结构树
+异常流：
+- 压缩包格式错误：提示"请上传 ZIP 格式文件"
+- GitHub 链接无效：提示"无法访问该仓库"
+- 代码分析失败：提示"代码分析失败，请重试"
+后置条件：代码已入库，结构化数据可用于追溯分析
+     </a:Comment>
+    </o:UseCase>
+
+    <o:UseCase ID="uc_detail4">
+     <a:Name>查看公式-代码追溯</a:Name>
+     <a:Code>ViewTracing</a:Code>
+     <a:Comment>
+前置条件：项目已完成论文解析和代码分析
+主事件流：
+1. 用户进入项目工作台页面
+2. 左侧显示论文 PDF，右侧显示代码编辑器
+3. 用户点击论文中的公式或段落
+4. 系统高亮对应的代码实现，并显示匹配理由和置信度
+5. 用户点击代码中的函数或类
+6. 系统定位到论文中的相关描述
+异常流：
+- 未找到匹配：提示"未找到对应的代码/论文片段"
+后置条件：用户已了解论文与代码的对应关系
+     </a:Comment>
+    </o:UseCase>
+
+    <o:UseCase ID="uc_detail5">
+     <a:Name>一致性检查</a:Name>
+     <a:Code>ConsistencyCheck</a:Code>
+     <a:Comment>
+前置条件：项目已完成论文解析和代码分析
+主事件流：
+1. 用户点击"一致性检查"按钮
+2. 系统对比论文中的超参数、维度、模型结构描述与代码实现
+3. 系统生成不一致点列表
+4. 用户点击查看详细信息，包括论文位置、代码位置、差异说明
+异常流：
+- 全部一致：提示"未发现不一致项"
+后置条件：用户已了解论文与代码的差异
+     </a:Comment>
+    </o:UseCase>
+
+    <o:UseCase ID="uc_detail6">
+     <a:Name>变更影响分析</a:Name>
+     <a:Code>ImpactAnalysis</a:Code>
+     <a:Comment>
+前置条件：项目已完成论文解析和代码分析
+主事件流：
+1. 用户修改代码中的某个参数或结构
+2. 系统检测到变更，自动分析影响范围
+3. 系统显示受影响的论文章节、公式、实验结论
+4. 用户查看详细影响说明和建议
+异常流：
+- 变更无影响：提示"该修改不影响论文描述"
+后置条件：用户已了解代码修改对论文假设的影响
+     </a:Comment>
+    </o:UseCase>
+
+    <o:UseCase ID="uc_detail7">
+     <a:Name>AI 智能问答</a:Name>
+     <a:Code>AIQuestionAnswer</a:Code>
+     <a:Comment>
+前置条件：项目已完成论文解析和代码分析
+主事件流：
+1. 用户在聊天窗口输入自然语言问题
+2. 系统检索论文和代码知识库
+3. 系统调用大模型生成回答
+4. 系统返回答案，并标注出处（论文页码、代码文件和行号）
+问题类型：
+- What：这个公式在做什么？
+- Where：这个公式对应代码哪一段？
+- How：代码是怎么实现这个公式的？
+异常流：
+- 无法回答：提示"抱歉，无法找到相关信息"
+后置条件：用户已获得问题的答案
+     </a:Comment>
+    </o:UseCase>
+
+    <o:UseCase ID="uc_detail8">
+     <a:Name>生成复现报告</a:Name>
+     <a:Code>GenerateReport</a:Code>
+     <a:Comment>
+前置条件：项目已完成论文解析、代码分析和追溯分析
+主事件流：
+1. 用户点击"生成报告"按钮
+2. 系统汇总论文结构、代码分析、追溯关系、一致性检查结果
+3. 系统生成结构化报告（Markdown/PDF）
+4. 用户下载报告
+报告内容：
+- 论文核心思想概述
+- 模型结构与代码对应关系
+- 关键超参数对比表
+- 不一致点列表
+- 复现建议
+后置条件：用户已获得复现分析报告
+     </a:Comment>
+    </o:UseCase>
+
+   </c:Children>
+  </o:RootObject>
+ </c:Children>
+</oom:OOM>
