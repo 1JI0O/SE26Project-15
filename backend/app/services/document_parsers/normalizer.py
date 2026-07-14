@@ -41,7 +41,7 @@ def _entry_text(entry: dict[str, Any]) -> str:
     elif block_type in {"equation", "equation_interline"}:
         candidates = ("math_content", "text")
     elif block_type == "table":
-        candidates = ("table_caption", "table_body", "content", "text")
+        candidates = ("table_caption", "html", "table_body", "content", "text")
     elif block_type in {"image", "chart"}:
         candidates = ("image_caption", "chart_caption", "content", "text")
     elif block_type in {"code", "algorithm"}:
@@ -73,6 +73,12 @@ def _flatten_entries(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         flattened: list[dict[str, Any]] = []
         for index, item in enumerate(payload):
+            if isinstance(item, list):
+                for child in _flatten_entries(item):
+                    copy = dict(child)
+                    copy.setdefault("page_idx", index)
+                    flattened.append(copy)
+                continue
             if not isinstance(item, dict):
                 continue
             nested = item.get("content_list") or item.get("blocks") or item.get("items")

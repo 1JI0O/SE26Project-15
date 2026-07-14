@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.services.document_parsers.base import DocumentParser, ParseOutcome
-from app.services.document_parsers.mineru import MinerUParser
+from app.services.document_parsers.factory import create_mineru_parser
 
 
 def _now() -> str:
@@ -55,7 +55,7 @@ class PaperParsingService:
         root: Path | None = None,
         max_workers: int = 1,
     ) -> None:
-        self.parser = parser or MinerUParser()
+        self.parser = parser or create_mineru_parser()
         self.root = root or Path(os.getenv("TRACELAB_PAPER_JOB_ROOT", "./data/paper-jobs"))
         self.jobs_root = self.root / "jobs"
         self.cache_root = self.root / "cache"

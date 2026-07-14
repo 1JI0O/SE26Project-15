@@ -59,3 +59,47 @@ def test_normalize_rejects_empty_or_unknown_payload() -> None:
         assert "content list" in str(exc)
     else:
         raise AssertionError("Expected unsupported MinerU payload to fail")
+
+
+def test_normalize_real_content_list_v2_page_arrays() -> None:
+    payload = [
+        [
+            {
+                "type": "title",
+                "content": {
+                    "title_content": [{"type": "text", "content": "TraceLab Paper"}],
+                    "level": 1,
+                },
+                "bbox": [100, 50, 900, 120],
+            },
+            {
+                "type": "paragraph",
+                "content": {
+                    "paragraph_content": [
+                        {"type": "text", "content": "First page paragraph."}
+                    ]
+                },
+                "bbox": [100, 160, 900, 240],
+            },
+        ],
+        [
+            {
+                "type": "table",
+                "content": {
+                    "table_caption": [{"type": "text", "content": "Table 1"}],
+                    "html": "<table><tr><td>value</td></tr></table>",
+                },
+                "bbox": [100, 200, 900, 600],
+            }
+        ],
+    ]
+
+    result = normalize_mineru_payload(
+        payload,
+        filename="paper.pdf",
+        parser_version="3.4.4",
+    ).to_dict()
+
+    assert result["title"] == "TraceLab Paper"
+    assert [page["page_number"] for page in result["pages"]] == [1, 2]
+    assert result["pages"][1]["blocks"][0]["kind"] == "table"
