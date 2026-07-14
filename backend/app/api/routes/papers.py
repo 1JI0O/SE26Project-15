@@ -5,8 +5,18 @@ from app.api.routes.helpers import parse_workspace_project_id
 from app.api.routes.projects import get_project_or_404
 from app.db.session import get_session
 from app.models.entities import PaperDocument
-from app.schemas.papers import PaperDocumentRead, WorkspacePaperPage
+from app.schemas.papers import (
+    PaperDocumentRead,
+    PaperParseJobRead,
+    PaperParseResultRead,
+    WorkspacePaperPage,
+)
 from app.services import workspace_service
+from app.services.document_parsers.jobs import (
+    PaperParseJob,
+    PaperParsingService,
+    get_paper_parsing_service,
+)
 from app.services.paper_parser import parse_pdf
 from app.services.workspace_placeholder import workspace_payload
 from app.storage.file_store import save_upload
@@ -24,6 +34,41 @@ def _paper_read(document: PaperDocument) -> PaperDocumentRead:
         sections=document.sections_json,
         paragraphs=document.paragraphs_json,
         created_at=document.created_at,
+    )
+
+
+def _document_for_job(
+    job: PaperParseJob,
+    service: PaperParsingService,
+    session: Session,
+) -> PaperDocument | None:
+    existing = session.exec(
+        select(PaperDocument).where(PaperDocument.storage_path == job.source_path)
+    ).first()
+    if existing is not None:
+        return existing
+    result = service.result(job.id)
+    if result is None:
+        return None
+    document = PaperDocument(
+        project_id=job.project_id,
+        filename=job.filename,
+        storage_path=job.source_path,
+        title=str(result.get("title", "")),
+        abstract=str(result.get("abstract", "")),
+        sections_json=list(result.get("sections", [])),
+        paragraphs_json=list(result.get("paragraphs", [])),
+    )
+    session.add(document)
+    session.commit()
+    session.refresh(document)
+    return document
+
+
+def _job_read(job: PaperParseJob, document: PaperDocument | None = None) -> PaperParseJobRead:
+    return PaperParseJobRead(
+        **job.public_dict(),
+        document_id=document.id if document is not None else None,
     )
 
 
@@ -52,6 +97,69 @@ async def upload_paper(
     session.commit()
     session.refresh(document)
     return _paper_read(document)
+
+
+@router.post(
+    "/paper-jobs",
+    response_model=PaperParseJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def submit_paper_parse_job(
+    project_id: int,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    service: PaperParsingService = Depends(get_paper_parsing_service),
+) -> PaperParseJobRead:
+    get_project_or_404(project_id, session)
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    storage_path = save_upload(project_id, "paper", file)
+    if storage_path.stat().st_size == 0:
+        storage_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="PDF file is empty")
+    job = service.submit(project_id, file.filename, storage_path)
+    return _job_read(job)
+
+
+@router.get("/paper-jobs/{job_id}", response_model=PaperParseJobRead)
+def read_paper_parse_job(
+    project_id: int,
+    job_id: str,
+    session: Session = Depends(get_session),
+    service: PaperParsingService = Depends(get_paper_parsing_service),
+) -> PaperParseJobRead:
+    get_project_or_404(project_id, session)
+    job = service.get(job_id)
+    if job is None or job.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Paper parse job not found")
+    document = _document_for_job(job, service, session) if job.status == "succeeded" else None
+    return _job_read(job, document)
+
+
+@router.get("/paper-jobs/{job_id}/result", response_model=PaperParseResultRead)
+def read_paper_parse_result(
+    project_id: int,
+    job_id: str,
+    session: Session = Depends(get_session),
+    service: PaperParsingService = Depends(get_paper_parsing_service),
+) -> PaperParseResultRead:
+    get_project_or_404(project_id, session)
+    job = service.get(job_id)
+    if job is None or job.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Paper parse job not found")
+    if job.status != "succeeded":
+        raise HTTPException(status_code=409, detail=f"Paper parse job is {job.status}")
+    result = service.result(job.id)
+    document = _document_for_job(job, service, session)
+    if result is None or document is None:
+        raise HTTPException(status_code=500, detail="Paper parse result is unavailable")
+    return PaperParseResultRead(
+        job=_job_read(job, document),
+        document=_paper_read(document),
+        parser=str(result.get("parser", job.parser)),
+        parser_version=str(result.get("parser_version", "unknown")),
+        pages=list(result.get("pages", [])),
+    )
 
 
 @router.get("/paper", response_model=PaperDocumentRead)

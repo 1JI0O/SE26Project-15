@@ -38,6 +38,17 @@ def _paragraphs_for_page(page_number: int, text: str) -> list[dict[str, Any]]:
 
 
 def parse_pdf(path: str | Path) -> dict[str, Any]:
+    source_path = Path(path)
+    try:
+        from app.services.document_parsers.jobs import get_paper_parsing_service
+
+        cached = get_paper_parsing_service().cached_result_for_source(source_path)
+        if cached is not None:
+            return cached
+    except Exception:
+        # Compatibility parser remains available while the UI migrates to paper-jobs.
+        pass
+
     reader = PdfReader(str(path))
     page_texts: list[tuple[int, str]] = []
     for index, page in enumerate(reader.pages, start=1):
