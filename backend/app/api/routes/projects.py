@@ -3,7 +3,7 @@ from sqlmodel import Session, select
 
 from app.db.session import get_session
 from app.models.entities import Project
-from app.schemas import ProjectCreate, ProjectRead
+from app.schemas.projects import ProjectCreate, ProjectRead
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -33,4 +33,3 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
 @router.get("/{project_id}", response_model=ProjectRead)
 def read_project(project_id: int, session: Session = Depends(get_session)) -> Project:
     return get_project_or_404(project_id, session)
-

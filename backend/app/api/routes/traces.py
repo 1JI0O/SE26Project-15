@@ -1,13 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 
+from app.api.routes.helpers import parse_workspace_project_id
 from app.api.routes.projects import get_project_or_404
 from app.db.session import get_session
 from app.models.entities import CodeRepository, PaperDocument, TraceLink
-from app.schemas import TraceLinkCreate, TraceLinkRead, TraceLinkSuggestion
+from app.schemas.traces import (
+    TraceLinkCreate,
+    TraceLinkRead,
+    TraceLinkSuggestion,
+    WorkspaceTraceRow,
+)
+from app.services import workspace_service
 from app.services.trace_suggester import suggest_trace_links
+from app.services.workspace_placeholder import workspace_payload
 
 router = APIRouter(prefix="/projects/{project_id}/trace-links", tags=["trace-links"])
+workspace_router = APIRouter(prefix="/projects/{project_id}/workspace", tags=["tracing"])
 
 
 @router.get("", response_model=list[TraceLinkRead])
@@ -61,3 +70,17 @@ def suggest_links(
     )
     return [TraceLinkSuggestion(**item) for item in suggestions]
 
+
+@workspace_router.get("/trace-matrix", response_model=list[WorkspaceTraceRow])
+def read_trace_matrix(
+    project_id: str,
+    session: Session = Depends(get_session),
+) -> list[WorkspaceTraceRow]:
+    numeric_id = parse_workspace_project_id(project_id)
+    if numeric_id is None:
+        payload = workspace_payload(project_id)
+        return [WorkspaceTraceRow(**item) for item in payload["trace_rows"]]
+
+    get_project_or_404(numeric_id, session)
+    rows = workspace_service.get_trace_rows(session, numeric_id)
+    return [WorkspaceTraceRow(**item) for item in rows]

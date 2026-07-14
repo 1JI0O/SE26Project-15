@@ -96,7 +96,11 @@ def _build_pages(
         body = paragraphs_by_page.get(page_number, [])
         if not body:
             body = _clean_lines(_text)
-        page_title = section_titles[0] if section_titles else (title if page_number == 1 else f"Page {page_number}")
+        page_title = (
+            section_titles[0]
+            if section_titles
+            else (title if page_number == 1 else f"Page {page_number}")
+        )
         anchors = [
             {"type": "section", "label": section_title, "page": page_number}
             for section_title in section_titles
@@ -110,4 +114,3 @@ def _build_pages(
             }
         )
     return pages
-

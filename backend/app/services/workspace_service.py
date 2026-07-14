@@ -324,7 +324,9 @@ def get_code_file(session: Session, project_id: int, file_path: str) -> dict[str
     return build_code_file_payload(project_id, file_path, _latest_code(session, project_id))
 
 
-def save_code_file(session: Session, project_id: int, file_path: str, content: str) -> dict[str, Any]:
+def save_code_file(
+    session: Session, project_id: int, file_path: str, content: str
+) -> dict[str, Any]:
     code = _latest_code(session, project_id)
     if code is None:
         raise FileNotFoundError("Code archive has not been uploaded")

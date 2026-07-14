@@ -6,7 +6,6 @@ from typing import Any
 
 from pathspec import PathSpec
 
-
 # Maximum number of bytes to read from a source file.
 MAX_SOURCE_BYTES = 512_000
 
@@ -431,7 +430,9 @@ def build_hierarchical_tree(
                     "name": part,
                     "path": full_path,
                     "kind": "file" if is_file else "folder",
-                    "meta": _meta_for_language(str(item.get("language", "file"))) if is_file else "",
+                    "meta": (
+                        _meta_for_language(str(item.get("language", "file"))) if is_file else ""
+                    ),
                     "children": {},
                 }
             node = children[part]
@@ -440,7 +441,9 @@ def build_hierarchical_tree(
 
     def serialize(node_map: dict[str, Any]) -> list[dict[str, Any]]:
         serialized: list[dict[str, Any]] = []
-        for name in sorted(node_map.keys(), key=lambda key: (node_map[key]["kind"] != "folder", key)):
+        for name in sorted(
+            node_map.keys(), key=lambda key: (node_map[key]["kind"] != "folder", key)
+        ):
             current = node_map[name]
             child_map = current.get("children", {})
             children = serialize(child_map) if child_map else []
@@ -507,7 +510,11 @@ def _resolve_archive_member_path(archive_path: str | Path, file_path: str) -> st
     if normalized_path in allowed:
         return normalized_path
 
-    candidates = [path for path in allowed if path.endswith(f"/{normalized_path}") or path == normalized_path]
+    candidates = [
+        path
+        for path in allowed
+        if path.endswith(f"/{normalized_path}") or path == normalized_path
+    ]
     if len(candidates) == 1:
         return candidates[0]
     return None
