@@ -15,6 +15,7 @@ class CodeRepositoryRead(BaseModel):
     pytorch_candidates: list[dict[str, Any]]
     tensor_graph: "TensorGraphRead | None" = None
     summary: "RepositorySummary | None" = None
+    revision: int
     created_at: datetime
 
 
@@ -95,6 +96,8 @@ class WorkspaceCodeFileSaveResult(BaseModel):
     path: str
     status: str
     message: str
+    repository_revision: int
+    stale_trace_count: int
 
 
 class WorkspaceCodeTreeNode(BaseModel):

@@ -12,6 +12,10 @@ __pycache__/
 .ruff_cache/
 data/
 uploads/
+output/
+backend/.desktop-build/
+backend/.desktop-dist/
+frontend/src-tauri/binaries/
 dist/
 node_modules/
 coverage/

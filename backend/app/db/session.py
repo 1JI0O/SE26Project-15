@@ -4,9 +4,16 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.config import settings
 from app.db.migration_runner import upgrade_database
-from app.models.entities import AgentToolRequest, CodeRepository, PaperDocument, Project, TraceLink
+from app.models.entities import (
+    AgentToolRequest,
+    CodeRepository,
+    IntegrationConfig,
+    PaperDocument,
+    Project,
+    TraceLink,
+)
 
-_ = (Project, PaperDocument, CodeRepository, TraceLink, AgentToolRequest)
+_ = (Project, PaperDocument, CodeRepository, TraceLink, AgentToolRequest, IntegrationConfig)
 
 
 def _connect_args() -> dict[str, bool]:

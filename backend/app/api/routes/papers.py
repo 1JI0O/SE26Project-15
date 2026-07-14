@@ -33,6 +33,10 @@ def _paper_read(document: PaperDocument) -> PaperDocumentRead:
         abstract=document.abstract,
         sections=document.sections_json,
         paragraphs=document.paragraphs_json,
+        parser=document.parser,
+        parser_version=document.parser_version,
+        parse_status=document.parse_status,
+        content_hash=document.content_hash,
         created_at=document.created_at,
     )
 
@@ -56,8 +60,13 @@ def _document_for_job(
         storage_path=job.source_path,
         title=str(result.get("title", "")),
         abstract=str(result.get("abstract", "")),
+        parser=str(result.get("parser", job.parser)),
+        parser_version=str(result.get("parser_version", "unknown")),
+        parse_status="succeeded",
+        content_hash=job.cache_key,
         sections_json=list(result.get("sections", [])),
         paragraphs_json=list(result.get("paragraphs", [])),
+        pages_json=list(result.get("pages", [])),
     )
     session.add(document)
     session.commit()
@@ -90,6 +99,9 @@ async def upload_paper(
         storage_path=str(storage_path),
         title=parsed["title"],
         abstract=parsed["abstract"],
+        parser=str(parsed.get("parser", "pypdf")),
+        parser_version=str(parsed.get("parser_version", "compat")),
+        pages_json=list(parsed.get("pages", [])),
         sections_json=parsed["sections"],
         paragraphs_json=parsed["paragraphs"],
     )

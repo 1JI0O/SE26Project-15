@@ -66,7 +66,7 @@ def import_github_archive(project_id: int, url: str) -> tuple[Path, str]:
     repository = parse_github_repository_url(url)
     destination = Path(settings.upload_root) / f"project-{project_id}" / "code"
     destination.mkdir(parents=True, exist_ok=True)
-    archive_path = destination / f"{uuid4().hex}.zip"
+    archive_path = (destination / f"{uuid4().hex}.zip").resolve()
     timeout = settings.github_clone_timeout_seconds
     work_root = Path(tempfile.mkdtemp(prefix="tracelab-github-"))
     checkout = work_root / repository.name

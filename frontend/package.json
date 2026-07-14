@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc --noEmit && vite build",
+    "build:sidecar": "node scripts/build-backend-sidecar.mjs",
+    "build:desktop": "pnpm build:sidecar && pnpm build",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build --bundles app,dmg",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "vue-tsc --noEmit"
   },

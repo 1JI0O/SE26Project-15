@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.models.entities import IntegrationConfig
 from app.services.document_parsers.factory import create_mineru_parser
 from app.services.document_parsers.mineru import HttpResponse, MinerUError, MinerUParser
 from app.services.document_parsers.mineru_official import (
@@ -132,8 +133,14 @@ def test_official_api_requires_token(tmp_path: Path) -> None:
 
 
 def test_parser_factory_selects_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TRACELAB_MINERU_PROVIDER", "official")
-    monkeypatch.setenv("TRACELAB_MINERU_API_TOKEN", "test-token")
+    config = IntegrationConfig(
+        mineru_provider="official",
+        mineru_official_api_token="test-token",
+    )
+    monkeypatch.setattr(
+        "app.services.document_parsers.factory.get_effective_integration_config",
+        lambda session: (config, "application"),
+    )
 
     parser = create_mineru_parser()
 

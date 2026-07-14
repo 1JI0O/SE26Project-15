@@ -13,11 +13,11 @@
         <h3>候选建议</h3>
         <el-empty v-if="suggestions.length === 0" description="暂无候选建议" />
         <div v-else class="trace-list">
-          <article v-for="item in suggestions" :key="`${item.paper_ref}-${item.code_ref}`">
+          <article v-for="item in suggestions" :key="`${item.paper_block_id}-${item.code_symbol_id}`">
             <div class="trace-line">
-              <strong>{{ item.paper_ref }}</strong>
+              <strong>{{ item.paper_block_id }}</strong>
               <span>{{ item.relation_type }}</span>
-              <strong>{{ item.code_ref }}</strong>
+              <strong>{{ item.code_symbol_id }}</strong>
             </div>
             <p>{{ item.rationale }}</p>
             <el-progress :percentage="Math.round(item.confidence * 100)" />
@@ -30,9 +30,9 @@
         <div v-else class="trace-list">
           <article v-for="item in links" :key="item.id">
             <div class="trace-line">
-              <strong>{{ item.paper_ref }}</strong>
+              <strong>{{ item.paper_block_id }}</strong>
               <span>{{ item.relation_type }}</span>
-              <strong>{{ item.code_ref }}</strong>
+              <strong>{{ item.code_symbol_id }}</strong>
             </div>
             <p>{{ item.rationale }}</p>
             <el-progress :percentage="Math.round(item.confidence * 100)" status="success" />
@@ -121,4 +121,3 @@ h3 {
   line-height: 1.55;
 }
 </style>
-

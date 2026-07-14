@@ -80,6 +80,8 @@ def test_workspace_minimal_closed_loop() -> None:
         )
         assert save_file.status_code == 200
         assert save_file.json()["status"] == "accepted"
+        assert save_file.json()["repository_revision"] == 2
+        assert save_file.json()["stale_trace_count"] == 0
 
         saved_file = client.get(
             f"/api/v1/projects/{project_id}/workspace/code-files/models/net.py",

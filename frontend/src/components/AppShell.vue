@@ -8,13 +8,28 @@
           <small>Full UI Prototype</small>
         </span>
       </router-link>
-      <el-tag effect="plain" type="success">完整 UI 原型</el-tag>
+      <div class="topbar-actions">
+        <el-tag effect="plain" type="success">完整 UI 原型</el-tag>
+        <el-tooltip content="集成设置" placement="bottom">
+          <el-button :icon="Setting" aria-label="集成设置" @click="settingsOpen = true" />
+        </el-tooltip>
+      </div>
     </header>
     <main class="workspace">
       <slot />
     </main>
+    <IntegrationSettingsDialog v-model="settingsOpen" />
   </div>
 </template>
+
+<script setup lang="ts">
+import { Setting } from '@element-plus/icons-vue'
+import { ref } from 'vue'
+
+import IntegrationSettingsDialog from '@/features/settings/IntegrationSettingsDialog.vue'
+
+const settingsOpen = ref(false)
+</script>
 
 <style scoped>
 .app-shell {
@@ -62,6 +77,12 @@
   background: #1f8f78;
   color: white;
   font-weight: 700;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .workspace {

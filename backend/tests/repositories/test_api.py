@@ -42,6 +42,7 @@ def test_repository_analysis_and_layout_endpoints_return_real_graph() -> None:
 
     assert uploaded.status_code == 201
     assert uploaded.json()["summary"]["symbol_count"] == 2
+    assert uploaded.json()["tensor_graph"]["nodes"]
     assert analysis.status_code == 200
     assert any(node["op"] == "add" for node in analysis.json()["tensor_graph"]["nodes"])
     assert layout.status_code == 200
@@ -76,9 +77,7 @@ def test_replacing_repository_does_not_reuse_previous_edit_overlay() -> None:
             f"/api/v1/projects/{project_id}/code",
             files={"file": ("second.zip", _single_file_zip("VALUE = 2\n"), "application/zip")},
         )
-        current = client.get(
-            f"/api/v1/projects/{project_id}/workspace/code-files/model.py"
-        )
+        current = client.get(f"/api/v1/projects/{project_id}/workspace/code-files/model.py")
 
     assert saved.status_code == 200
     assert replaced.status_code == 201
@@ -94,3 +93,9 @@ def test_openapi_operation_ids_are_unique() -> None:
         if isinstance(operation, dict) and "operationId" in operation
     ]
     assert len(operation_ids) == len(set(operation_ids))
+
+
+def test_main_router_exposes_agent_contract() -> None:
+    paths = app.openapi()["paths"]
+    assert "/api/v1/projects/{project_id}/agent/query" in paths
+    assert "/api/v1/projects/{project_id}/agent/confirmations/{confirmation_id}/decision" in paths

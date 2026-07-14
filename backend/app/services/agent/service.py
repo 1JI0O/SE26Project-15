@@ -34,7 +34,7 @@ from app.services.agent.tools import (
     prepare_write_request,
     validate_tool_arguments,
 )
-from app.services.tracing.lifecycle import record_artifact_revision_change
+from app.services.integration_settings import get_effective_integration_config
 
 AnalysisEnqueuer = Callable[[int, list[str], str], dict[str, Any]]
 _analysis_enqueuer: AnalysisEnqueuer | None = None
@@ -120,18 +120,19 @@ def _create_confirmation(
     return request
 
 
-def _provider_from_settings() -> tuple[AgentProvider | None, str | None]:
-    if not settings.tracelab_llm_enabled:
+def _provider_from_settings(session: Session) -> tuple[AgentProvider | None, str | None]:
+    config, _ = get_effective_integration_config(session)
+    if not config.agent_enabled:
         return None, "llm_disabled"
-    key = settings.tracelab_llm_api_key.get_secret_value()
-    if not settings.tracelab_llm_base_url or not key or not settings.tracelab_llm_model:
+    if not config.agent_base_url or not config.agent_api_key or not config.agent_model:
         return None, "llm_not_configured"
     return (
         CompatibleAgentProvider(
-            settings.tracelab_llm_base_url,
-            key,
-            settings.tracelab_llm_model,
-            settings.tracelab_llm_timeout_seconds,
+            config.agent_base_url,
+            config.agent_api_key,
+            config.agent_model,
+            config.agent_timeout_seconds,
+            config.agent_thinking_mode,
         ),
         None,
     )
@@ -161,7 +162,7 @@ def query_agent(
     actual_provider = provider
     degraded_reason: str | None = None
     if actual_provider is None:
-        actual_provider, degraded_reason = _provider_from_settings()
+        actual_provider, degraded_reason = _provider_from_settings(session)
     if actual_provider is None:
         return AgentQueryResponse(
             answer="LLM 当前不可用；未执行或提出任何写操作。",
@@ -246,23 +247,20 @@ def _execute_save_code(
     if repository is None:
         raise ToolExecutionError("code_repository_not_found")
     if current_hash != target_hash:
-        workspace_service.save_code_file(
+        save_result = workspace_service.save_code_file(
             session, request.project_id, arguments.path, arguments.content
         )
-    stale_count = record_artifact_revision_change(
-        session,
-        request.project_id,
-        "code",
-        repository.id or 0,
-        "agent_code_save",
-    )
-    session.commit()
+    else:
+        save_result = {
+            "repository_revision": repository.revision,
+            "stale_trace_count": 0,
+        }
     return {
         "path": arguments.path,
         "status": "saved",
         "target_sha256": target_hash,
-        "repository_revision": repository.revision,
-        "stale_trace_count": stale_count,
+        "repository_revision": save_result["repository_revision"],
+        "stale_trace_count": save_result["stale_trace_count"],
     }
 
 

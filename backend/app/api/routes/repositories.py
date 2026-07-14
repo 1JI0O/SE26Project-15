@@ -54,6 +54,7 @@ def _code_read(
         pytorch_candidates=analysis["pytorch_candidates"],
         tensor_graph=analysis["tensor_graph"],
         summary=analysis["summary"],
+        revision=repository.revision,
         created_at=repository.created_at,
     )
 
@@ -73,6 +74,7 @@ def _store_repository(
         symbols_json=analysis["symbols"],
         imports_json=analysis["imports"],
         pytorch_candidates_json=analysis["pytorch_candidates"],
+        tensor_graph_json=analysis["tensor_graph"],
     )
     session.add(repository)
     session.commit()
@@ -96,9 +98,7 @@ async def upload_code(
     except (zipfile.BadZipFile, InvalidCodeArchiveError) as exc:
         storage_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Invalid ZIP archive: {exc}") from exc
-    repository = _store_repository(
-        session, project_id, file.filename, str(storage_path), analyzed
-    )
+    repository = _store_repository(session, project_id, file.filename, str(storage_path), analyzed)
     return _code_read(repository, analyzed)
 
 
@@ -221,6 +221,8 @@ def save_code_file(
             path=file_path,
             status="accepted",
             message=f"Prototype save accepted with {len(payload.content)} characters.",
+            repository_revision=1,
+            stale_trace_count=0,
         )
 
     get_project_or_404(numeric_id, session)

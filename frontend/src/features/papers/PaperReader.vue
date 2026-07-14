@@ -5,7 +5,12 @@
         <h2>论文原文</h2>
         <p>只读 PDF 页视图，支持段落、公式、图表锚点高亮，不提供内容编辑。</p>
       </div>
-      <el-tag type="info" effect="plain">{{ filename || '未上传论文' }}</el-tag>
+      <div class="paper-tags">
+        <el-tag v-if="parser" type="success" effect="plain">{{ parser }}</el-tag>
+        <el-tag :type="parseStatus === 'failed' ? 'danger' : 'info'" effect="plain">
+          {{ filename || '未上传论文' }}
+        </el-tag>
+      </div>
     </header>
 
     <!-- Loading state -->
@@ -77,6 +82,8 @@ defineProps<{
   hasPaper: boolean
   loading: boolean
   error: string | null
+  parser: string
+  parseStatus: string
 }>()
 
 defineEmits<{
@@ -114,6 +121,13 @@ defineEmits<{
   margin: 6px 0 0;
   color: #667789;
   line-height: 1.6;
+}
+
+.paper-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .state-placeholder {

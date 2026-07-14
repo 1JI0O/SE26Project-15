@@ -27,31 +27,86 @@
 
     <el-skeleton v-if="store.loading" :rows="4" animated />
     <el-empty v-else-if="store.projects.length === 0" description="暂无项目" />
-    <section v-else class="project-grid">
-      <article v-for="project in store.projects" :key="project.id" class="project-card">
+    <template v-else>
+      <section class="project-toolbar">
         <div>
-          <h2>{{ project.name }}</h2>
-          <p>{{ project.description || '未填写项目说明' }}</p>
+          <h2>已创建项目</h2>
+          <span>{{ store.projects.length }} 个项目</span>
         </div>
-        <el-button type="primary" plain @click="openProject(project.id)">进入工作台</el-button>
-      </article>
-    </section>
+        <div v-if="managing" class="batch-actions">
+          <el-checkbox v-model="allSelected" :indeterminate="partlySelected">
+            全选
+          </el-checkbox>
+          <span>已选择 {{ selectedIds.length }} 项</span>
+          <el-button
+            type="danger"
+            :icon="Delete"
+            :disabled="selectedIds.length === 0"
+            :loading="store.deleting"
+            @click="confirmDelete"
+          >
+            删除所选
+          </el-button>
+          <el-button @click="finishManaging">完成</el-button>
+        </div>
+        <el-button v-else :icon="EditPen" @click="managing = true">批量管理</el-button>
+      </section>
+
+      <section class="project-grid">
+        <article
+          v-for="project in store.projects"
+          :key="project.id"
+          class="project-card"
+          :class="{ selected: selectedIds.includes(project.id) }"
+        >
+          <el-checkbox
+            v-if="managing"
+            v-model="selectedIds"
+            class="project-selector"
+            :value="project.id"
+            :aria-label="`选择项目 ${project.name}`"
+          />
+          <div>
+            <h2>{{ project.name }}</h2>
+            <p>{{ project.description || '未填写项目说明' }}</p>
+          </div>
+          <el-button type="primary" plain @click="openProject(project.id)">
+            进入工作台
+          </el-button>
+        </article>
+      </section>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
-import { onMounted, reactive } from 'vue'
+import { Delete, EditPen } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { useProjectStore } from '@/stores/project'
 
 const router = useRouter()
 const store = useProjectStore()
+const managing = ref(false)
+const selectedIds = ref<number[]>([])
 const form = reactive({
   name: '',
   description: '',
 })
+
+const allSelected = computed({
+  get: () =>
+    store.projects.length > 0 && selectedIds.value.length === store.projects.length,
+  set: (selected: boolean) => {
+    selectedIds.value = selected ? store.projects.map((project) => project.id) : []
+  },
+})
+
+const partlySelected = computed(
+  () => selectedIds.value.length > 0 && selectedIds.value.length < store.projects.length,
+)
 
 onMounted(() => {
   void store.fetchProjects()
@@ -73,6 +128,35 @@ async function submit() {
 
 function openProject(projectId: number | string) {
   void router.push({ name: 'workspace', params: { id: projectId } })
+}
+
+function finishManaging() {
+  managing.value = false
+  selectedIds.value = []
+}
+
+async function confirmDelete() {
+  const count = selectedIds.value.length
+  if (!count) return
+  try {
+    await ElMessageBox.confirm(
+      `将永久删除所选的 ${count} 个项目，以及对应的论文、代码和追溯记录。`,
+      '删除项目',
+      {
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+    const result = await store.deleteMany([...selectedIds.value])
+    finishManaging()
+    ElMessage.success(`已删除 ${result.deleted_ids.length} 个项目`)
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error('项目删除失败，请重试')
+    }
+  }
 }
 </script>
 
@@ -138,13 +222,56 @@ h1 {
   gap: 16px;
 }
 
+.project-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 46px;
+}
+
+.project-toolbar > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.project-toolbar h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.project-toolbar span {
+  color: #71808f;
+  font-size: 13px;
+}
+
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .project-card {
+  position: relative;
   display: grid;
   gap: 16px;
   padding: 18px;
   border: 1px solid #dce3ea;
   border-radius: 8px;
   background: white;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.project-card.selected {
+  border-color: #1f8f78;
+  box-shadow: 0 0 0 1px #1f8f78;
+}
+
+.project-selector {
+  position: absolute;
+  top: 14px;
+  right: 14px;
 }
 
 .project-card h2 {
@@ -169,6 +296,19 @@ h1 {
 
   .prototype-card {
     display: grid;
+  }
+
+  .project-toolbar,
+  .batch-actions {
+    align-items: stretch;
+  }
+
+  .project-toolbar {
+    flex-direction: column;
+  }
+
+  .batch-actions {
+    flex-wrap: wrap;
   }
 }
 </style>

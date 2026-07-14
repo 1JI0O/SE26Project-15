@@ -1,5 +1,7 @@
 <template>
-  <div class="conflict-grid">
+  <div>
+    <div class="placeholder-notice">接口预留：当前展示稳定示例数据，冲突检测算法尚未接入。</div>
+    <div class="conflict-grid">
     <article v-for="item in items" :key="item.title" class="conflict-card">
       <div>
         <el-tag :type="item.type" effect="plain">{{ item.level }}</el-tag>
@@ -8,6 +10,7 @@
       <p>{{ item.description }}</p>
       <button>查看影响范围</button>
     </article>
+    </div>
   </div>
 </template>
 
@@ -30,6 +33,15 @@ defineProps<{
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   padding: 16px;
+}
+
+.placeholder-notice {
+  margin: 16px 16px 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #fff8e6;
+  color: #7a5b19;
+  font-size: 13px;
 }
 
 .conflict-card {

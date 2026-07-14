@@ -7,7 +7,7 @@
         在模块之间的流动路径，不表示 PDF/代码处理流程。
       </p>
       <el-tag v-if="degraded" type="warning" effect="plain" size="small">
-        当前为占位数据
+        当前为兼容数据
       </el-tag>
     </header>
 
@@ -29,7 +29,7 @@
 
     <!-- Canvas -->
     <div v-else class="tensor-flow-canvas">
-      <svg viewBox="0 0 1040 520" role="img" aria-label="代码张量流追踪图">
+      <svg :viewBox="viewBox" role="img" aria-label="代码张量流追踪图">
         <defs>
           <marker
             id="flow-arrow"
@@ -97,9 +97,10 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { TensorFlowEdge, TensorFlowEdgeLabel, TensorFlowNode } from '@/composables/useTensorFlow'
 
-defineProps<{
+const props = defineProps<{
   nodes: TensorFlowNode[]
   edges: TensorFlowEdge[]
   edgeLabels: TensorFlowEdgeLabel[]
@@ -109,6 +110,12 @@ defineProps<{
   error: string | null
   degraded: boolean
 }>()
+
+const viewBox = computed(() => {
+  const maxX = Math.max(1040, ...props.nodes.map((node) => node.x + node.width + 32))
+  const maxY = Math.max(520, ...props.nodes.map((node) => node.y + node.height + 32))
+  return `0 0 ${maxX} ${maxY}`
+})
 
 defineEmits<{
   nodeClick: [node: TensorFlowNode]

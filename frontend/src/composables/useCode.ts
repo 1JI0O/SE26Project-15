@@ -1,12 +1,19 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { isAxiosError } from 'axios'
 import {
+  getCode,
   getWorkspaceCodeFile,
   getWorkspaceCodeTree,
+  importCodeFromGitHub,
   saveWorkspaceCodeFile,
   uploadCode,
 } from '@/api/repository-api'
-import type { WorkspaceCodeFile, WorkspaceCodeTreeNode } from '@/types/repositories'
+import type {
+  RepositorySummary,
+  WorkspaceCodeFile,
+  WorkspaceCodeTreeNode,
+} from '@/types/repositories'
 
 export type TagType = 'success' | 'warning' | 'info' | 'primary' | 'danger'
 
@@ -100,8 +107,10 @@ export function useCode(projectId: () => number) {
   const codeFiles = ref<CodeFile[]>([])
   const codeFilename = ref('')
   const ignoreSummary = ref('上传代码包后显示过滤摘要。')
+  const analysisSummary = ref<RepositorySummary | null>(null)
   const selectedPath = ref('')
   const uploading = ref(false)
+  const importingGithub = ref(false)
   const loading = ref(false)
   const saving = ref(false)
   const error = ref<string | null>(null)
@@ -186,17 +195,28 @@ export function useCode(projectId: () => number) {
     loading.value = true
     error.value = null
     try {
-      const tree = await getWorkspaceCodeTree(projectId())
+      const [tree, repository] = await Promise.all([
+        getWorkspaceCodeTree(projectId()),
+        getCode(projectId()),
+      ])
       codeTree.value = tree
+      codeFiles.value = []
+      selectedPath.value = ''
       initExpandedFolders(tree)
-      codeFilename.value = tree.length > 0 ? 'repo.zip' : ''
-      ignoreSummary.value = tree.length > 0 ? '已应用 .gitignore 与 macOS 元数据过滤规则。' : '上传代码包后显示过滤摘要。'
+      codeFilename.value = repository.filename
+      analysisSummary.value = repository.summary
+      ignoreSummary.value = repository.summary
+        ? `已忽略 ${repository.summary.ignored_count} 个规则匹配文件。`
+        : '已应用 .gitignore 与 macOS 元数据过滤规则。'
       const firstFile = findFirstEditableFile(tree)
       if (firstFile) await openCodeFile(firstFile.path)
-    } catch {
+    } catch (cause) {
       codeTree.value = []
       codeFilename.value = ''
-      error.value = '代码树加载失败'
+      analysisSummary.value = null
+      if (!(isAxiosError(cause) && cause.response?.status === 404)) {
+        error.value = '代码树加载失败'
+      }
     } finally {
       loading.value = false
     }
@@ -272,6 +292,7 @@ export function useCode(projectId: () => number) {
     try {
       const code = await uploadCode(projectId(), file)
       codeFilename.value = code.filename
+      analysisSummary.value = code.summary
       await loadCodeTree()
       ElMessage.success('代码包上传并分析完成')
       return true
@@ -284,13 +305,33 @@ export function useCode(projectId: () => number) {
     }
   }
 
+  async function handleGitHubImport(url: string): Promise<boolean> {
+    importingGithub.value = true
+    try {
+      const code = await importCodeFromGitHub(projectId(), url)
+      codeFilename.value = code.filename
+      analysisSummary.value = code.summary
+      await loadCodeTree()
+      ElMessage.success('GitHub 仓库导入并分析完成')
+      return true
+    } catch (cause) {
+      ElMessage.error('GitHub 仓库导入失败，请检查公开仓库地址')
+      console.error(cause)
+      return false
+    } finally {
+      importingGithub.value = false
+    }
+  }
+
   return {
     codeTree,
     codeFiles,
     codeFilename,
     ignoreSummary,
+    analysisSummary,
     selectedPath,
     uploading,
+    importingGithub,
     loading,
     saving,
     error,
@@ -310,5 +351,6 @@ export function useCode(projectId: () => number) {
     loadCodeTree,
     openCodeFile,
     handleUpload,
+    handleGitHubImport,
   }
 }

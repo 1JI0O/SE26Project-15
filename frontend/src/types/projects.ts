@@ -10,3 +10,8 @@ export interface ProjectCreate {
   name: string
   description: string
 }
+
+export interface ProjectBatchDeleteResult {
+  deleted_ids: number[]
+  missing_ids: number[]
+}
