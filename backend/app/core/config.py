@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     app_env: str = "local"
     database_url: str = "sqlite:///./data/workbench.db"
     upload_root: str = "./uploads"
+    github_clone_timeout_seconds: int = Field(default=60, ge=5, le=300)
     backend_cors_origins: list[str] | str = Field(
         default_factory=lambda: ["http://127.0.0.1:5173", "http://localhost:5173"]
     )
@@ -35,4 +36,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-
