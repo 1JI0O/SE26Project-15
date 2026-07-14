@@ -9,6 +9,8 @@ interface ProjectState {
   deleting: boolean
 }
 
+const DELETE_BATCH_SIZE = 100
+
 export const useProjectStore = defineStore('project', {
   state: (): ProjectState => ({
     projects: [],
@@ -32,10 +34,19 @@ export const useProjectStore = defineStore('project', {
     async deleteMany(projectIds: number[]) {
       this.deleting = true
       try {
-        const result = await deleteProjects(projectIds)
-        const deleted = new Set(result.deleted_ids)
-        this.projects = this.projects.filter((project) => !deleted.has(project.id))
-        return result
+        const requestedIds = [...new Set(projectIds)]
+        const deletedIds: number[] = []
+        const missingIds: number[] = []
+        for (let offset = 0; offset < requestedIds.length; offset += DELETE_BATCH_SIZE) {
+          const result = await deleteProjects(
+            requestedIds.slice(offset, offset + DELETE_BATCH_SIZE),
+          )
+          deletedIds.push(...result.deleted_ids)
+          missingIds.push(...result.missing_ids)
+          const deleted = new Set(result.deleted_ids)
+          this.projects = this.projects.filter((project) => !deleted.has(project.id))
+        }
+        return { deleted_ids: deletedIds, missing_ids: missingIds }
       } finally {
         this.deleting = false
       }
