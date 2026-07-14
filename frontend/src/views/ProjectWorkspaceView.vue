@@ -7,6 +7,7 @@
         <div class="title-row">
           <h1>论文代码双向追溯工作台</h1>
           <el-tag effect="plain" type="warning">最终 UI 演示版</el-tag>
+          <el-tag v-if="desktop.isDesktop.value" effect="plain" type="success">桌面模式</el-tag>
         </div>
         <p>
           输入论文 PDF 与代码 ZIP 后，左侧只读展示论文原文，右侧以 IDE 方式展示过滤后的代码仓库、
@@ -17,6 +18,18 @@
         <span>Project {{ workspace.projectIdLabel }}</span>
         <strong>{{ workspace.projectName }}</strong>
       </div>
+    </section>
+
+    <!-- Service degradation banner -->
+    <section v-if="serviceHealth.hasDegradedServices()" class="degraded-banner">
+      <el-tag type="warning" effect="plain" size="small">降级模式</el-tag>
+      <span v-if="!serviceHealth.minerU.value.available">
+        {{ serviceHealth.minerU.value.name }}: {{ serviceHealth.minerU.value.reason || '不可用' }}
+      </span>
+      <span v-if="!serviceHealth.llm.value.available">
+        {{ serviceHealth.llm.value.name }}: {{ serviceHealth.llm.value.reason || '不可用' }}
+      </span>
+      <span class="degraded-note">代码浏览功能不受影响</span>
     </section>
 
     <!-- Hidden file inputs -->
@@ -52,6 +65,7 @@
     <!-- Main analysis canvas -->
     <section class="analysis-canvas">
       <PaperReader
+        ref="paperReaderRef"
         :filename="paper.paperFilename.value"
         :abstract="paper.paperAbstract.value"
         :page-numbers="paper.paperPageNumbers.value"
@@ -60,7 +74,9 @@
         :has-paper="paper.hasPaper.value"
         :loading="paper.loading.value"
         :error="paper.error.value"
+        :active-block-index="paper.activeBlockIndex.value"
         @update:active-page="(p) => (paper.activePaperPage.value = p)"
+        @select-block="paper.selectBlock"
         @retry="paper.loadPaperPages"
       />
 
@@ -113,6 +129,7 @@
           :rows="trace.traceRows.value"
           :loading="trace.loading.value"
           :error="trace.error.value"
+          @select-row="onTraceRowSelect"
         />
         <article class="assistant-panel">
           <h2>AI 审阅建议</h2>
@@ -151,8 +168,32 @@
       <ConflictPanel v-else-if="activeInsight === 'conflict'" :items="conflictItems" />
 
       <!-- Report tab -->
-      <ReportPanel v-else :cards="reportCards" />
+      <ReportPanel v-else-if="activeInsight === 'report'" :cards="reportCards" />
+
+      <!-- Agent tab -->
+      <AgentPanel
+        v-else-if="activeInsight === 'agent'"
+        :messages="agent.messages.value"
+        :pending-tools="agent.pendingTools.value"
+        :loading="agent.loading.value"
+        :error="agent.error.value"
+        :degraded="agent.degraded.value"
+        :confirmed-count="agent.confirmedCount()"
+        :rejected-count="agent.rejectedCount()"
+        :pending-count="agent.pendingCount()"
+        @confirm-tool="agent.confirmTool"
+        @reject-tool="agent.rejectTool"
+      />
     </InsightDock>
+
+    <!-- Evidence drawer -->
+    <EvidenceDrawer
+      :visible="evidenceDrawerVisible"
+      :row="selectedTraceRow"
+      @close="evidenceDrawerVisible = false"
+      @confirm="onEvidenceConfirm"
+      @reject="onEvidenceReject"
+    />
   </div>
 </template>
 
@@ -168,6 +209,8 @@ import { useTensorFlow, conflictItems, reportCards } from '@/composables/useTens
 import { useTrace } from '@/composables/useTrace'
 import { useImport } from '@/composables/useImport'
 import { useDesktop } from '@/composables/useDesktop'
+import { useAgent } from '@/composables/useAgent'
+import { useServiceHealth } from '@/composables/useServiceHealth'
 
 // Feature components
 import ImportStrip from '@/features/papers/ImportStrip.vue'
@@ -180,15 +223,20 @@ import InsightDock from '@/features/tracing/InsightDock.vue'
 import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
 import ConflictPanel from '@/features/tracing/ConflictPanel.vue'
 import ReportPanel from '@/features/tracing/ReportPanel.vue'
+import EvidenceDrawer from '@/features/tracing/EvidenceDrawer.vue'
+import AgentPanel from '@/features/agent/AgentPanel.vue'
 import type { TensorFlowNode } from '@/composables/useTensorFlow'
+import type { TraceRowView } from '@/composables/useTrace'
 
 // Initialize composables
 const workspace = useWorkspace()
 const paper = usePaper(() => workspace.projectId.value)
 const code = useCode(() => workspace.projectId.value)
-const tensorFlow = useTensorFlow()
+const tensorFlow = useTensorFlow(() => workspace.projectId.value)
 const trace = useTrace(() => workspace.projectId.value)
 const desktop = useDesktop()
+const agent = useAgent()
+const serviceHealth = useServiceHealth()
 const { importSteps } = useImport(
   () => paper.hasPaper.value,
   () => code.hasCode.value,
@@ -204,7 +252,15 @@ const insightTabs = [
   { key: 'flow', label: '张量流流程图' },
   { key: 'conflict', label: '魔改冲突分析' },
   { key: 'report', label: '报告与质量门禁' },
+  { key: 'agent', label: 'AI Agent' },
 ]
+
+// Evidence drawer state
+const evidenceDrawerVisible = ref(false)
+const selectedTraceRow = ref<TraceRowView | null>(null)
+
+// Paper reader ref for block scrolling
+const paperReaderRef = ref<InstanceType<typeof PaperReader> | null>(null)
 
 // File input refs
 const paperInputRef = ref<HTMLInputElement | null>(null)
@@ -220,6 +276,8 @@ onMounted(async () => {
       paper.loadPaperPages(),
       code.loadCodeTree(),
       trace.loadTraceRows(),
+      tensorFlow.loadTensorFlow(),
+      serviceHealth.checkHealth(),
     ])
   } catch {
     ElMessage.error('加载项目工作台失败')
@@ -286,6 +344,22 @@ function onTensorNodeClick(node: TensorFlowNode): void {
 function onTensorJumpToCode(node: TensorFlowNode): void {
   void code.openCodeFile(node.sourcePath)
 }
+
+// Trace evidence handlers
+function onTraceRowSelect(row: TraceRowView): void {
+  selectedTraceRow.value = row
+  evidenceDrawerVisible.value = true
+}
+
+function onEvidenceConfirm(row: TraceRowView): void {
+  ElMessage.success(`已确认追溯关系: ${row.paper} ↔ ${row.code}`)
+  evidenceDrawerVisible.value = false
+}
+
+function onEvidenceReject(row: TraceRowView): void {
+  ElMessage.warning(`已驳回追溯关系: ${row.paper} ↔ ${row.code}`)
+  evidenceDrawerVisible.value = false
+}
 </script>
 
 <style scoped>
@@ -342,6 +416,25 @@ function onTensorJumpToCode(node: TensorFlowNode): void {
 .head-meta span {
   color: #667789;
   font-size: 12px;
+}
+
+.degraded-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #fffbeb;
+  border: 1px solid #fbbf24;
+  color: #92400e;
+  font-size: 13px;
+}
+
+.degraded-note {
+  margin-left: auto;
+  color: #1f8f78;
+  font-weight: 600;
 }
 
 .review-toolbar {

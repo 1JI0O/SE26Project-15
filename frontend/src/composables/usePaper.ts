@@ -8,6 +8,7 @@ export function usePaper(projectId: () => number) {
   const paperFilename = ref('')
   const paperAbstract = ref('')
   const activePaperPage = ref(1)
+  const activeBlockIndex = ref(-1)
   const uploading = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -39,6 +40,10 @@ export function usePaper(projectId: () => number) {
     }
   }
 
+  function selectBlock(index: number): void {
+    activeBlockIndex.value = index
+  }
+
   async function handleUpload(file: File): Promise<boolean> {
     uploading.value = true
     try {
@@ -62,6 +67,7 @@ export function usePaper(projectId: () => number) {
     paperFilename,
     paperAbstract,
     activePaperPage,
+    activeBlockIndex,
     uploading,
     loading,
     error,
@@ -70,5 +76,6 @@ export function usePaper(projectId: () => number) {
     hasPaper,
     loadPaperPages,
     handleUpload,
+    selectBlock,
   }
 }

@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { getWorkspaceTensorFlow } from '@/api/repository-api'
 import type { TagType } from './useCode'
 
 export interface TensorFlowNode {
@@ -229,13 +230,13 @@ function buildEdgeLabel(edge: TensorFlowEdge): TensorFlowEdgeLabel {
   }
 }
 
-export function useTensorFlow() {
+export function useTensorFlow(projectId?: () => number) {
   const nodes = ref<TensorFlowNode[]>(PLACEHOLDER_NODES)
   const edges = ref<TensorFlowEdge[]>(PLACEHOLDER_EDGES)
   const selectedNode = ref<TensorFlowNode | null>(PLACEHOLDER_NODES[0] ?? null)
   const loading = ref(false)
   const error = ref<string | null>(null)
-  const degraded = ref(true) // placeholder data = degraded mode
+  const degraded = ref(true) // starts as placeholder, becomes false after successful API load
 
   const edgeLabels = computed(() => edges.value.map((e) => buildEdgeLabel(e)))
 
@@ -245,6 +246,52 @@ export function useTensorFlow() {
 
   function selectNode(node: TensorFlowNode): void {
     selectedNode.value = node
+  }
+
+  /**
+   * Load tensor flow data from backend API.
+   * Falls back to placeholder data if API is unavailable.
+   */
+  async function loadTensorFlow(): Promise<void> {
+    if (!projectId) return
+    loading.value = true
+    error.value = null
+    try {
+      const data = await getWorkspaceTensorFlow(projectId())
+      if (data.nodes?.length) {
+        nodes.value = data.nodes.map((n) => ({
+          id: n.id,
+          kind: n.kind as TensorFlowNode['kind'],
+          kindLabel: n.label,
+          title: n.label,
+          detail: `${n.source_path}:${n.line_start}`,
+          description: n.description,
+          tensorShape: n.tensor_shape,
+          sourcePath: n.source_path,
+          lineStart: n.line_start,
+          lineEnd: n.line_end,
+          x: n.x,
+          y: n.y,
+          width: n.width,
+          height: n.height,
+        }))
+        edges.value = data.edges.map((e) => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          label: e.label,
+          points: e.points as Array<[number, number]>,
+        }))
+        degraded.value = false
+        selectedNode.value = nodes.value[0] ?? null
+      }
+    } catch {
+      // Keep placeholder data on failure
+      degraded.value = true
+      error.value = '张量流数据加载失败，当前为占位数据'
+    } finally {
+      loading.value = false
+    }
   }
 
   return {
@@ -257,6 +304,7 @@ export function useTensorFlow() {
     edgeLabels,
     edgePath,
     selectNode,
+    loadTensorFlow,
   }
 }
 

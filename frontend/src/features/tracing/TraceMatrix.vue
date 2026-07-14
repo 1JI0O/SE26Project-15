@@ -2,7 +2,7 @@
   <article class="trace-matrix">
     <header>
       <h2>双向追溯矩阵</h2>
-      <p>论文段落、公式、图表与代码文件/符号的关联审阅队列。</p>
+      <p>论文段落、公式、图表与代码文件/符号的关联审阅队列。点击行查看证据详情。</p>
     </header>
 
     <!-- Loading state -->
@@ -24,7 +24,12 @@
         <span>关系</span>
         <span>置信度</span>
       </div>
-      <div v-for="row in rows" :key="`${row.paper}-${row.code}`" class="trace-row">
+      <div
+        v-for="(row, index) in rows"
+        :key="`${row.paper}-${row.code}`"
+        class="trace-row clickable"
+        @click="$emit('selectRow', row, index)"
+      >
         <span>{{ row.paper }}</span>
         <span>{{ row.code }}</span>
         <span>{{ row.type }}</span>
@@ -42,6 +47,10 @@ defineProps<{
   rows: TraceRowView[]
   loading: boolean
   error: string | null
+}>()
+
+defineEmits<{
+  selectRow: [row: TraceRowView, index: number]
 }>()
 </script>
 
@@ -87,11 +96,27 @@ defineProps<{
   border-top: 1px solid #edf1f4;
 }
 
+.trace-row.clickable {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 12px 8px;
+  transition: background 0.15s ease;
+}
+
+.trace-row.clickable:hover {
+  background: #f0faf7;
+}
+
 .trace-head {
   margin-top: 12px;
   color: #667789;
   font-size: 12px;
   font-weight: 700;
+  cursor: default;
+}
+
+.trace-head:hover {
+  background: transparent;
 }
 
 @media (max-width: 820px) {
