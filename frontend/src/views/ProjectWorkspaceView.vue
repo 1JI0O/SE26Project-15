@@ -167,6 +167,7 @@ import { useCode, isEditableFile, fileIcon } from '@/composables/useCode'
 import { useTensorFlow, conflictItems, reportCards } from '@/composables/useTensorFlow'
 import { useTrace } from '@/composables/useTrace'
 import { useImport } from '@/composables/useImport'
+import { useDesktop } from '@/composables/useDesktop'
 
 // Feature components
 import ImportStrip from '@/features/papers/ImportStrip.vue'
@@ -187,6 +188,7 @@ const paper = usePaper(() => workspace.projectId.value)
 const code = useCode(() => workspace.projectId.value)
 const tensorFlow = useTensorFlow()
 const trace = useTrace(() => workspace.projectId.value)
+const desktop = useDesktop()
 const { importSteps } = useImport(
   () => paper.hasPaper.value,
   () => code.hasCode.value,
@@ -226,14 +228,30 @@ onMounted(async () => {
   }
 })
 
-// Import actions
-function handleImportAction(stepIndex: string): void {
+// Import actions — use Tauri system dialog in desktop, fallback to HTML input in browser
+async function handleImportAction(stepIndex: string): Promise<void> {
   if (stepIndex === '01') {
-    paperInputRef.value?.click()
+    if (desktop.isDesktop.value) {
+      const file = await desktop.pickPdfFile()
+      if (file) {
+        const success = await paper.handleUpload(file)
+        if (success) await trace.loadTraceRows()
+      }
+    } else {
+      paperInputRef.value?.click()
+    }
     return
   }
   if (stepIndex === '02') {
-    codeInputRef.value?.click()
+    if (desktop.isDesktop.value) {
+      const file = await desktop.pickZipFile()
+      if (file) {
+        const success = await code.handleUpload(file)
+        if (success) await trace.loadTraceRows()
+      }
+    } else {
+      codeInputRef.value?.click()
+    }
   }
 }
 
