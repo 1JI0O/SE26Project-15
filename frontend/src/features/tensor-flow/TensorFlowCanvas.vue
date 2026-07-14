@@ -29,7 +29,7 @@
 
     <!-- Canvas -->
     <div v-else class="tensor-flow-canvas">
-      <svg viewBox="0 0 1040 520" role="img" aria-label="代码张量流追踪图">
+      <svg ref="svgRef" viewBox="0 0 1040 520" role="img" aria-label="代码张量流追踪图">
         <defs>
           <marker
             id="flow-arrow"
@@ -41,10 +41,6 @@
           >
             <path d="M0,0 L10,5 L0,10 Z" fill="#1f8f78" />
           </marker>
-          <!-- Clip paths for each node to prevent text overflow -->
-          <clipPath v-for="node in nodes" :key="`clip-${node.id}`" :id="`clip-${node.id}`">
-            <rect :x="node.x + 4" :y="node.y + 4" :width="node.width - 8" :height="node.height - 8" />
-          </clipPath>
         </defs>
         <g class="edge-layer">
           <path
@@ -69,25 +65,25 @@
             @click="$emit('nodeClick', node)"
             @keydown.enter.prevent="$emit('nodeClick', node)"
           >
-            <title>{{ node.title }}\n{{ node.kindLabel }} · {{ node.tensorShape }}</title>
+            <title>{{ node.title }} · {{ node.kindLabel }}\n{{ node.tensorShape }}\n{{ node.sourcePath }}:{{ node.lineStart }}</title>
             <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="10" />
             <text
+              :ref="(el) => registerText(node.id, 'kind', el as SVGTextElement)"
               :x="node.x + 12"
               :y="node.y + 24"
               class="node-kind"
-              :font-size="fitFontSize(node.kindLabel, node.width - 24, 13)"
             >{{ node.kindLabel }}</text>
             <text
+              :ref="(el) => registerText(node.id, 'title', el as SVGTextElement)"
               :x="node.x + 12"
               :y="node.y + 50"
               class="node-title"
-              :font-size="fitFontSize(node.title, node.width - 24, 15)"
             >{{ node.title }}</text>
             <text
+              :ref="(el) => registerText(node.id, 'detail', el as SVGTextElement)"
               :x="node.x + 12"
               :y="node.y + 74"
               class="node-detail"
-              :font-size="fitFontSize(node.detail, node.width - 24, 13)"
             >{{ node.detail }}</text>
           </g>
         </g>
@@ -117,9 +113,10 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick, onMounted, ref, watch } from 'vue'
 import type { TensorFlowEdge, TensorFlowEdgeLabel, TensorFlowNode } from '@/composables/useTensorFlow'
 
-defineProps<{
+const props = defineProps<{
   nodes: TensorFlowNode[]
   edges: TensorFlowEdge[]
   edgeLabels: TensorFlowEdgeLabel[]
@@ -134,19 +131,50 @@ defineEmits<{
   nodeClick: [node: TensorFlowNode]
 }>()
 
-/**
- * Estimate font size to fit text within available width.
- * Average char width ≈ 0.6 * fontSize for sans-serif.
- */
-function fitFontSize(text: string, availableWidth: number, maxFontSize: number): number {
-  if (!text) return maxFontSize
-  const charWidth = maxFontSize * 0.6
-  const neededWidth = text.length * charWidth
-  if (neededWidth <= availableWidth) return maxFontSize
-  const scaled = Math.floor((availableWidth / neededWidth) * maxFontSize)
-  return Math.max(scaled, 9) // minimum 9px
+const svgRef = ref<SVGSVGElement | null>(null)
+
+// Track text elements that need fitting
+const textRefs = new Map<string, SVGTextElement>()
+
+function registerText(nodeId: string, slot: string, el: SVGTextElement | null): void {
+  const key = `${nodeId}:${slot}`
+  if (el) {
+    textRefs.set(key, el)
+  } else {
+    textRefs.delete(key)
+  }
 }
 
+/**
+ * After render, measure each text element's natural width.
+ * If it exceeds the node width, set textLength to compress it.
+ * Uses SVG's native lengthAdjust="spacingAndGlyphs" for clean scaling.
+ */
+function fitTextToNodes(): void {
+  for (const node of props.nodes) {
+    const maxWidth = node.width - 24 // padding
+    for (const slot of ['kind', 'title', 'detail'] as const) {
+      const el = textRefs.get(`${node.id}:${slot}`)
+      if (!el) continue
+      // Remove any previous textLength to measure natural width
+      el.removeAttribute('textLength')
+      el.removeAttribute('lengthAdjust')
+      const naturalWidth = el.getComputedTextLength()
+      if (naturalWidth > maxWidth) {
+        el.setAttribute('textLength', String(maxWidth))
+        el.setAttribute('lengthAdjust', 'spacingAndGlyphs')
+      }
+    }
+  }
+}
+
+onMounted(() => {
+  nextTick(() => fitTextToNodes())
+})
+
+watch(() => props.nodes, () => {
+  nextTick(() => fitTextToNodes())
+}, { deep: true })
 </script>
 
 <style scoped>
