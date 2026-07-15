@@ -95,11 +95,20 @@
 
 | 方法 | 路径 | 状态 | 说明 |
 | --- | --- | --- | --- |
-| POST | `/projects/{project_id}/agent/query` | 已实现 | 单轮问答、只读工具与写操作提案 |
+| GET | `/projects/{project_id}/agent/conversations` | 已实现 | 会话历史与归档查询 |
+| POST | `/projects/{project_id}/agent/conversations` | 已实现 | 新建持久化会话 |
+| GET | `/projects/{project_id}/agent/conversations/{conversation_id}` | 已实现 | 消息、工具事件、引用与确认记录 |
+| PATCH | `/projects/{project_id}/agent/conversations/{conversation_id}` | 已实现 | 重命名或归档会话 |
+| POST | `/projects/{project_id}/agent/conversations/{conversation_id}/messages` | 已实现 | 多轮 Agent loop 与环境工具调用 |
+| POST | `/projects/{project_id}/agent/conversations/{conversation_id}/confirmations/{confirmation_id}/decision` | 已实现 | 确认写操作并恢复同一 run |
+| GET | `/projects/{project_id}/agent/memories` | 已实现 | 项目和全局跨项目记忆 |
+| POST | `/projects/{project_id}/agent/memories` | 已实现 | 写入 Agent 记忆 |
+| DELETE | `/projects/{project_id}/agent/memories/{memory_id}` | 已实现 | 删除 Agent 记忆 |
+| POST | `/projects/{project_id}/agent/query` | 兼容 | 旧单轮问答入口 |
 | GET | `/projects/{project_id}/agent/confirmations/{confirmation_id}` | 已实现 | 查询确认记录 |
 | POST | `/projects/{project_id}/agent/confirmations/{confirmation_id}/decision` | 已实现 | accept/reject；仅 accept 执行写工具 |
 
-LLM 未配置或调用失败时返回安全降级响应，不创建写确认。工具白名单与审计字段见 [contracts/agent.md](contracts/agent.md)。
+LLM 未配置或调用失败时保存会话并返回安全降级响应，不创建写确认。工具白名单、代码修改前置检查、记忆和审计字段见 [contracts/agent.md](contracts/agent.md)。
 
 ## 工作台聚合与预留能力
 

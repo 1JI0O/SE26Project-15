@@ -183,9 +183,7 @@ def test_rejected_and_expired_requests_never_execute(tmp_path: Path) -> None:
             ),
         )
         assert response.confirmation is not None
-        request = read_confirmation(
-            session, project.id or 0, response.confirmation.confirmation_id
-        )
+        request = read_confirmation(session, project.id or 0, response.confirmation.confirmation_id)
         assert request is not None
         request.expires_at = utc_now() - timedelta(seconds=1)
         session.add(request)

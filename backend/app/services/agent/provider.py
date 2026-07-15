@@ -61,66 +61,100 @@ class CompatibleAgentProvider:
             import httpx
         except ModuleNotFoundError as exc:
             raise AgentProviderFailure("llm_dependency_missing") from exc
+        history = context.get("history") if isinstance(context.get("history"), list) else []
+        messages: list[dict[str, str]] = [
+            {
+                "role": "system",
+                "content": str(context.get("system_prompt") or "You are TraceLab Agent."),
+            }
+        ]
+        for item in history[-24:]:
+            if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+                continue
+            content = str(item.get("content", ""))[:8000]
+            if content:
+                messages.append({"role": str(item["role"]), "content": content})
+        messages.append(
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "request": message,
+                        "active_context": context.get("active_context", {}),
+                        "environment": context.get("environment", {}),
+                        "memories": context.get("memories", []),
+                        "skills": context.get("skills", []),
+                        "tool_results": tool_results,
+                        "instruction": (
+                            "Use tools when evidence is missing. If tool_results contain an error, "
+                            "correct the call instead of repeating it. Return a normal final "
+                            "answer when the task is complete."
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        )
+        from app.services.agent.tools import tool_definitions
+
+        definitions = tool_definitions()
         payload = {
             "model": self.model_name,
             "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a restricted TraceLab agent. "
-                        "Return exactly one JSON object with action, answer, citations, "
-                        "tool_name and arguments. Use an empty object for arguments when action "
-                        "is final. action must be exactly final or tool; never put a tool name "
-                        "in action. A rerun example is "
-                        '{"action":"tool","answer":"Awaiting confirmation",'
-                        '"citations":[],"tool_name":"rerun_analysis",'
-                        '"arguments":{"targets":["models/net.py"]}}. '
-                        "save_code_file arguments are path, content and optional base_sha256; "
-                        "update_trace_status arguments are trace_id and accepted/rejected status. "
-                        "Only use the listed tools. Write tools are proposals and require "
-                        "confirmation."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "message": message,
-                            "context": context,
-                            "tool_results": tool_results,
-                            "read_tools": [
-                                "get_paper_block",
-                                "get_code_symbol",
-                                "get_graph_node",
-                                "list_trace_links",
-                                "propose_code_patch",
-                            ],
-                            "write_tools": [
-                                "save_code_file",
-                                "rerun_analysis",
-                                "update_trace_status",
-                            ],
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
+            "messages": messages,
+            "tools": definitions,
+            "tool_choice": "auto",
         }
         if self.thinking_mode:
             payload["thinking"] = {"type": self.thinking_mode}
-        try:
-            response = httpx.post(
-                f"{self.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json=payload,
-                timeout=self.timeout,
+
+        def post(current_payload: dict[str, Any]) -> Any:
+            try:
+                return httpx.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=current_payload,
+                    timeout=self.timeout,
+                )
+            except httpx.TimeoutException as exc:
+                raise AgentProviderFailure("llm_timeout") from exc
+            except httpx.HTTPError as exc:
+                raise AgentProviderFailure("llm_transport_error") from exc
+
+        response = post(payload)
+        if response.status_code in {400, 422}:
+            tool_catalog = [
+                {
+                    "name": item["function"]["name"],
+                    "description": item["function"]["description"],
+                    "parameters": item["function"]["parameters"],
+                }
+                for item in definitions
+            ]
+            fallback_messages = list(messages)
+            fallback_messages.insert(
+                1,
+                {
+                    "role": "system",
+                    "content": (
+                        "Native function calling is unavailable. Return exactly one JSON object: "
+                        '{"action":"tool","tool_name":"name","arguments":{},'
+                        '"answer":""} to use a tool, or '
+                        '{"action":"final","answer":"...","citations":[]} when done. '
+                        f"Available tools: {json.dumps(tool_catalog, ensure_ascii=False)}"
+                    ),
+                },
             )
-        except httpx.TimeoutException as exc:
-            raise AgentProviderFailure("llm_timeout") from exc
-        except httpx.HTTPError as exc:
-            raise AgentProviderFailure("llm_transport_error") from exc
+            fallback_payload = {
+                "model": self.model_name,
+                "temperature": 0,
+                "messages": fallback_messages,
+                "response_format": {"type": "json_object"},
+            }
+            response = post(fallback_payload)
+            if response.status_code in {400, 422}:
+                fallback_payload.pop("response_format")
+                response = post(fallback_payload)
         if response.status_code == 429:
             raise AgentProviderFailure("llm_rate_limited")
         if response.status_code >= 500:
@@ -128,12 +162,35 @@ class CompatibleAgentProvider:
         if response.status_code >= 400:
             raise AgentProviderFailure("llm_request_rejected")
         try:
-            content = response.json()["choices"][0]["message"]["content"]
-            parsed = json.loads(content)
-            if parsed.get("arguments") is None:
-                parsed["arguments"] = {}
-            if parsed.get("citations") is None:
-                parsed["citations"] = []
-            return AgentProviderStep.model_validate(parsed)
+            message_payload = response.json()["choices"][0]["message"]
+            tool_calls = message_payload.get("tool_calls") or []
+            if tool_calls:
+                function = tool_calls[0].get("function") or {}
+                raw_arguments = function.get("arguments") or "{}"
+                try:
+                    arguments = json.loads(raw_arguments)
+                except (TypeError, json.JSONDecodeError):
+                    arguments = {}
+                return AgentProviderStep(
+                    action="tool",
+                    answer=str(message_payload.get("content") or ""),
+                    tool_name=str(function.get("name") or ""),
+                    arguments=arguments,
+                )
+            content = str(message_payload.get("content") or "").strip()
+            if not content:
+                raise AgentProviderFailure("llm_empty_response")
+            if content.startswith("{"):
+                try:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, dict) and parsed.get("action") in {"final", "tool"}:
+                        parsed.setdefault("arguments", {})
+                        parsed.setdefault("citations", [])
+                        return AgentProviderStep.model_validate(parsed)
+                except (json.JSONDecodeError, ValidationError):
+                    pass
+            return AgentProviderStep(action="final", answer=content)
+        except AgentProviderFailure:
+            raise
         except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValidationError) as exc:
             raise AgentProviderFailure("llm_invalid_json") from exc

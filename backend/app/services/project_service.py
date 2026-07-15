@@ -7,6 +7,10 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.entities import (
+    AgentConversation,
+    AgentMemory,
+    AgentMessage,
+    AgentRun,
     AgentToolRequest,
     CodeRepository,
     PaperDocument,
@@ -20,14 +24,21 @@ def _unique_project_ids(project_ids: list[int]) -> list[int]:
 
 
 def _delete_project_rows(session: Session, project_ids: list[int]) -> list[int]:
-    projects = list(
-        session.exec(select(Project).where(Project.id.in_(project_ids))).all()
-    )
+    projects = list(session.exec(select(Project).where(Project.id.in_(project_ids))).all())
     existing_ids = {project.id for project in projects if project.id is not None}
     if not existing_ids:
         return []
 
-    for model in (AgentToolRequest, TraceLink, PaperDocument, CodeRepository):
+    for model in (
+        AgentToolRequest,
+        AgentMessage,
+        AgentRun,
+        AgentMemory,
+        AgentConversation,
+        TraceLink,
+        PaperDocument,
+        CodeRepository,
+    ):
         rows = session.exec(select(model).where(model.project_id.in_(existing_ids))).all()
         for row in rows:
             session.delete(row)

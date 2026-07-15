@@ -127,6 +127,18 @@ class AgentToolRequest(SQLModel, table=True):
         max_length=72,
     )
     project_id: int = Field(foreign_key="project.id", index=True)
+    conversation_id: str | None = Field(
+        default=None,
+        foreign_key="agent_conversation.conversation_id",
+        index=True,
+        max_length=72,
+    )
+    run_id: str | None = Field(
+        default=None,
+        foreign_key="agent_run.run_id",
+        index=True,
+        max_length=72,
+    )
     tool_name: str = Field(max_length=64)
     private_arguments_json: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
     parameter_summary_json: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
@@ -138,6 +150,109 @@ class AgentToolRequest(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     decided_at: datetime | None = Field(default=None)
     executed_at: datetime | None = Field(default=None)
+
+
+class AgentConversation(SQLModel, table=True):
+    __tablename__ = "agent_conversation"
+
+    conversation_id: str = Field(
+        default_factory=lambda: f"conv-{uuid4().hex}",
+        primary_key=True,
+        max_length=72,
+    )
+    project_id: int = Field(foreign_key="project.id", index=True)
+    title: str = Field(default="新对话", max_length=160)
+    status: str = Field(default="active", max_length=24, index=True)
+    summary: str = Field(default="", sa_column=Column(Text, nullable=False))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class AgentMessage(SQLModel, table=True):
+    __tablename__ = "agent_message"
+    __table_args__ = (UniqueConstraint("message_id", name="uq_agent_message_id"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    message_id: str = Field(
+        default_factory=lambda: f"msg-{uuid4().hex}",
+        index=True,
+        max_length=72,
+    )
+    conversation_id: str = Field(
+        foreign_key="agent_conversation.conversation_id",
+        index=True,
+        max_length=72,
+    )
+    project_id: int = Field(foreign_key="project.id", index=True)
+    role: str = Field(max_length=24, index=True)
+    content: str = Field(default="", sa_column=Column(Text, nullable=False))
+    citations_json: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False),
+    )
+    metadata_json: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class AgentRun(SQLModel, table=True):
+    __tablename__ = "agent_run"
+
+    run_id: str = Field(
+        default_factory=lambda: f"run-{uuid4().hex}",
+        primary_key=True,
+        max_length=72,
+    )
+    conversation_id: str = Field(
+        foreign_key="agent_conversation.conversation_id",
+        index=True,
+        max_length=72,
+    )
+    project_id: int = Field(foreign_key="project.id", index=True)
+    status: str = Field(default="running", max_length=32, index=True)
+    provider_name: str = Field(default="", max_length=64)
+    model_name: str = Field(default="", max_length=160)
+    step_count: int = Field(default=0, ge=0)
+    trace_json: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False),
+    )
+    degraded_reason: str | None = Field(default=None, max_length=128)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = Field(default=None)
+
+
+class AgentMemory(SQLModel, table=True):
+    __tablename__ = "agent_memory"
+    __table_args__ = (UniqueConstraint("fingerprint", name="uq_agent_memory_fingerprint"),)
+
+    memory_id: str = Field(
+        default_factory=lambda: f"memory-{uuid4().hex}",
+        primary_key=True,
+        max_length=72,
+    )
+    project_id: int | None = Field(default=None, foreign_key="project.id", index=True)
+    conversation_id: str | None = Field(
+        default=None,
+        foreign_key="agent_conversation.conversation_id",
+        index=True,
+        max_length=72,
+    )
+    scope: str = Field(default="project", max_length=24, index=True)
+    kind: str = Field(default="fact", max_length=32, index=True)
+    content: str = Field(sa_column=Column(Text, nullable=False))
+    source_json: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    importance: float = Field(default=0.5, ge=0, le=1)
+    fingerprint: str = Field(max_length=64, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    last_used_at: datetime | None = Field(default=None)
 
 
 class IntegrationConfig(SQLModel, table=True):

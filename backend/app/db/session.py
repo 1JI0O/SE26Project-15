@@ -5,6 +5,10 @@ from sqlmodel import Session, SQLModel, create_engine
 from app.core.config import settings
 from app.db.migration_runner import upgrade_database
 from app.models.entities import (
+    AgentConversation,
+    AgentMemory,
+    AgentMessage,
+    AgentRun,
     AgentToolRequest,
     CodeRepository,
     IntegrationConfig,
@@ -13,7 +17,18 @@ from app.models.entities import (
     TraceLink,
 )
 
-_ = (Project, PaperDocument, CodeRepository, TraceLink, AgentToolRequest, IntegrationConfig)
+_ = (
+    Project,
+    PaperDocument,
+    CodeRepository,
+    TraceLink,
+    AgentConversation,
+    AgentMessage,
+    AgentRun,
+    AgentMemory,
+    AgentToolRequest,
+    IntegrationConfig,
+)
 
 
 def _connect_args() -> dict[str, bool]:

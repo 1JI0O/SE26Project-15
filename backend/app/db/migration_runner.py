@@ -69,6 +69,15 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
             "updated_at": "DATETIME",
         },
     )
+    if "agent_tool_request" in tables:
+        _add_missing_columns(
+            engine,
+            "agent_tool_request",
+            {
+                "conversation_id": "VARCHAR(72)",
+                "run_id": "VARCHAR(72)",
+            },
+        )
     _add_missing_columns(
         engine,
         "trace_link",

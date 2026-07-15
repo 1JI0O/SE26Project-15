@@ -24,6 +24,7 @@ from app.services.agent.provider import (
 from app.services.agent.tools import (
     READ_TOOLS,
     WRITE_TOOLS,
+    CreateTraceArguments,
     RerunAnalysisArguments,
     SaveCodeArguments,
     UpdateTraceArguments,
@@ -31,6 +32,7 @@ from app.services.agent.tools import (
     content_sha256,
     execute_read_tool,
     latest_code,
+    latest_paper,
     prepare_write_request,
     validate_tool_arguments,
 )
@@ -57,6 +59,8 @@ def confirmation_to_read(request: AgentToolRequest) -> AgentConfirmationRead:
     return AgentConfirmationRead(
         confirmation_id=request.confirmation_id,
         project_id=request.project_id,
+        conversation_id=request.conversation_id,
+        run_id=request.run_id,
         tool_name=request.tool_name,
         parameter_summary=request.parameter_summary_json,
         status=request.status,
@@ -102,17 +106,19 @@ def _create_confirmation(
     project_id: int,
     tool_name: str,
     arguments: dict[str, Any],
+    *,
+    conversation_id: str | None = None,
+    run_id: str | None = None,
 ) -> AgentToolRequest:
-    private_arguments, summary = prepare_write_request(
-        session, project_id, tool_name, arguments
-    )
+    private_arguments, summary = prepare_write_request(session, project_id, tool_name, arguments)
     request = AgentToolRequest(
         project_id=project_id,
+        conversation_id=conversation_id,
+        run_id=run_id,
         tool_name=tool_name,
         private_arguments_json=private_arguments,
         parameter_summary_json=summary,
-        expires_at=utc_now()
-        + timedelta(seconds=settings.tracelab_agent_confirmation_ttl_seconds),
+        expires_at=utc_now() + timedelta(seconds=settings.tracelab_agent_confirmation_ttl_seconds),
     )
     session.add(request)
     session.commit()
@@ -193,9 +199,7 @@ def query_agent(
             )
         if step.tool_name in READ_TOOLS:
             try:
-                result = execute_read_tool(
-                    session, project_id, step.tool_name, step.arguments
-                )
+                result = execute_read_tool(session, project_id, step.tool_name, step.arguments)
             except (ValueError, ValidationError):
                 return AgentQueryResponse(
                     answer="Agent 提出的只读工具参数无效。",
@@ -300,16 +304,66 @@ def _execute_rerun_analysis(
     return {key: value for key, value in result.items() if "path" not in key.lower()}
 
 
-def _execute_tool(session: Session, request: AgentToolRequest) -> dict[str, Any]:
-    arguments = validate_tool_arguments(
-        request.tool_name, request.private_arguments_json
+def _execute_create_trace(
+    session: Session,
+    request: AgentToolRequest,
+    arguments: CreateTraceArguments,
+) -> dict[str, Any]:
+    paper = latest_paper(session, request.project_id)
+    code = latest_code(session, request.project_id)
+    if paper is None:
+        raise ToolExecutionError("paper_not_found")
+    if code is None:
+        raise ToolExecutionError("code_repository_not_found")
+    fingerprint_payload = (
+        f"{request.project_id}:{arguments.paper_ref}:{arguments.code_ref}:"
+        f"{arguments.relation_type}:{code.revision}"
     )
+    fingerprint = f"agent-{content_sha256(fingerprint_payload)[:58]}"
+    existing = session.exec(select(TraceLink).where(TraceLink.fingerprint == fingerprint)).first()
+    if existing is not None:
+        return {
+            "trace_id": existing.trace_id,
+            "status": existing.status,
+            "created": False,
+        }
+    link = TraceLink(
+        project_id=request.project_id,
+        paper_document_id=paper.id,
+        paper_ref=arguments.paper_ref,
+        code_repository_id=code.id,
+        code_revision=code.revision,
+        code_ref=arguments.code_ref,
+        relation_type=arguments.relation_type,
+        confidence=arguments.confidence,
+        static_confidence=0,
+        source="agent",
+        rationale=arguments.rationale,
+        uncertainty_json={
+            "level": "low" if arguments.confidence >= 0.85 else "medium",
+            "reasons": ["Agent-generated relation; user confirmation recorded"],
+        },
+        model_info_json={"source": "agent_tool", "confirmation_id": request.confirmation_id},
+        fingerprint=fingerprint,
+        status="accepted",
+        decided_at=utc_now(),
+    )
+    session.add(link)
+    session.commit()
+    session.refresh(link)
+    return {"trace_id": link.trace_id, "status": link.status, "created": True}
+
+
+def _execute_tool(session: Session, request: AgentToolRequest) -> dict[str, Any]:
+    arguments = validate_tool_arguments(request.tool_name, request.private_arguments_json)
     if isinstance(arguments, SaveCodeArguments):
         return _execute_save_code(session, request, arguments)
     if isinstance(arguments, UpdateTraceArguments):
         return _execute_update_trace(session, request, arguments)
     if isinstance(arguments, RerunAnalysisArguments):
         return _execute_rerun_analysis(request, arguments)
+    if isinstance(arguments, CreateTraceArguments):
+        return _execute_create_trace(session, request, arguments)
     raise ToolExecutionError("tool_not_executable")
 
 

@@ -45,16 +45,38 @@ def test_agent_router_degrades_and_confirmation_rejection_is_audited() -> None:
     app.include_router(router, prefix="/api/v1")
     app.dependency_overrides[get_session] = session_override
     with TestClient(app) as client:
+        conversation = client.post(
+            f"/api/v1/projects/{project_id}/agent/conversations",
+            json={"title": "新对话"},
+        )
+        conversation_id = conversation.json()["conversation_id"]
+        turn = client.post(
+            f"/api/v1/projects/{project_id}/agent/conversations/{conversation_id}/messages",
+            json={"message": "Explain the current project"},
+        )
+        detail = client.get(f"/api/v1/projects/{project_id}/agent/conversations/{conversation_id}")
+        memory = client.post(
+            f"/api/v1/projects/{project_id}/agent/memories",
+            json={"content": "Prefer concise risk summaries", "scope": "global"},
+        )
+        memories = client.get(f"/api/v1/projects/{project_id}/agent/memories")
         query = client.post(
             f"/api/v1/projects/{project_id}/agent/query",
             json={"message": "Change the code"},
         )
         rejected = client.post(
-            f"/api/v1/projects/{project_id}/agent/confirmations/"
-            f"{confirmation_id}/decision",
+            f"/api/v1/projects/{project_id}/agent/confirmations/{confirmation_id}/decision",
             json={"decision": "reject"},
         )
 
+    assert conversation.status_code == 201
+    assert turn.status_code == 200
+    assert turn.json()["assistant_message"]["degraded_reason"] == "llm_disabled"
+    assert detail.status_code == 200
+    assert len(detail.json()["messages"]) == 2
+    assert memory.status_code == 201
+    assert memories.status_code == 200
+    assert memories.json()[0]["scope"] == "global"
     assert query.status_code == 200
     assert query.json()["degraded_reason"] == "llm_disabled"
     assert query.json()["confirmation"] is None

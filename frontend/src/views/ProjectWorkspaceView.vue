@@ -425,9 +425,23 @@
         </section>
       </main>
 
-      <aside v-if="agentOpen" class="agent-sidebar">
+      <div
+        v-if="agentOpen"
+        class="agent-resize-handle"
+        :style="{ '--agent-width': `${agentWidth}px` }"
+        role="separator"
+        aria-label="调整 Agent 宽度"
+        aria-orientation="vertical"
+        @pointerdown="startResize('agent', $event)"
+      />
+
+      <aside
+        v-if="agentOpen"
+        class="agent-sidebar"
+        :style="{ width: `${agentWidth}px`, flexBasis: `${agentWidth}px` }"
+      >
         <header class="sidebar-header">
-          <span>论文与代码 Agent</span>
+          <span>Agent</span>
           <el-button text :icon="Close" aria-label="关闭 Agent" @click="agentOpen = false" />
         </header>
         <div class="agent-content">
@@ -436,7 +450,11 @@
             :paper-ref="trace.traceRows.value[0]?.paper"
             :code-ref="code.selectedFile.value?.symbol || code.selectedPath.value"
             :graph-node-id="tensorFlow.selectedNode.value?.id"
+            :file-path="code.selectedPath.value"
+            :trace-id="selectedTraceRow?.id"
+            :graph-root-symbol="tensorFlow.rootSymbol.value || undefined"
             @executed="reloadAfterAgentAction"
+            @ui-action="handleAgentUiAction"
           />
         </div>
       </aside>
@@ -505,10 +523,11 @@ import ReportPanel from '@/features/tracing/ReportPanel.vue'
 import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
 import type { TensorFlowNode } from '@/composables/useTensorFlow'
 import type { TraceRowView } from '@/composables/useTrace'
+import type { AgentUiAction } from '@/types/agent'
 
 type BottomPanelKey = 'trace' | 'flow' | 'conflict' | 'report'
 type PaneKey = 'paper' | 'code'
-type ResizeMode = 'explorer' | 'editor' | 'bottom'
+type ResizeMode = 'explorer' | 'editor' | 'bottom' | 'agent'
 
 const workspace = useWorkspace()
 const paper = usePaper(() => workspace.projectId.value)
@@ -536,6 +555,12 @@ const draggedPane = ref<PaneKey | null>(null)
 const explorerWidth = ref(260)
 const editorLeftPercent = ref(50)
 const bottomPanelHeight = ref(290)
+const storedAgentWidth = Number(window.localStorage.getItem('tracelab.agent.width'))
+const agentWidth = ref(
+  Number.isFinite(storedAgentWidth) && storedAgentWidth >= 260
+    ? Math.min(storedAgentWidth, 720)
+    : 420,
+)
 const resizeMode = ref<ResizeMode | null>(null)
 
 const bottomTabs: Array<{ key: BottomPanelKey; label: string }> = [
@@ -555,6 +580,9 @@ const editorGridRef = ref<HTMLElement | null>(null)
 const workAreaRef = ref<HTMLElement | null>(null)
 
 onMounted(async () => {
+  window.addEventListener('resize', clampAgentWidth)
+  await nextTick()
+  clampAgentWidth()
   if (!workspace.projectId.value || Number.isNaN(workspace.projectId.value)) return
   workspace.loadingWorkspace.value = true
   try {
@@ -573,7 +601,15 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => stopResize())
+onUnmounted(() => {
+  window.removeEventListener('resize', clampAgentWidth)
+  stopResize()
+})
+
+watch([explorerOpen, explorerWidth], async () => {
+  await nextTick()
+  clampAgentWidth()
+})
 
 function startPaneDrag(pane: PaneKey, event: DragEvent): void {
   draggedPane.value = pane
@@ -616,6 +652,13 @@ function handleResize(event: PointerEvent): void {
     editorLeftPercent.value = Math.min(Math.max(percent, 22), 78)
     return
   }
+  if (resizeMode.value === 'agent') {
+    const body = ideBodyRef.value?.getBoundingClientRect()
+    if (!body) return
+    const { min, max } = agentWidthBounds(body.width)
+    agentWidth.value = Math.round(Math.min(Math.max(body.right - event.clientX, min), max))
+    return
+  }
   if (resizeMode.value === 'bottom') {
     const workArea = workAreaRef.value?.getBoundingClientRect()
     if (!workArea) return
@@ -625,7 +668,27 @@ function handleResize(event: PointerEvent): void {
   }
 }
 
+function agentWidthBounds(bodyWidth: number): { min: number; max: number } {
+  const overlay = window.matchMedia('(max-width: 980px)').matches
+  const explorerSpace = explorerOpen.value ? explorerWidth.value + 4 : 0
+  const available = overlay
+    ? bodyWidth - 46
+    : bodyWidth - 46 - explorerSpace - 320
+  const max = Math.max(260, Math.min(720, available))
+  return { min: Math.min(320, max), max }
+}
+
+function clampAgentWidth(): void {
+  const body = ideBodyRef.value?.getBoundingClientRect()
+  if (!body) return
+  const { min, max } = agentWidthBounds(body.width)
+  agentWidth.value = Math.round(Math.min(Math.max(agentWidth.value, min), max))
+}
+
 function stopResize(): void {
+  if (resizeMode.value === 'agent') {
+    window.localStorage.setItem('tracelab.agent.width', String(agentWidth.value))
+  }
   resizeMode.value = null
   window.removeEventListener('pointermove', handleResize)
   window.removeEventListener('pointerup', stopResize)
@@ -754,6 +817,20 @@ async function reloadDerivedViews(): Promise<void> {
 
 async function reloadAfterAgentAction(): Promise<void> {
   await Promise.allSettled([code.loadCodeTree(), reloadDerivedViews()])
+}
+
+async function handleAgentUiAction(action: AgentUiAction): Promise<void> {
+  if (action.type === 'open_code' && action.path) {
+    await jumpToCode(action.path, action.line || 1)
+    return
+  }
+  if (action.type === 'focus_architecture') {
+    openBottomPanel('flow')
+    await tensorFlow.loadTensorFlow({
+      view: action.view || 'architecture',
+      rootSymbol: action.root_symbol || null,
+    })
+  }
 }
 
 watch(activeBottomPanel, (tab) => {
@@ -934,6 +1011,7 @@ watch(activeBottomPanel, (tab) => {
 }
 
 .explorer-resize-handle,
+.agent-resize-handle,
 .editor-resize-handle,
 .bottom-resize-handle {
   z-index: 8;
@@ -948,7 +1026,15 @@ watch(activeBottomPanel, (tab) => {
   cursor: col-resize;
 }
 
+.agent-resize-handle {
+  width: 5px;
+  flex: 0 0 5px;
+  margin-right: -5px;
+  cursor: col-resize;
+}
+
 .explorer-resize-handle:hover,
+.agent-resize-handle:hover,
 .editor-resize-handle:hover,
 .bottom-resize-handle:hover {
   background: #1f8f78;
@@ -1500,8 +1586,8 @@ watch(activeBottomPanel, (tab) => {
 }
 
 .agent-sidebar {
-  width: clamp(300px, 24vw, 380px);
-  flex: 0 0 clamp(300px, 24vw, 380px);
+  width: 420px;
+  flex: 0 0 420px;
   grid-template-rows: 35px minmax(0, 1fr);
   border-right: 0;
   border-left: 1px solid var(--ide-border);
@@ -1510,39 +1596,7 @@ watch(activeBottomPanel, (tab) => {
 
 .agent-content {
   min-height: 0;
-  overflow: auto;
-}
-
-.agent-content :deep(.agent-panel) {
-  min-height: 100%;
-  gap: 11px;
-  padding: 11px;
-}
-
-.agent-content :deep(.agent-panel header) {
-  align-items: center;
-}
-
-.agent-content :deep(.agent-panel h2) {
-  font-size: 14px;
-}
-
-.agent-content :deep(.agent-panel header p) {
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.agent-content :deep(.context-row span),
-.agent-content :deep(.citation-list span) {
-  padding: 4px 6px;
-  border-radius: 3px;
-  font-size: 10px;
-}
-
-.agent-content :deep(.answer-block),
-.agent-content :deep(.confirmation-card) {
-  padding: 10px;
-  border-radius: 4px;
+  overflow: hidden;
 }
 
 .status-bar {
@@ -1567,11 +1621,6 @@ watch(activeBottomPanel, (tab) => {
   .explorer-sidebar {
     width: 230px;
     flex-basis: 230px;
-  }
-
-  .agent-sidebar {
-    width: 310px;
-    flex-basis: 310px;
   }
 
   .command-bar .mode-switch {
@@ -1599,7 +1648,16 @@ watch(activeBottomPanel, (tab) => {
 
   .agent-sidebar {
     right: 0;
-    width: min(380px, calc(100vw - 46px));
+    width: min(440px, calc(100vw - 46px));
+    max-width: calc(100vw - 46px);
+  }
+
+  .agent-resize-handle {
+    position: absolute;
+    top: 0;
+    right: min(var(--agent-width), calc(100vw - 46px));
+    bottom: 0;
+    margin-right: 0;
   }
 }
 

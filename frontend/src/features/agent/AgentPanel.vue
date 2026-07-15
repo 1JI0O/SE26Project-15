@@ -1,216 +1,1225 @@
 <template>
   <article class="agent-panel">
-    <header>
-      <div>
-        <h2>论文与代码 Agent</h2>
-        <p>基于当前论文、代码、张量图和追溯关系回答问题；写操作必须由用户确认。</p>
+    <header class="agent-toolbar">
+      <el-tooltip :content="mode === 'chat' ? '会话历史' : '返回会话'" placement="bottom">
+        <el-button
+          text
+          :icon="mode === 'chat' ? Clock : ArrowLeft"
+          :aria-label="mode === 'chat' ? '会话历史' : '返回会话'"
+          @click="mode = mode === 'chat' ? 'history' : 'chat'"
+        />
+      </el-tooltip>
+      <strong :title="activeConversation?.title">{{ toolbarTitle }}</strong>
+      <div class="toolbar-actions">
+        <el-tooltip content="Agent 记忆" placement="bottom">
+          <el-button
+            text
+            :icon="CollectionTag"
+            aria-label="Agent 记忆"
+            @click="openMemories"
+          />
+        </el-tooltip>
+        <el-tooltip content="新建会话" placement="bottom">
+          <el-button text :icon="Plus" aria-label="新建会话" @click="startConversation" />
+        </el-tooltip>
       </div>
-      <el-tag v-if="response?.degraded" type="warning" effect="plain">安全降级</el-tag>
-      <el-tag v-else type="success" effect="plain">工具确认已启用</el-tag>
     </header>
 
-    <div class="context-row">
-      <span>论文：{{ paperRef || '未选中' }}</span>
-      <span>代码：{{ codeRef || '未选中' }}</span>
-      <span>图节点：{{ graphNodeId || '未选中' }}</span>
-    </div>
-
-    <el-input
-      v-model="message"
-      type="textarea"
-      :rows="4"
-      maxlength="8000"
-      show-word-limit
-      placeholder="例如：解释当前张量节点与论文方法的对应关系"
-      @keydown.meta.enter="send"
-      @keydown.ctrl.enter="send"
-    />
-    <div class="agent-actions">
-      <span>只读工具自动执行；保存代码、重跑分析和更新追溯状态会先展示确认卡片。</span>
-      <el-button type="primary" :loading="loading" :disabled="!message.trim()" @click="send">
-        发送
-      </el-button>
-    </div>
-
-    <section v-if="response" class="answer-block">
-      <h3>Agent 回复</h3>
-      <p>{{ response.answer }}</p>
-      <el-alert
-        v-if="response.degraded"
-        type="warning"
-        :closable="false"
-        :title="`当前未调用 LLM：${response.degraded_reason || 'provider unavailable'}`"
-      />
-      <div v-if="response.citations.length" class="citation-list">
-        <span v-for="citation in response.citations" :key="`${citation.side}-${citation.ref}`">
-          {{ citation.side }} · {{ citation.ref }}
-        </span>
+    <section v-if="mode === 'history'" class="session-view">
+      <div class="section-heading">
+        <span>会话</span>
+        <label><input v-model="showArchived" type="checkbox" @change="loadConversations" /> 已归档</label>
+      </div>
+      <div v-if="conversationLoading" class="panel-state">正在加载会话…</div>
+      <div v-else-if="!conversations.length" class="panel-state">暂无会话</div>
+      <div v-else class="session-list">
+        <button
+          v-for="conversation in conversations"
+          :key="conversation.conversation_id"
+          :class="['session-item', { active: conversation.conversation_id === activeConversationId }]"
+          @click="activateConversation(conversation.conversation_id)"
+        >
+          <span class="session-title">{{ conversation.title }}</span>
+          <small>
+            {{ conversation.message_count }} 条消息 · {{ formatTime(conversation.updated_at) }}
+            <span v-if="conversation.status === 'archived'"> · 已归档</span>
+          </small>
+        </button>
+      </div>
+      <div v-if="activeConversation" class="session-actions">
+        <el-button size="small" :icon="EditPen" @click="renameActive">重命名</el-button>
+        <el-button
+          v-if="activeConversation.status === 'active'"
+          size="small"
+          :icon="FolderDelete"
+          @click="archiveActive"
+        >
+          归档
+        </el-button>
       </div>
     </section>
 
-    <section v-if="confirmation" class="confirmation-card">
-      <div>
-        <el-tag type="warning" effect="plain">等待确认</el-tag>
-        <h3>{{ toolLabel(confirmation.tool_name) }}</h3>
-        <pre>{{ JSON.stringify(confirmation.parameter_summary, null, 2) }}</pre>
+    <section v-else-if="mode === 'memory'" class="memory-view">
+      <div class="section-heading">
+        <span>项目与跨项目记忆</span>
+        <small>{{ memories.length }} 条</small>
       </div>
-      <div v-if="confirmation.status === 'pending'" class="confirmation-actions">
-        <el-button :loading="deciding" @click="decide('reject')">拒绝</el-button>
-        <el-button type="primary" :loading="deciding" @click="decide('accept')">确认执行</el-button>
+      <div class="memory-create">
+        <el-input
+          v-model="memoryDraft"
+          type="textarea"
+          :rows="2"
+          maxlength="8000"
+          placeholder="记录偏好、约束或项目决策"
+        />
+        <div>
+          <el-select v-model="memoryScope" size="small" aria-label="记忆范围">
+            <el-option label="当前项目" value="project" />
+            <el-option label="跨项目" value="global" />
+          </el-select>
+          <el-button
+            size="small"
+            type="primary"
+            :loading="memorySaving"
+            :disabled="!memoryDraft.trim()"
+            @click="addMemory"
+          >
+            记录
+          </el-button>
+        </div>
       </div>
-      <el-alert
-        v-else
-        :type="confirmation.status === 'executed' ? 'success' : 'warning'"
-        :closable="false"
-        :title="`操作状态：${confirmation.status}${confirmation.error_summary ? ` · ${confirmation.error_summary}` : ''}`"
-      />
+      <div v-if="memoryLoading" class="panel-state">正在加载记忆…</div>
+      <div v-else-if="!memories.length" class="panel-state">暂无记忆</div>
+      <div v-else class="memory-list">
+        <article v-for="memory in memories" :key="memory.memory_id" class="memory-item">
+          <div>
+            <span :class="['scope-tag', memory.scope]">
+              {{ memory.scope === 'global' ? '跨项目' : '当前项目' }}
+            </span>
+            <span>{{ kindLabel(memory.kind) }}</span>
+          </div>
+          <p>{{ memory.content }}</p>
+          <el-button
+            text
+            :icon="Delete"
+            aria-label="删除记忆"
+            @click="removeMemory(memory.memory_id)"
+          />
+        </article>
+      </div>
     </section>
+
+    <template v-else>
+      <div class="chat-stage">
+        <div v-if="hasContext" class="context-strip">
+          <span v-if="paperRef" :title="paperRef">论文 · {{ paperRef }}</span>
+          <span v-if="codeRef" :title="codeRef">代码 · {{ shortRef(codeRef) }}</span>
+          <span v-if="graphNodeId" :title="graphNodeId">图 · {{ shortRef(graphNodeId) }}</span>
+        </div>
+
+        <section ref="messageViewport" class="message-viewport">
+        <div v-if="conversationLoading" class="panel-state">正在加载对话…</div>
+        <div v-else-if="!messages.length" class="empty-chat">
+          <ChatDotRound />
+          <strong>开始分析</strong>
+          <span>可询问论文、代码、追溯关系或模型架构。</span>
+        </div>
+        <template v-else>
+          <article
+            v-for="item in messages"
+            :key="item.message_id"
+            :class="['message-row', item.role]"
+          >
+            <div v-if="item.role === 'tool'" class="persisted-tool">
+              <span>工具执行结果</span>
+              <code>{{ item.content }}</code>
+            </div>
+            <div v-else class="message-bubble">
+              <div class="message-meta">
+                <strong>{{ item.role === 'user' ? '你' : 'Agent' }}</strong>
+                <time>{{ formatTime(item.created_at) }}</time>
+              </div>
+              <p v-if="item.role === 'user'" class="message-plain">{{ item.content }}</p>
+              <div
+                v-else
+                class="message-markdown"
+                v-html="renderAgentMarkdown(item.content)"
+              />
+
+              <div v-if="item.tool_events.length" class="tool-event-list">
+                <div
+                  v-for="(event, index) in item.tool_events"
+                  :key="`${item.message_id}-${event.tool_name}-${index}`"
+                  :class="['tool-event', event.status]"
+                >
+                  <span class="event-status" />
+                  <div>
+                    <strong>{{ toolLabel(event.tool_name) }}</strong>
+                    <small>{{ event.summary }}</small>
+                  </div>
+                  <button
+                    v-if="event.result.ui_action"
+                    type="button"
+                    @click="emitUiAction(event.result.ui_action)"
+                  >
+                    定位
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="item.citations.length" class="citation-list">
+                <span
+                  v-for="citation in item.citations"
+                  :key="`${item.message_id}-${citation.side}-${citation.ref}`"
+                  :title="citation.quote"
+                >
+                  {{ citation.side }} · {{ shortRef(citation.ref) }}
+                </span>
+              </div>
+
+              <div v-if="item.degraded" class="degraded-note">
+                安全降级 · {{ item.degraded_reason || 'provider unavailable' }}
+              </div>
+
+              <section v-if="item.confirmation" class="confirmation-card">
+                <header>
+                  <div>
+                    <span>需要确认</span>
+                    <strong>{{ toolLabel(item.confirmation.tool_name) }}</strong>
+                  </div>
+                  <small>{{ confirmationLabel(item.confirmation.status) }}</small>
+                </header>
+                <pre>{{ JSON.stringify(item.confirmation.parameter_summary, null, 2) }}</pre>
+                <div v-if="item.confirmation.status === 'pending'" class="confirmation-actions">
+                  <el-button
+                    size="small"
+                    :loading="decidingId === item.confirmation.confirmation_id"
+                    @click="decide(item.confirmation, 'reject')"
+                  >
+                    拒绝
+                  </el-button>
+                  <el-button
+                    size="small"
+                    type="primary"
+                    :loading="decidingId === item.confirmation.confirmation_id"
+                    @click="decide(item.confirmation, 'accept')"
+                  >
+                    执行
+                  </el-button>
+                </div>
+                <p v-if="item.confirmation.error_summary" class="confirmation-error">
+                  {{ item.confirmation.error_summary }}
+                </p>
+              </section>
+            </div>
+          </article>
+        </template>
+        <div v-if="sending" class="thinking-row">
+          <span /><span /><span />
+          Agent 正在分析环境
+        </div>
+        </section>
+      </div>
+
+      <footer class="composer">
+        <el-input
+          v-model="draft"
+          type="textarea"
+          :autosize="{ minRows: 2, maxRows: 6 }"
+          maxlength="8000"
+          resize="none"
+          placeholder="询问或要求 Agent 修改当前环境"
+          @keydown.meta.enter.prevent="send"
+          @keydown.ctrl.enter.prevent="send"
+        />
+        <div class="composer-footer">
+          <span>{{ contextLabel }}</span>
+          <el-button
+            circle
+            type="primary"
+            :icon="Promotion"
+            :loading="sending"
+            :disabled="!draft.trim() || !activeConversationId"
+            aria-label="发送消息"
+            @click="send"
+          />
+        </div>
+      </footer>
+    </template>
   </article>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { decideAgentConfirmation, queryAgent } from '@/api/agent-api'
-import type { AgentConfirmation, AgentQueryResponse } from '@/types/agent'
+import 'katex/dist/katex.min.css'
+import {
+  ArrowLeft,
+  ChatDotRound,
+  Clock,
+  CollectionTag,
+  Delete,
+  EditPen,
+  FolderDelete,
+  Plus,
+  Promotion,
+} from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+
+import {
+  createAgentConversation,
+  createAgentMemory,
+  decideConversationConfirmation,
+  deleteAgentMemory,
+  getAgentConversation,
+  listAgentConversations,
+  listAgentMemories,
+  sendAgentMessage,
+  updateAgentConversation,
+} from '@/api/agent-api'
+import { renderPaperMarkdown } from '@/features/papers/markdown-renderer'
+import type {
+  AgentConfirmation,
+  AgentConversation,
+  AgentConversationDetail,
+  AgentMemory,
+  AgentMessage,
+  AgentUiAction,
+} from '@/types/agent'
 
 const props = defineProps<{
   projectId: number
   paperRef?: string
   codeRef?: string
   graphNodeId?: string
+  filePath?: string
+  line?: number
+  traceId?: string
+  graphRootSymbol?: string
 }>()
 
 const emit = defineEmits<{
   executed: []
+  uiAction: [action: AgentUiAction]
 }>()
 
-const message = ref('')
-const loading = ref(false)
-const deciding = ref(false)
-const response = ref<AgentQueryResponse | null>(null)
-const confirmation = ref<AgentConfirmation | null>(null)
+const mode = ref<'chat' | 'history' | 'memory'>('chat')
+const conversations = ref<AgentConversation[]>([])
+const activeConversationId = ref('')
+const detail = ref<AgentConversationDetail | null>(null)
+const draft = ref('')
+const sending = ref(false)
+const conversationLoading = ref(false)
+const decidingId = ref('')
+const showArchived = ref(false)
+const messageViewport = ref<HTMLElement | null>(null)
+const memories = ref<AgentMemory[]>([])
+const memoryDraft = ref('')
+const memoryScope = ref<'project' | 'global'>('project')
+const memoryLoading = ref(false)
+const memorySaving = ref(false)
 
-function toolLabel(toolName: string): string {
-  const labels: Record<string, string> = {
-    save_code_file: '保存代码修改',
-    rerun_analysis: '重新运行代码分析',
-    update_trace_status: '更新追溯审阅状态',
+const activeConversation = computed(() =>
+  conversations.value.find((item) => item.conversation_id === activeConversationId.value),
+)
+const messages = computed<AgentMessage[]>(() =>
+  (detail.value?.messages || []).filter((item) => item.role !== 'system'),
+)
+const toolbarTitle = computed(() => {
+  if (mode.value === 'history') return '会话历史'
+  if (mode.value === 'memory') return 'Agent 记忆'
+  return activeConversation.value?.title || 'Agent'
+})
+const hasContext = computed(() => Boolean(props.paperRef || props.codeRef || props.graphNodeId))
+const contextLabel = computed(() => {
+  const count = [props.paperRef, props.codeRef, props.graphNodeId].filter(Boolean).length
+  return count ? `已附加 ${count} 项上下文` : '项目上下文自动注入'
+})
+
+onMounted(initialize)
+watch(
+  () => props.projectId,
+  () => void initialize(),
+)
+
+async function initialize(): Promise<void> {
+  activeConversationId.value = ''
+  detail.value = null
+  mode.value = 'chat'
+  await loadConversations()
+  const active = conversations.value.find((item) => item.status === 'active')
+  if (active) await activateConversation(active.conversation_id)
+  else await startConversation()
+}
+
+async function loadConversations(): Promise<void> {
+  conversationLoading.value = true
+  try {
+    conversations.value = await listAgentConversations(props.projectId, showArchived.value)
+  } catch (cause) {
+    ElMessage.error('会话历史加载失败')
+    console.error(cause)
+  } finally {
+    conversationLoading.value = false
   }
-  return labels[toolName] ?? toolName
+}
+
+async function startConversation(): Promise<void> {
+  try {
+    const conversation = await createAgentConversation(props.projectId)
+    await loadConversations()
+    activeConversationId.value = conversation.conversation_id
+    detail.value = { ...conversation, messages: [] }
+    mode.value = 'chat'
+    draft.value = ''
+  } catch (cause) {
+    ElMessage.error('新建会话失败')
+    console.error(cause)
+  }
+}
+
+async function activateConversation(conversationId: string): Promise<void> {
+  conversationLoading.value = true
+  try {
+    activeConversationId.value = conversationId
+    detail.value = await getAgentConversation(props.projectId, conversationId)
+    mode.value = 'chat'
+    await scrollToBottom()
+  } catch (cause) {
+    ElMessage.error('会话加载失败')
+    console.error(cause)
+  } finally {
+    conversationLoading.value = false
+  }
+}
+
+async function renameActive(): Promise<void> {
+  const conversation = activeConversation.value
+  if (!conversation) return
+  try {
+    const result = await ElMessageBox.prompt('输入新的会话名称', '重命名会话', {
+      inputValue: conversation.title,
+      inputPattern: /\S+/,
+      inputErrorMessage: '名称不能为空',
+    })
+    await updateAgentConversation(props.projectId, conversation.conversation_id, {
+      title: result.value.trim(),
+    })
+    await loadConversations()
+  } catch (cause) {
+    if (cause !== 'cancel' && cause !== 'close') console.error(cause)
+  }
+}
+
+async function archiveActive(): Promise<void> {
+  const conversation = activeConversation.value
+  if (!conversation) return
+  try {
+    await ElMessageBox.confirm('归档后仍可在会话历史中查看。', '归档当前会话')
+    await updateAgentConversation(props.projectId, conversation.conversation_id, {
+      status: 'archived',
+    })
+    await loadConversations()
+    const next = conversations.value.find((item) => item.status === 'active')
+    if (next) await activateConversation(next.conversation_id)
+    else await startConversation()
+  } catch (cause) {
+    if (cause !== 'cancel' && cause !== 'close') console.error(cause)
+  }
 }
 
 async function send(): Promise<void> {
-  if (!message.value.trim()) return
-  loading.value = true
+  const text = draft.value.trim()
+  if (!text || !activeConversationId.value || sending.value) return
+  sending.value = true
+  draft.value = ''
   try {
-    const result = await queryAgent(props.projectId, message.value.trim(), {
-      paper_block_id: props.paperRef || undefined,
-      code_symbol_id: props.codeRef || undefined,
-      graph_node_id: props.graphNodeId || undefined,
-    })
-    response.value = result
-    confirmation.value = result.confirmation
+    const response = await sendAgentMessage(
+      props.projectId,
+      activeConversationId.value,
+      text,
+      {
+        paper_block_id: props.paperRef || undefined,
+        code_symbol_id: props.codeRef || undefined,
+        graph_node_id: props.graphNodeId || undefined,
+        file_path: props.filePath || undefined,
+        line: props.line,
+        trace_id: props.traceId || undefined,
+        graph_root_symbol: props.graphRootSymbol || undefined,
+      },
+    )
+    if (detail.value) {
+      detail.value.messages.push(response.user_message, response.assistant_message)
+      Object.assign(detail.value, response.conversation)
+    } else {
+      detail.value = await getAgentConversation(props.projectId, activeConversationId.value)
+    }
+    runUiActions(response.assistant_message)
+    await loadConversations()
+    await scrollToBottom()
   } catch (cause) {
+    draft.value = text
     ElMessage.error('Agent 请求失败')
     console.error(cause)
   } finally {
-    loading.value = false
+    sending.value = false
   }
 }
 
-async function decide(decision: 'accept' | 'reject'): Promise<void> {
-  if (!confirmation.value) return
-  deciding.value = true
+async function decide(
+  confirmation: AgentConfirmation,
+  decision: 'accept' | 'reject',
+): Promise<void> {
+  if (!activeConversationId.value) return
+  decidingId.value = confirmation.confirmation_id
   try {
-    confirmation.value = await decideAgentConfirmation(
+    const response = await decideConversationConfirmation(
       props.projectId,
-      confirmation.value.confirmation_id,
+      activeConversationId.value,
+      confirmation.confirmation_id,
       decision,
     )
-    if (confirmation.value.status === 'executed') emit('executed')
+    detail.value = await getAgentConversation(props.projectId, activeConversationId.value)
+    if (response.confirmation.status === 'executed') emit('executed')
+    if (response.assistant_message) runUiActions(response.assistant_message)
+    await loadConversations()
+    await scrollToBottom()
   } catch (cause) {
-    ElMessage.error('Agent 操作确认失败')
+    ElMessage.error('工具操作确认失败')
     console.error(cause)
   } finally {
-    deciding.value = false
+    decidingId.value = ''
   }
+}
+
+function runUiActions(message: AgentMessage): void {
+  for (const event of message.tool_events) {
+    if (event.status === 'succeeded' && event.result.ui_action) {
+      emitUiAction(event.result.ui_action)
+    }
+  }
+}
+
+function emitUiAction(action: AgentUiAction): void {
+  emit('uiAction', action)
+}
+
+async function openMemories(): Promise<void> {
+  mode.value = 'memory'
+  memoryLoading.value = true
+  try {
+    memories.value = await listAgentMemories(props.projectId)
+  } catch (cause) {
+    ElMessage.error('Agent 记忆加载失败')
+    console.error(cause)
+  } finally {
+    memoryLoading.value = false
+  }
+}
+
+async function addMemory(): Promise<void> {
+  const content = memoryDraft.value.trim()
+  if (!content) return
+  memorySaving.value = true
+  try {
+    await createAgentMemory(props.projectId, {
+      content,
+      scope: memoryScope.value,
+      kind: 'preference',
+      conversation_id: activeConversationId.value || undefined,
+    })
+    memoryDraft.value = ''
+    memories.value = await listAgentMemories(props.projectId)
+  } catch (cause) {
+    ElMessage.error('记忆保存失败')
+    console.error(cause)
+  } finally {
+    memorySaving.value = false
+  }
+}
+
+async function removeMemory(memoryId: string): Promise<void> {
+  try {
+    await deleteAgentMemory(props.projectId, memoryId)
+    memories.value = memories.value.filter((item) => item.memory_id !== memoryId)
+  } catch (cause) {
+    ElMessage.error('记忆删除失败')
+    console.error(cause)
+  }
+}
+
+async function scrollToBottom(): Promise<void> {
+  await nextTick()
+  const viewport = messageViewport.value
+  if (viewport) viewport.scrollTop = viewport.scrollHeight
+}
+
+function shortRef(value: string): string {
+  if (value.length <= 34) return value
+  return `…${value.slice(-33)}`
+}
+
+function renderAgentMarkdown(content: string): string {
+  return renderPaperMarkdown(content, (path) => path)
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value)
+  const today = new Date()
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }
+  return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+}
+
+function kindLabel(kind: AgentMemory['kind']): string {
+  return {
+    fact: '事实',
+    preference: '偏好',
+    decision: '决策',
+    constraint: '约束',
+    summary: '摘要',
+  }[kind]
+}
+
+function confirmationLabel(status: AgentConfirmation['status']): string {
+  return {
+    pending: '等待处理',
+    approved: '已批准',
+    rejected: '已拒绝',
+    expired: '已过期',
+    executed: '已执行',
+    failed: '执行失败',
+  }[status]
+}
+
+function toolLabel(toolName: string): string {
+  const labels: Record<string, string> = {
+    get_project_overview: '读取项目环境',
+    search_paper: '检索论文',
+    get_paper_block: '读取论文段落',
+    search_code: '检索代码',
+    read_code_file: '读取代码文件',
+    get_code_symbol: '读取代码符号',
+    get_architecture: '读取架构图',
+    get_graph_node: '读取图节点',
+    list_trace_links: '读取追溯关系',
+    get_trace_detail: '读取追溯证据',
+    recall_memory: '检索 Agent 记忆',
+    propose_code_patch: '生成代码补丁',
+    analyze_change_risk: '分析修改风险',
+    open_code_location: '定位代码',
+    focus_architecture: '聚焦架构图',
+    save_code_file: '保存代码修改',
+    rerun_analysis: '重新运行分析',
+    update_trace_status: '更新追溯状态',
+    create_trace_link: '创建追溯关系',
+  }
+  return labels[toolName] ?? toolName
 }
 </script>
 
 <style scoped>
 .agent-panel {
   display: grid;
-  gap: 16px;
-  padding: 16px;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 36px minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: #ffffff;
+  color: #27333e;
 }
 
-.agent-panel header,
-.agent-actions,
-.confirmation-actions {
+.agent-toolbar {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  border-bottom: 1px solid #d8dee6;
+  background: #f8f9fb;
+}
+
+.agent-toolbar strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-actions {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+}
+
+.context-strip {
+  display: flex;
+  min-height: 28px;
+  gap: 5px;
+  align-items: center;
+  padding: 4px 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid #e2e7ec;
+  background: #fbfcfd;
+  white-space: nowrap;
+}
+
+.chat-stage {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.context-strip span,
+.citation-list span,
+.scope-tag {
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: #edf3f2;
+  color: #526b68;
+  font-size: 9px;
+}
+
+.message-viewport {
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+  overflow-y: auto;
+  background: #ffffff;
+}
+
+.message-row {
+  display: flex;
+  margin-bottom: 12px;
+}
+
+.message-row.user {
+  justify-content: flex-end;
+}
+
+.message-bubble {
+  width: min(94%, 620px);
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #dce2e8;
+  border-radius: 5px;
+  background: #f8fafb;
+}
+
+.message-row.user .message-bubble {
+  width: auto;
+  max-width: 88%;
+  border-color: #c9e1db;
+  background: #edf7f4;
+}
+
+.message-meta,
+.section-heading,
+.confirmation-card header,
+.composer-footer,
+.memory-item > div,
+.session-actions {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-}
-
-.agent-panel h2,
-.agent-panel h3 {
-  margin: 0;
-}
-
-.agent-panel header p,
-.answer-block p {
-  margin: 6px 0 0;
-  color: #667789;
-  line-height: 1.6;
-}
-
-.context-row,
-.citation-list {
-  display: flex;
-  flex-wrap: wrap;
   gap: 8px;
 }
 
-.context-row span,
-.citation-list span {
-  padding: 6px 9px;
-  border-radius: 6px;
-  background: #f3f7f6;
-  color: #536475;
+.message-meta strong {
+  font-size: 11px;
+}
+
+.message-meta time,
+.section-heading small,
+.message-meta time,
+.session-item small {
+  color: #87919d;
+  font-size: 9px;
+}
+
+.message-plain,
+.message-markdown {
+  margin: 7px 0 0;
+  color: #384653;
   font-size: 12px;
+  line-height: 1.58;
+  overflow-wrap: anywhere;
 }
 
-.agent-actions span {
-  color: #667789;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.answer-block,
-.confirmation-card {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
-  background: #fbfcfd;
-}
-
-.confirmation-card pre {
-  max-height: 220px;
-  margin: 12px 0 0;
-  overflow: auto;
-  color: #536475;
+.message-plain {
   white-space: pre-wrap;
 }
 
-@media (max-width: 820px) {
-  .agent-panel header,
-  .agent-actions {
-    align-items: stretch;
-    flex-direction: column;
+.message-markdown :deep(> :first-child) {
+  margin-top: 0;
+}
+
+.message-markdown :deep(> :last-child) {
+  margin-bottom: 0;
+}
+
+.message-markdown :deep(p),
+.message-markdown :deep(ul),
+.message-markdown :deep(ol),
+.message-markdown :deep(blockquote),
+.message-markdown :deep(pre),
+.message-markdown :deep(.table-scroll),
+.message-markdown :deep(.math-display) {
+  margin: 0 0 8px;
+}
+
+.message-markdown :deep(h1),
+.message-markdown :deep(h2),
+.message-markdown :deep(h3),
+.message-markdown :deep(h4) {
+  margin: 12px 0 6px;
+  color: #27333e;
+  line-height: 1.35;
+}
+
+.message-markdown :deep(h1) {
+  font-size: 16px;
+}
+
+.message-markdown :deep(h2) {
+  font-size: 14px;
+}
+
+.message-markdown :deep(h3),
+.message-markdown :deep(h4) {
+  font-size: 12px;
+}
+
+.message-markdown :deep(ul),
+.message-markdown :deep(ol) {
+  padding-left: 20px;
+}
+
+.message-markdown :deep(li + li) {
+  margin-top: 3px;
+}
+
+.message-markdown :deep(blockquote) {
+  padding: 3px 8px;
+  border-left: 3px solid #a7c8c0;
+  background: #f1f6f5;
+  color: #65727e;
+}
+
+.message-markdown :deep(code) {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #e9eef2;
+  color: #2f4652;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.message-markdown :deep(pre) {
+  max-width: 100%;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid #d8e0e6;
+  border-radius: 4px;
+  background: #f4f6f8;
+}
+
+.message-markdown :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  color: #263640;
+  white-space: pre;
+}
+
+.message-markdown :deep(.table-scroll),
+.message-markdown :deep(.math-display) {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.message-markdown :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.message-markdown :deep(th),
+.message-markdown :deep(td) {
+  padding: 4px 6px;
+  border: 1px solid #d8e0e6;
+  text-align: left;
+}
+
+.message-markdown :deep(th) {
+  background: #eef3f5;
+}
+
+.message-markdown :deep(a) {
+  color: #147866;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.message-markdown :deep(img) {
+  max-width: 100%;
+  height: auto;
+}
+
+.tool-event-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.tool-event {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 6px;
+  border: 1px solid #dfe5ea;
+  border-radius: 3px;
+  background: #ffffff;
+}
+
+.event-status {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #1f8f78;
+}
+
+.tool-event.failed .event-status {
+  background: #c45b4b;
+}
+
+.tool-event.pending_confirmation .event-status {
+  background: #c18328;
+}
+
+.tool-event div {
+  display: grid;
+  min-width: 0;
+}
+
+.tool-event strong,
+.tool-event small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-event strong {
+  font-size: 10px;
+}
+
+.tool-event small {
+  color: #74808c;
+  font-size: 9px;
+}
+
+.tool-event button {
+  padding: 2px 5px;
+  border: 0;
+  background: transparent;
+  color: #147866;
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.citation-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.degraded-note {
+  margin-top: 8px;
+  padding: 5px 6px;
+  border-left: 2px solid #c18328;
+  background: #fff8eb;
+  color: #8b621f;
+  font-size: 10px;
+}
+
+.confirmation-card {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #e2c58d;
+  border-radius: 4px;
+  background: #fffaf0;
+}
+
+.confirmation-card header div {
+  display: grid;
+  gap: 2px;
+}
+
+.confirmation-card header span,
+.confirmation-card header small {
+  color: #99702d;
+  font-size: 9px;
+}
+
+.confirmation-card header strong {
+  font-size: 11px;
+}
+
+.confirmation-card pre {
+  max-height: 140px;
+  margin: 7px 0;
+  padding: 6px;
+  overflow: auto;
+  border: 1px solid #ece2cf;
+  background: #ffffff;
+  color: #58636e;
+  font-size: 9px;
+  white-space: pre-wrap;
+}
+
+.confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.confirmation-error {
+  margin: 6px 0 0;
+  color: #b34e3d;
+  font-size: 9px;
+}
+
+.persisted-tool {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+  padding: 6px 8px;
+  border-left: 2px solid #9aa7b2;
+  background: #f5f7f9;
+  color: #6f7b87;
+  font-size: 9px;
+}
+
+.persisted-tool code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinking-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  color: #788592;
+  font-size: 10px;
+}
+
+.thinking-row span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  animation: pulse 1.2s infinite ease-in-out;
+  background: #1f8f78;
+}
+
+.thinking-row span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking-row span:nth-child(3) {
+  margin-right: 4px;
+  animation-delay: 0.3s;
+}
+
+.composer {
+  padding: 8px;
+  border-top: 1px solid #d8dee6;
+  background: #f8f9fb;
+}
+
+.composer :deep(.el-textarea__inner) {
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px #cfd7df inset;
+  font-size: 12px;
+}
+
+.composer-footer {
+  margin-top: 6px;
+}
+
+.composer-footer span {
+  color: #7a8692;
+  font-size: 9px;
+}
+
+.empty-chat,
+.panel-state {
+  display: grid;
+  place-items: center;
+  color: #7a8692;
+  text-align: center;
+}
+
+.empty-chat {
+  min-height: 180px;
+  align-content: center;
+  gap: 6px;
+}
+
+.empty-chat svg {
+  width: 24px;
+  color: #1f8f78;
+}
+
+.empty-chat strong {
+  color: #3d4a56;
+  font-size: 12px;
+}
+
+.empty-chat span,
+.panel-state {
+  font-size: 10px;
+}
+
+.session-view,
+.memory-view {
+  display: grid;
+  min-height: 0;
+  grid-column: 1;
+  grid-row: 2 / 4;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.section-heading {
+  min-height: 32px;
+  padding: 0 9px;
+  border-bottom: 1px solid #e0e5ea;
+  color: #5d6975;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.section-heading label {
+  color: #7a8692;
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.session-list,
+.memory-list {
+  min-height: 0;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.session-item {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #3c4955;
+  cursor: pointer;
+  text-align: left;
+}
+
+.session-item:hover,
+.session-item.active {
+  background: #edf3f2;
+}
+
+.session-item.active {
+  box-shadow: inset 2px 0 #1f8f78;
+}
+
+.session-title {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-actions {
+  padding: 7px;
+  border-top: 1px solid #e0e5ea;
+}
+
+.memory-view {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.memory-create {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid #e0e5ea;
+}
+
+.memory-create > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.memory-create .el-select {
+  width: 100px;
+}
+
+.memory-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.memory-item {
+  position: relative;
+  padding: 8px 34px 8px 8px;
+  border: 1px solid #dde3e8;
+  border-radius: 4px;
+  background: #fbfcfd;
+}
+
+.memory-item > div {
+  justify-content: flex-start;
+  color: #7a8692;
+  font-size: 9px;
+}
+
+.scope-tag.global {
+  background: #eef1fa;
+  color: #596c9b;
+}
+
+.memory-item p {
+  margin: 7px 0 0;
+  color: #3d4a56;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.memory-item > .el-button {
+  position: absolute;
+  top: 4px;
+  right: 3px;
+}
+
+@keyframes pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 </style>
