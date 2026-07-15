@@ -126,6 +126,7 @@ class MinerUClient:
                 self.settings.backend,
                 self.settings.parse_method,
                 self.settings.language,
+                "assets-v1",
             )
         )
 
@@ -208,7 +209,7 @@ class MinerUClient:
             "return_md": "true",
             "return_content_list": "true",
             "return_middle_json": "false",
-            "return_images": "false",
+            "return_images": "true",
             "response_format_zip": "true",
         }
         for name, value in fields.items():

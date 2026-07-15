@@ -15,7 +15,7 @@ export function useImport(hasPaper: () => boolean, hasCode: () => boolean) {
     {
       index: '01',
       title: '导入论文 PDF',
-      description: '保留原文页视图，抽取章节、段落和页码；论文区只读展示。',
+      description: '读取 MinerU 结构化 Markdown、章节、公式、表格和图片；论文区只读展示。',
       status: hasPaper() ? '已解析' : '待上传',
       tagType: hasPaper() ? 'success' : 'info',
       action: hasPaper() ? '重新上传' : '上传 PDF',

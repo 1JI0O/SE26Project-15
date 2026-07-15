@@ -5,10 +5,10 @@ import {
   getPaper,
   getPaperParseJob,
   getPaperParseResult,
-  getWorkspacePaperPages,
+  getWorkspacePaperDocument,
   submitPaperParseJob,
 } from '@/api/paper-api'
-import type { PaperParseJob, WorkspacePaperPage } from '@/types/papers'
+import type { PaperParseJob, WorkspacePaperDocument } from '@/types/papers'
 
 const POLL_INTERVAL_MS = 800
 const PARSE_TIMEOUT_MS = 10 * 60 * 1000
@@ -22,39 +22,35 @@ function isNotFound(error: unknown): boolean {
 }
 
 export function usePaper(projectId: () => number) {
-  const paperPageData = ref<WorkspacePaperPage[]>([])
+  const paperDocument = ref<WorkspacePaperDocument | null>(null)
   const paperFilename = ref('')
   const paperAbstract = ref('')
   const parserName = ref('')
   const parseStatus = ref<PaperParseJob['status'] | 'idle'>('idle')
-  const activePaperPage = ref(1)
-  const activeBlockIndex = ref(-1)
+  const activeSectionId = ref('')
   const uploading = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  const paperPageNumbers = computed(() => paperPageData.value.map((p) => p.page_number))
-  const activePaperContent = computed(() =>
-    paperPageData.value.find((p) => p.page_number === activePaperPage.value),
-  )
-  const hasPaper = computed(() => paperPageData.value.length > 0)
+  const paperSections = computed(() => paperDocument.value?.sections ?? [])
+  const hasPaper = computed(() => Boolean(paperDocument.value?.markdown))
 
   async function loadPaperPages(): Promise<void> {
     loading.value = true
     error.value = null
     try {
-      const [pages, document] = await Promise.all([
-        getWorkspacePaperPages(projectId()),
+      const [structuredDocument, document] = await Promise.all([
+        getWorkspacePaperDocument(projectId()),
         getPaper(projectId()),
       ])
-      paperPageData.value = pages
+      paperDocument.value = structuredDocument
       paperFilename.value = document.filename
       paperAbstract.value = document.abstract
-      parserName.value = document.parser
+      parserName.value = `${document.parser} ${document.parser_version}`.trim()
       parseStatus.value = 'succeeded'
-      activePaperPage.value = pages[0]?.page_number ?? 1
+      activeSectionId.value = structuredDocument.sections[0]?.id ?? ''
     } catch (cause) {
-      paperPageData.value = []
+      paperDocument.value = null
       paperFilename.value = ''
       paperAbstract.value = ''
       parserName.value = ''
@@ -75,8 +71,8 @@ export function usePaper(projectId: () => number) {
     throw new Error('论文解析等待超时')
   }
 
-  function selectBlock(index: number): void {
-    activeBlockIndex.value = index
+  function selectSection(sectionId: string): void {
+    activeSectionId.value = sectionId
   }
 
   async function handleUpload(file: File): Promise<boolean> {
@@ -92,11 +88,11 @@ export function usePaper(projectId: () => number) {
         throw new Error(completed.error || '论文解析失败')
       }
       const result = await getPaperParseResult(projectId(), submitted.id)
-      paperPageData.value = result.pages
       paperFilename.value = result.document.filename
       paperAbstract.value = result.document.abstract
       parserName.value = `${result.parser} ${result.parser_version}`.trim()
-      activePaperPage.value = result.pages[0]?.page_number ?? 1
+      paperDocument.value = await getWorkspacePaperDocument(projectId())
+      activeSectionId.value = paperDocument.value.sections[0]?.id ?? ''
       ElMessage.success(completed.cached ? '论文解析完成（命中缓存）' : '论文解析完成')
       return true
     } catch (cause) {
@@ -110,21 +106,19 @@ export function usePaper(projectId: () => number) {
   }
 
   return {
-    paperPageData,
+    paperDocument,
     paperFilename,
     paperAbstract,
     parserName,
     parseStatus,
-    activePaperPage,
-    activeBlockIndex,
+    activeSectionId,
     uploading,
     loading,
     error,
-    paperPageNumbers,
-    activePaperContent,
+    paperSections,
     hasPaper,
     loadPaperPages,
     handleUpload,
-    selectBlock,
+    selectSection,
   }
 }

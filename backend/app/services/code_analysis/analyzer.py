@@ -58,9 +58,11 @@ def analyze_code_archive(
             if analysis.tree is not None:
                 python_sources.append((entry.display_path, source, analysis.tree))
 
+    from app.services.tensor_flow.architecture import build_architecture_index
     from app.services.tensor_flow.semantic import build_tensor_graph
 
     tensor_graph = build_tensor_graph(python_sources, symbols)
+    architecture_graph = build_architecture_index(python_sources, symbols)
     return {
         "file_tree": file_tree,
         "symbols": symbols,
@@ -68,6 +70,7 @@ def analyze_code_archive(
         "calls": calls,
         "pytorch_candidates": pytorch_candidates,
         "tensor_graph": tensor_graph,
+        "architecture_graph": architecture_graph,
         "archive_root": archive_root,
         "summary": {
             "file_count": len(file_tree),

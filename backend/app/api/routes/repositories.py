@@ -1,6 +1,6 @@
 import zipfile
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlmodel import Session, select
 
 from app.api.routes.helpers import parse_workspace_project_id
@@ -240,10 +240,19 @@ def save_code_file(
 @router.get("/workspace/tensor-flow", response_model=WorkspaceTensorFlowRead)
 def read_tensor_flow(
     project_id: str,
+    view: str = Query(default="architecture", pattern="^(architecture|debug)$"),
+    root_symbol: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> WorkspaceTensorFlowRead:
     numeric_id = parse_workspace_project_id(project_id)
     if numeric_id is None:
         return WorkspaceTensorFlowRead(**tensor_flow_payload(project_id))
     get_project_or_404(numeric_id, session)
-    return WorkspaceTensorFlowRead(**workspace_service.get_tensor_flow(session, numeric_id))
+    return WorkspaceTensorFlowRead(
+        **workspace_service.get_tensor_flow(
+            session,
+            numeric_id,
+            view=view,
+            root_symbol=root_symbol,
+        )
+    )

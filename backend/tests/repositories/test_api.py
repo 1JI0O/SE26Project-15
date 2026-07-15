@@ -46,8 +46,19 @@ def test_repository_analysis_and_layout_endpoints_return_real_graph() -> None:
     assert analysis.status_code == 200
     assert any(node["op"] == "add" for node in analysis.json()["tensor_graph"]["nodes"])
     assert layout.status_code == 200
-    assert layout.json()["renderer"] == "semantic-dag-v1"
+    assert layout.json()["renderer"] == "architecture-dag-v2"
+    assert layout.json()["view"] == "architecture"
+    assert len(layout.json()["nodes"]) <= 4
     assert all("x" in node and "source_path" in node for node in layout.json()["nodes"])
+
+    with TestClient(app) as client:
+        debug_layout = client.get(
+            f"/api/v1/projects/{project_id}/workspace/tensor-flow",
+            params={"view": "debug"},
+        )
+    assert debug_layout.status_code == 200
+    assert debug_layout.json()["renderer"] == "semantic-dag-v1"
+    assert any(node["op"] == "add" for node in debug_layout.json()["nodes"])
 
 
 def test_invalid_zip_has_clear_client_error() -> None:

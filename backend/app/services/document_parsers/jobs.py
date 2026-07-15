@@ -1,7 +1,9 @@
 import hashlib
 import json
 import os
+import re
 import threading
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -110,6 +112,73 @@ class PaperParsingService:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
+
+    def markdown_for_cache(self, cache_key: str) -> str | None:
+        archive_path = self.cache_root / f"{cache_key}.raw.zip"
+        if not archive_path.exists():
+            return None
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                candidates = [
+                    name
+                    for name in archive.namelist()
+                    if name.lower().endswith(".md") and not name.endswith("/")
+                ]
+                if not candidates:
+                    return None
+                preferred = min(candidates, key=lambda name: (name.count("/"), len(name)))
+                return archive.read(preferred).decode("utf-8")
+        except (OSError, UnicodeDecodeError, zipfile.BadZipFile, KeyError):
+            return None
+
+    def asset_for_cache(self, cache_key: str, asset_path: str) -> tuple[bytes, str] | None:
+        requested = Path(asset_path.replace("\\", "/"))
+        if requested.is_absolute() or ".." in requested.parts:
+            raise ValueError("Invalid paper asset path")
+        normalized = "/".join(part for part in requested.parts if part not in {"", "."})
+        if not normalized:
+            raise ValueError("Invalid paper asset path")
+
+        archive_path = self.cache_root / f"{cache_key}.raw.zip"
+        if archive_path.exists():
+            try:
+                with zipfile.ZipFile(archive_path) as archive:
+                    suffix = f"/{normalized}"
+                    candidates = [
+                        name
+                        for name in archive.namelist()
+                        if name == normalized or name.endswith(suffix)
+                    ]
+                    if candidates:
+                        member = min(candidates, key=len)
+                        info = archive.getinfo(member)
+                        if info.file_size > 25 * 1024 * 1024:
+                            raise ValueError("Paper asset exceeds the 25 MB limit")
+                        return archive.read(member), Path(member).name
+            except (OSError, zipfile.BadZipFile, KeyError):
+                pass
+
+        # Older local MinerU archives did not embed images, but the service kept
+        # content-addressed image files in its output directory.
+        filename = Path(normalized).name
+        if not re.fullmatch(r"[0-9a-fA-F]{32,}\.(?:png|jpe?g|webp|gif)", filename):
+            return None
+        configured_root = os.getenv("TRACELAB_MINERU_OUTPUT_ROOT")
+        output_roots = [Path(configured_root)] if configured_root else []
+        output_roots.extend(
+            [
+                self.root.parent.parent.parent / "output",
+                Path.cwd() / "output",
+                Path.cwd().parent / "output",
+            ]
+        )
+        for output_root in dict.fromkeys(output_roots):
+            if not output_root.exists():
+                continue
+            match = next(output_root.glob(f"*/*/auto/images/{filename}"), None)
+            if match is not None and match.stat().st_size <= 25 * 1024 * 1024:
+                return match.read_bytes(), filename
+        return None
 
     def _run(self, job_id: str) -> None:
         job = self.get(job_id)

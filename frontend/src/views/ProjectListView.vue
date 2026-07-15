@@ -1,36 +1,10 @@
 <template>
   <div class="project-page">
-    <section class="create-panel">
-      <div>
-        <h1>项目入口</h1>
-        <p>进入完整 UI 原型，查看论文原文、代码编辑区、追溯矩阵、流程图和冲突分析的最终工作台形态。</p>
-      </div>
-      <el-form class="create-form" :model="form" @submit.prevent>
-        <el-input v-model="form.name" placeholder="项目名称" />
-        <el-input v-model="form.description" placeholder="项目说明" />
-        <el-button type="primary" @click="submit">创建项目</el-button>
-      </el-form>
-    </section>
-
-    <section class="prototype-card">
-      <div>
-        <el-tag type="warning" effect="plain">Final UI Prototype</el-tag>
-        <h2>论文代码双向追溯完整工作台</h2>
-        <p>
-          这是面向最终目标的静态 UI：PDF 原文阅读、代码文件树、代码编辑页、追溯矩阵、流程图、魔改冲突分析和报告面板都已呈现。
-        </p>
-      </div>
-      <el-button type="primary" size="large" @click="openProject('prototype')">
-        进入完整 UI 原型
-      </el-button>
-    </section>
-
-    <el-skeleton v-if="store.loading" :rows="4" animated />
-    <el-empty v-else-if="store.projects.length === 0" description="暂无项目" />
-    <template v-else>
-      <section class="project-toolbar">
-        <div>
-          <h2>已创建项目</h2>
+    <section class="project-panel">
+      <header class="project-header">
+        <div class="header-title">
+          <el-icon><FolderOpened /></el-icon>
+          <h1>工作区</h1>
           <span>{{ store.projects.length }} 个项目</span>
         </div>
         <div v-if="managing" class="batch-actions">
@@ -39,48 +13,92 @@
           </el-checkbox>
           <span>已选择 {{ selectedIds.length }} 项</span>
           <el-button
+            size="small"
             type="danger"
             :icon="Delete"
             :disabled="selectedIds.length === 0"
             :loading="store.deleting"
             @click="confirmDelete"
           >
-            删除所选
+            删除
           </el-button>
-          <el-button @click="finishManaging">完成</el-button>
+          <el-button size="small" @click="finishManaging">完成</el-button>
         </div>
-        <el-button v-else :icon="EditPen" @click="managing = true">批量管理</el-button>
-      </section>
+        <el-button v-else size="small" :icon="EditPen" @click="managing = true">
+          管理项目
+        </el-button>
+      </header>
 
-      <section class="project-grid">
-        <article
-          v-for="project in store.projects"
-          :key="project.id"
-          class="project-card"
-          :class="{ selected: selectedIds.includes(project.id) }"
-        >
-          <el-checkbox
-            v-if="managing"
-            v-model="selectedIds"
-            class="project-selector"
-            :value="project.id"
-            :aria-label="`选择项目 ${project.name}`"
-          />
-          <div>
-            <h2>{{ project.name }}</h2>
-            <p>{{ project.description || '未填写项目说明' }}</p>
+      <el-form class="create-bar" :model="form" @submit.prevent="submit">
+        <div class="create-label">
+          <el-icon><Plus /></el-icon>
+          <span>新建项目</span>
+        </div>
+        <el-input v-model="form.name" size="small" placeholder="项目名称" />
+        <el-input
+          v-model="form.description"
+          class="description-input"
+          size="small"
+          placeholder="项目说明（可选）"
+        />
+        <el-button size="small" type="primary" native-type="submit">创建</el-button>
+      </el-form>
+
+      <div class="project-content">
+        <el-skeleton v-if="store.loading" class="project-loading" :rows="5" animated />
+        <el-empty v-else-if="store.projects.length === 0" description="暂无项目" />
+        <template v-else>
+          <div class="list-heading" aria-hidden="true">
+            <span>项目</span>
+            <span>说明</span>
+            <span>最近更新</span>
+            <span>操作</span>
           </div>
-          <el-button type="primary" plain @click="openProject(project.id)">
-            进入工作台
-          </el-button>
-        </article>
-      </section>
-    </template>
+          <div class="project-list">
+            <article
+              v-for="project in store.projects"
+              :key="project.id"
+              class="project-row"
+              :class="{ selected: selectedIds.includes(project.id) }"
+              @dblclick="openProject(project.id)"
+            >
+              <div class="project-primary">
+                <el-checkbox
+                  v-if="managing"
+                  v-model="selectedIds"
+                  :value="project.id"
+                  :aria-label="`选择项目 ${project.name}`"
+                  @dblclick.stop
+                />
+                <el-icon class="project-icon"><Folder /></el-icon>
+                <div>
+                  <strong :title="project.name">{{ project.name }}</strong>
+                  <small>#{{ project.id }}</small>
+                </div>
+              </div>
+              <p :title="project.description || '未填写项目说明'">
+                {{ project.description || '未填写项目说明' }}
+              </p>
+              <time :datetime="project.updated_at">{{ formatDate(project.updated_at) }}</time>
+              <el-button
+                class="open-button"
+                size="small"
+                text
+                type="primary"
+                :icon="ArrowRight"
+                aria-label="打开项目"
+                @click="openProject(project.id)"
+              />
+            </article>
+          </div>
+        </template>
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { Delete, EditPen } from '@element-plus/icons-vue'
+import { ArrowRight, Delete, EditPen, Folder, FolderOpened, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -126,8 +144,20 @@ async function submit() {
   await router.push({ name: 'workspace', params: { id: project.id } })
 }
 
-function openProject(projectId: number | string) {
+function openProject(projectId: number) {
   void router.push({ name: 'workspace', params: { id: projectId } })
+}
+
+function formatDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
 }
 
 function finishManaging() {
@@ -162,153 +192,241 @@ async function confirmDelete() {
 
 <style scoped>
 .project-page {
-  display: grid;
-  gap: 20px;
+  min-height: 100%;
+  padding: 22px;
+  background: #eef1f4;
 }
 
-.create-panel {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(320px, 560px);
-  gap: 24px;
-  align-items: end;
-  padding: 20px;
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
-  background: white;
-}
-
-.prototype-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 20px;
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
+.project-panel {
+  width: min(1160px, 100%);
+  min-height: 420px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid #d8dee6;
+  border-radius: 6px;
   background: #ffffff;
+  box-shadow: 0 1px 3px rgba(36, 49, 61, 0.05);
 }
 
-.prototype-card h2 {
-  margin: 10px 0 8px;
-  font-size: 22px;
-}
-
-.prototype-card p {
-  max-width: 780px;
-  margin: 0;
-  color: #667789;
-  line-height: 1.65;
-}
-
-h1 {
-  margin: 0;
-  font-size: 24px;
-}
-
-.create-panel p {
-  margin: 8px 0 0;
-  color: #667789;
-}
-
-.create-form {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 10px;
-}
-
-.project-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
-}
-
-.project-toolbar {
+.project-header,
+.create-bar {
   display: flex;
   align-items: center;
+  min-height: 42px;
+  padding: 0 12px;
+  border-bottom: 1px solid #d8dee6;
+}
+
+.project-header {
   justify-content: space-between;
   gap: 16px;
-  min-height: 46px;
+  background: #f7f8fa;
 }
 
-.project-toolbar > div:first-child {
+.header-title,
+.create-label,
+.batch-actions,
+.project-primary {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  align-items: center;
 }
 
-.project-toolbar h2 {
+.header-title {
+  min-width: 0;
+  gap: 8px;
+}
+
+.header-title .el-icon {
+  color: #1f8f78;
+  font-size: 16px;
+}
+
+.header-title h1 {
   margin: 0;
-  font-size: 19px;
+  font-size: 14px;
+  font-weight: 650;
 }
 
-.project-toolbar span {
+.header-title span,
+.batch-actions span {
   color: #71808f;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .batch-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  gap: 8px;
+  white-space: nowrap;
 }
 
-.project-card {
-  position: relative;
+.create-bar {
   display: grid;
-  gap: 16px;
+  grid-template-columns: 100px minmax(180px, 0.8fr) minmax(240px, 1.4fr) auto;
+  gap: 8px;
+  background: #fbfcfd;
+}
+
+.create-label {
+  gap: 6px;
+  color: #4d5d6c;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.project-content {
+  min-height: 334px;
+}
+
+.project-loading {
   padding: 18px;
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
-  background: white;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
-.project-card.selected {
-  border-color: #1f8f78;
-  box-shadow: 0 0 0 1px #1f8f78;
+.list-heading,
+.project-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(220px, 1.55fr) 150px 54px;
+  align-items: center;
 }
 
-.project-selector {
-  position: absolute;
-  top: 14px;
-  right: 14px;
+.list-heading {
+  min-height: 30px;
+  padding: 0 10px;
+  border-bottom: 1px solid #e3e7ec;
+  background: #f7f8fa;
+  color: #71808f;
+  font-size: 11px;
+  font-weight: 600;
 }
 
-.project-card h2 {
+.list-heading span:last-child {
+  text-align: center;
+}
+
+.project-row {
+  min-height: 54px;
+  padding: 0 10px;
+  border-bottom: 1px solid #edf0f3;
+  color: #344250;
+  transition: background 0.12s ease;
+}
+
+.project-row:last-child {
+  border-bottom: 0;
+}
+
+.project-row:hover,
+.project-row.selected {
+  background: #f1f8f6;
+}
+
+.project-row.selected {
+  box-shadow: inset 2px 0 #1f8f78;
+}
+
+.project-primary {
+  min-width: 0;
+  gap: 8px;
+  padding-right: 12px;
+}
+
+.project-primary > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.project-icon {
+  flex: 0 0 auto;
+  color: #1f8f78;
+  font-size: 16px;
+}
+
+.project-primary strong,
+.project-row p,
+.project-row time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-primary strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.project-primary small,
+.project-row time {
+  color: #82909d;
+  font-size: 11px;
+}
+
+.project-row p {
   margin: 0;
-  font-size: 18px;
-}
-
-.project-card p {
-  min-height: 44px;
-  margin: 8px 0 0;
+  padding-right: 18px;
   color: #667789;
-  line-height: 1.55;
+  font-size: 12px;
 }
 
-@media (max-width: 900px) {
-  .create-panel,
-  .create-form,
-  .prototype-card {
-    grid-template-columns: 1fr;
-    align-items: stretch;
+.open-button {
+  justify-self: center;
+}
+
+@media (max-width: 780px) {
+  .project-page {
+    padding: 12px;
   }
 
-  .prototype-card {
-    display: grid;
+  .create-bar {
+    grid-template-columns: 92px 1fr auto;
   }
 
-  .project-toolbar,
-  .batch-actions {
-    align-items: stretch;
+  .description-input {
+    display: none;
   }
 
-  .project-toolbar {
-    flex-direction: column;
+  .list-heading,
+  .project-row {
+    grid-template-columns: minmax(180px, 1fr) 130px 48px;
+  }
+
+  .list-heading span:nth-child(2),
+  .project-row p {
+    display: none;
+  }
+}
+
+@media (max-width: 540px) {
+  .project-header {
+    align-items: flex-start;
+    padding-top: 7px;
+    padding-bottom: 7px;
   }
 
   .batch-actions {
     flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .batch-actions > span {
+    display: none;
+  }
+
+  .create-bar {
+    grid-template-columns: 1fr auto;
+  }
+
+  .create-label {
+    display: none;
+  }
+
+  .list-heading,
+  .project-row {
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+
+  .list-heading span:nth-child(3),
+  .project-row time {
+    display: none;
   }
 }
 </style>

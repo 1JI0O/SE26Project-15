@@ -34,6 +34,7 @@ class FakeTransport:
             )
         if method == "POST" and url.endswith("/tasks"):
             assert body is not None and b'filename="sample.pdf"' in body
+            assert b'name="return_images"\r\n\r\ntrue' in body
             return HttpResponse(json.dumps({"task_id": "mineru-1"}).encode(), "application/json")
         if url.endswith("/tasks/mineru-1/result"):
             return self.result

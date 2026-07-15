@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+import mimetypes
+
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlmodel import Session, select
 
 from app.api.routes.helpers import parse_workspace_project_id
@@ -9,6 +11,7 @@ from app.schemas.papers import (
     PaperDocumentRead,
     PaperParseJobRead,
     PaperParseResultRead,
+    WorkspacePaperDocument,
     WorkspacePaperPage,
 )
 from app.services import workspace_service
@@ -17,6 +20,7 @@ from app.services.document_parsers.jobs import (
     PaperParsingService,
     get_paper_parsing_service,
 )
+from app.services.paper_markdown import build_fallback_markdown, extract_markdown_sections
 from app.services.paper_parser import parse_pdf
 from app.services.workspace_placeholder import workspace_payload
 from app.storage.file_store import save_upload
@@ -206,3 +210,63 @@ def read_paper_pages(
     if not pages:
         raise HTTPException(status_code=404, detail="Paper has not been uploaded or parsed")
     return [WorkspacePaperPage(**item) for item in pages]
+
+
+@router.get("/workspace/paper-document", response_model=WorkspacePaperDocument)
+def read_workspace_paper_document(
+    project_id: int,
+    session: Session = Depends(get_session),
+    service: PaperParsingService = Depends(get_paper_parsing_service),
+) -> WorkspacePaperDocument:
+    get_project_or_404(project_id, session)
+    document = session.exec(
+        select(PaperDocument)
+        .where(PaperDocument.project_id == project_id)
+        .order_by(PaperDocument.created_at.desc(), PaperDocument.id.desc())
+    ).first()
+    if document is None:
+        raise HTTPException(status_code=404, detail="Paper has not been uploaded or parsed")
+
+    mineru_markdown = service.markdown_for_cache(document.content_hash)
+    markdown = mineru_markdown or build_fallback_markdown(document)
+    return WorkspacePaperDocument(
+        document_id=document.id or 0,
+        filename=document.filename,
+        title=document.title,
+        markdown=markdown,
+        sections=extract_markdown_sections(markdown, document.sections_json),
+        asset_base_url=f"/projects/{project_id}/paper/assets",
+        parser=document.parser,
+        parser_version=document.parser_version,
+        source="mineru-markdown" if mineru_markdown else "normalized-fallback",
+    )
+
+
+@router.get("/paper/assets/{asset_path:path}")
+def read_paper_asset(
+    project_id: int,
+    asset_path: str,
+    session: Session = Depends(get_session),
+    service: PaperParsingService = Depends(get_paper_parsing_service),
+) -> Response:
+    get_project_or_404(project_id, session)
+    document = session.exec(
+        select(PaperDocument)
+        .where(PaperDocument.project_id == project_id)
+        .order_by(PaperDocument.created_at.desc(), PaperDocument.id.desc())
+    ).first()
+    if document is None:
+        raise HTTPException(status_code=404, detail="Paper has not been uploaded or parsed")
+    try:
+        asset = service.asset_for_cache(document.content_hash, asset_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Paper asset is unavailable")
+    content, filename = asset
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )

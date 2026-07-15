@@ -2,12 +2,13 @@
   <article class="flow-inspector">
     <header>
       <h2>节点定位</h2>
-      <el-tag type="info" effect="plain">GET /workspace/tensor-flow</el-tag>
     </header>
 
     <div v-if="node" class="inspector-body">
       <strong>{{ node.title }}</strong>
-      <span>{{ node.kindLabel }} · {{ node.tensorShape }}</span>
+      <span>
+        {{ node.external ? '外部/标准黑盒' : node.kindLabel }} · {{ node.tensorShape }}
+      </span>
       <p>{{ node.description }}</p>
       <dl>
         <div>
@@ -19,9 +20,14 @@
           <dd>{{ currentFilePath }}</dd>
         </div>
       </dl>
-      <el-button type="primary" plain @click="$emit('jumpToCode', node)">
-        跳转到对应代码
-      </el-button>
+      <div class="inspector-actions">
+        <el-button type="primary" plain @click="$emit('jumpToCode', node)">
+          跳转到代码
+        </el-button>
+        <el-button v-if="node.expandable" @click="$emit('expandNode', node)">
+          展开模块
+        </el-button>
+      </div>
     </div>
 
     <el-empty v-else description="点击图中节点查看代码定位" />
@@ -42,6 +48,7 @@ defineProps<{
 
 defineEmits<{
   jumpToCode: [node: TensorFlowNode]
+  expandNode: [node: TensorFlowNode]
 }>()
 </script>
 
@@ -111,6 +118,11 @@ defineEmits<{
   color: #24313d;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
+}
+
+.inspector-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .api-note {

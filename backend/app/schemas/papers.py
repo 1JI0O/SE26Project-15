@@ -26,6 +26,25 @@ class WorkspacePaperPage(BaseModel):
     anchors: list[dict[str, Any]]
 
 
+class WorkspacePaperSection(BaseModel):
+    id: str
+    title: str
+    level: int
+    page: int | None = None
+
+
+class WorkspacePaperDocument(BaseModel):
+    document_id: int
+    filename: str
+    title: str
+    markdown: str
+    sections: list[WorkspacePaperSection]
+    asset_base_url: str
+    parser: str
+    parser_version: str
+    source: str
+
+
 class PaperParseJobRead(BaseModel):
     id: str
     project_id: int

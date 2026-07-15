@@ -46,7 +46,9 @@
 | GET | `/projects/{project_id}/paper-jobs/{job_id}` | 已实现 | 查询 queued/running/succeeded/failed 状态 |
 | GET | `/projects/{project_id}/paper-jobs/{job_id}/result` | 已实现 | 获取统一文档结构与持久化文档 |
 | GET | `/projects/{project_id}/paper` | 已实现 | 获取最新论文元数据 |
-| GET | `/projects/{project_id}/workspace/paper-pages` | 已实现 | 获取只读页、正文和锚点 |
+| GET | `/projects/{project_id}/workspace/paper-document` | 已实现 | 获取 MinerU Markdown、章节树和资源基址 |
+| GET | `/projects/{project_id}/paper/assets/{asset_path}` | 已实现 | 获取 Markdown 引用的论文图片资源 |
+| GET | `/projects/{project_id}/workspace/paper-pages` | 兼容 | 获取分页正文和锚点，供旧追溯逻辑使用 |
 | POST | `/projects/{project_id}/paper` | 兼容 | 同步 pypdf 路径，当前 UI 不使用 |
 
 标准化结果会保存 MinerU 的 `parser`、`parser_version`、`pages`、段落与锚点；工作台优先读取该结果，不再用 pypdf 覆盖。详细配置与响应见 [contracts/papers.md](contracts/papers.md)。
@@ -62,7 +64,7 @@
 | GET | `/projects/{project_id}/workspace/code-tree` | 已实现 | 过滤后的完整层级文件树 |
 | GET | `/projects/{project_id}/workspace/code-files/{file_path}` | 已实现 | 安全读取文本代码文件 |
 | PUT | `/projects/{project_id}/workspace/code-files/{file_path}` | 已实现 | 保存编辑、递增修订号并使旧追溯 stale |
-| GET | `/projects/{project_id}/workspace/tensor-flow` | 已实现 | 布局后的可交互张量图与代码定位 |
+| GET | `/projects/{project_id}/workspace/tensor-flow` | 已实现 | 分层模型架构图；支持模块下钻、算子调试图与代码定位 |
 
 仓库过滤、路径约束和图结构详见 [contracts/repositories.md](contracts/repositories.md)。
 

@@ -1,7 +1,20 @@
 import { computed, ref } from 'vue'
 import { getWorkspaceTensorFlow } from '@/api/repository-api'
 
-export type TensorFlowNodeKind = 'input' | 'operation' | 'branch' | 'merge' | 'output'
+export type TensorFlowNodeKind =
+  | 'input'
+  | 'component'
+  | 'operation'
+  | 'branch'
+  | 'merge'
+  | 'output'
+export type TensorFlowView = 'architecture' | 'debug'
+
+export interface TensorFlowRoot {
+  symbolId: string
+  label: string
+  sourcePath: string
+}
 
 export interface TensorFlowNode {
   id: string
@@ -14,6 +27,9 @@ export interface TensorFlowNode {
   sourcePath: string
   lineStart: number
   lineEnd: number
+  componentSymbolId: string | null
+  expandable: boolean
+  external: boolean
   x: number
   y: number
   width: number
@@ -42,6 +58,7 @@ export interface TensorFlowEdgeLabel {
 
 const KIND_LABELS: Record<TensorFlowNodeKind, string> = {
   input: 'Input',
+  component: 'Module',
   operation: 'Operation',
   branch: 'Branch',
   merge: 'Merge',
@@ -49,7 +66,13 @@ const KIND_LABELS: Record<TensorFlowNodeKind, string> = {
 }
 
 function normalizeKind(value: string): TensorFlowNodeKind {
-  if (value === 'input' || value === 'branch' || value === 'merge' || value === 'output') {
+  if (
+    value === 'input' ||
+    value === 'component' ||
+    value === 'branch' ||
+    value === 'merge' ||
+    value === 'output'
+  ) {
     return value
   }
   return 'operation'
@@ -64,7 +87,7 @@ function buildEdgeLabel(edge: TensorFlowEdge): TensorFlowEdgeLabel {
   const points = edge.points
   const middle = points[Math.floor((points.length - 1) / 2)] ?? [0, 0]
   const next = points[Math.min(Math.floor((points.length - 1) / 2) + 1, points.length - 1)] ?? middle
-  const text = edge.label || 'tensor'
+  const text = edge.label
   const x = (middle[0] + next[0]) / 2
   const y = (middle[1] + next[1]) / 2 - 12
   const rectWidth = Math.max(text.length * 7.2 + 14, 58)
@@ -89,16 +112,34 @@ export function useTensorFlow(projectId: () => number) {
   const error = ref<string | null>(null)
   const degraded = ref(false)
   const renderer = ref('')
+  const currentView = ref<TensorFlowView>('architecture')
+  const rootSymbol = ref<string | null>(null)
+  const rootLabel = ref('')
+  const availableRoots = ref<TensorFlowRoot[]>([])
+  const navigationStack = ref<TensorFlowRoot[]>([])
 
-  const edgeLabels = computed(() => edges.value.map(buildEdgeLabel))
+  const edgeLabels = computed(() => edges.value.filter((edge) => edge.label).map(buildEdgeLabel))
 
-  async function loadTensorFlow(): Promise<void> {
+  async function loadTensorFlow(
+    options: { view?: TensorFlowView; rootSymbol?: string | null } = {},
+  ): Promise<void> {
     loading.value = true
     error.value = null
     try {
-      const payload = await getWorkspaceTensorFlow(projectId())
+      const payload = await getWorkspaceTensorFlow(projectId(), {
+        view: options.view ?? currentView.value,
+        rootSymbol: options.rootSymbol === undefined ? rootSymbol.value : options.rootSymbol,
+      })
       renderer.value = payload.renderer
-      degraded.value = payload.renderer !== 'semantic-dag-v1'
+      currentView.value = payload.view
+      rootSymbol.value = payload.root_symbol
+      rootLabel.value = payload.root_label || '模型架构'
+      availableRoots.value = payload.available_roots.map((root) => ({
+        symbolId: root.symbol_id,
+        label: root.label,
+        sourcePath: root.source_path,
+      }))
+      degraded.value = !['architecture-dag-v2', 'semantic-dag-v1'].includes(payload.renderer)
       nodes.value = payload.nodes.map((node) => {
         const kind = normalizeKind(node.kind)
         return {
@@ -112,6 +153,9 @@ export function useTensorFlow(projectId: () => number) {
           sourcePath: node.source_path,
           lineStart: node.line_start,
           lineEnd: node.line_end,
+          componentSymbolId: node.component_symbol_id,
+          expandable: node.expandable,
+          external: node.external,
           x: node.x,
           y: node.y,
           width: node.width,
@@ -130,7 +174,7 @@ export function useTensorFlow(projectId: () => number) {
       nodes.value = []
       edges.value = []
       selectedNode.value = null
-      error.value = '张量流分析结果加载失败'
+      error.value = '模型架构分析结果加载失败'
       console.error(cause)
     } finally {
       loading.value = false
@@ -145,6 +189,33 @@ export function useTensorFlow(projectId: () => number) {
     selectedNode.value = node
   }
 
+  async function expandNode(node: TensorFlowNode): Promise<void> {
+    if (!node.expandable || !node.componentSymbolId) return
+    if (rootSymbol.value) {
+      navigationStack.value.push({
+        symbolId: rootSymbol.value,
+        label: rootLabel.value,
+        sourcePath: node.sourcePath,
+      })
+    }
+    await loadTensorFlow({ view: 'architecture', rootSymbol: node.componentSymbolId })
+  }
+
+  async function navigateBack(): Promise<void> {
+    const parent = navigationStack.value.pop()
+    if (!parent) return
+    await loadTensorFlow({ view: 'architecture', rootSymbol: parent.symbolId })
+  }
+
+  async function selectRoot(symbolId: string): Promise<void> {
+    navigationStack.value = []
+    await loadTensorFlow({ view: 'architecture', rootSymbol: symbolId })
+  }
+
+  async function setView(view: TensorFlowView): Promise<void> {
+    await loadTensorFlow({ view, rootSymbol: rootSymbol.value })
+  }
+
   return {
     nodes,
     edges,
@@ -153,9 +224,18 @@ export function useTensorFlow(projectId: () => number) {
     error,
     degraded,
     renderer,
+    currentView,
+    rootSymbol,
+    rootLabel,
+    availableRoots,
+    navigationStack,
     edgeLabels,
     edgePath,
     selectNode,
+    expandNode,
+    navigateBack,
+    selectRoot,
+    setView,
     loadTensorFlow,
   }
 }

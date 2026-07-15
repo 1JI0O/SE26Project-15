@@ -1,17 +1,13 @@
 <template>
-  <div class="app-shell">
+  <div :class="['app-shell', { 'workspace-mode': isWorkspace }]">
     <header class="topbar">
       <router-link class="brand" to="/">
         <span class="brand-mark">T</span>
-        <span>
-          <strong>论文代码双向追溯 Web 工作台</strong>
-          <small>Full UI Prototype</small>
-        </span>
+        <strong>TraceLab</strong>
       </router-link>
       <div class="topbar-actions">
-        <el-tag effect="plain" type="success">完整 UI 原型</el-tag>
         <el-tooltip content="集成设置" placement="bottom">
-          <el-button :icon="Setting" aria-label="集成设置" @click="settingsOpen = true" />
+          <el-button text :icon="Setting" aria-label="集成设置" @click="settingsOpen = true" />
         </el-tooltip>
       </div>
     </header>
@@ -24,58 +20,57 @@
 
 <script setup lang="ts">
 import { Setting } from '@element-plus/icons-vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
 import IntegrationSettingsDialog from '@/features/settings/IntegrationSettingsDialog.vue'
 
 const settingsOpen = ref(false)
+const route = useRoute()
+const isWorkspace = computed(() => route.name === 'workspace')
 </script>
 
 <style scoped>
 .app-shell {
-  min-height: 100vh;
-  background: #f6f8fa;
+  display: grid;
+  grid-template-rows: 38px minmax(0, 1fr);
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  background: #eef1f4;
   color: #24313d;
 }
 
 .topbar {
-  position: sticky;
-  top: 0;
   z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  height: 64px;
-  padding: 0 28px;
-  border-bottom: 1px solid #dce3ea;
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(10px);
+  gap: 12px;
+  height: 38px;
+  padding: 0 10px;
+  border-bottom: 1px solid #d8dee6;
+  background: #f7f8fa;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   color: inherit;
+  font-size: 13px;
   text-decoration: none;
-}
-
-.brand small {
-  display: block;
-  margin-top: 2px;
-  color: #71808f;
-  font-size: 12px;
 }
 
 .brand-mark {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 24px;
+  height: 24px;
   place-items: center;
-  border-radius: 8px;
+  border-radius: 5px;
   background: #1f8f78;
   color: white;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -86,21 +81,24 @@ const settingsOpen = ref(false)
 }
 
 .workspace {
-  width: min(1440px, calc(100% - 40px));
-  margin: 0 auto;
-  padding: 24px 0 40px;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+}
+
+.workspace-mode {
+  background: #eef1f4;
+}
+
+.workspace-mode .workspace {
+  overflow: hidden;
 }
 
 @media (max-width: 720px) {
   .topbar {
-    height: auto;
-    padding: 12px 16px;
-    align-items: flex-start;
-  }
-
-  .workspace {
-    width: min(100% - 24px, 1440px);
-    padding-top: 16px;
+    padding: 0 8px;
   }
 }
 </style>

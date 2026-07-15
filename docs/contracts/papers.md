@@ -29,6 +29,7 @@ mineru-api --host 127.0.0.1 --port 8001 --enable-vlm-preload true
 | `TRACELAB_MINERU_TASK_TIMEOUT` | `600` | 完整解析任务超时（秒） |
 | `TRACELAB_MINERU_POLL_INTERVAL` | `1` | MinerU 状态轮询间隔（秒） |
 | `TRACELAB_PAPER_JOB_ROOT` | `./data/paper-jobs` | 任务和解析缓存目录 |
+| `TRACELAB_MINERU_OUTPUT_ROOT` | 自动探测仓库 `output/` | 兼容读取旧版本地 MinerU 未打包进 ZIP 的图片 |
 
 使用官方 API 时只需在后端进程环境中配置：
 
@@ -54,6 +55,15 @@ export TRACELAB_MINERU_API_TOKEN='<从 MinerU 控制台获取>'
 
 结果包含持久化后的论文记录、解析器版本和统一页块结构。块坐标归一化到
 `0..1`，页码从 1 开始，块 ID 格式为 `p{page}-b{order}`。
+
+工作台按章节读取 MinerU 原始 Markdown：
+
+`GET /api/v1/projects/{project_id}/workspace/paper-document`
+
+响应包含 `markdown`、带层级和页码的 `sections`、`asset_base_url` 及解析来源。
+Markdown 中的图片通过 `GET /api/v1/projects/{project_id}/paper/assets/{asset_path}`
+按需读取；表格、行内/块级公式由前端 Markdown 阅读器渲染。旧的分页接口继续保留给
+追溯兼容逻辑，但不再作为论文阅读器的数据源。
 
 ## 缓存与降级
 

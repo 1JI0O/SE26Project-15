@@ -132,7 +132,7 @@ def build_import_steps(
         {
             "index": "01",
             "title": "导入论文 PDF",
-            "description": "保留原文页视图，抽取章节、段落和页码；论文区只读展示。",
+            "description": "读取 MinerU 结构化 Markdown、章节、公式、表格和图片；论文区只读展示。",
             "status": paper_status,
             "tag_type": paper_tag,
             "action": "重新上传" if paper else "上传 PDF",
@@ -387,18 +387,83 @@ def save_code_file(
 def build_tensor_flow_payload(
     code: CodeRepository | None,
     project_id: str,
+    *,
+    view: str = "architecture",
+    root_symbol: str | None = None,
 ) -> dict[str, Any]:
     if code is None:
-        return layout_tensor_graph({"nodes": [], "edges": []}, project_id)
+        return layout_tensor_graph(
+            {"nodes": [], "edges": []},
+            project_id,
+            renderer="architecture-dag-v2",
+            view="architecture",
+        )
     analysis = analyze_code_archive(
         code.storage_path,
         edits_root=_repository_edits_root(code),
     )
-    return layout_tensor_graph(analysis["tensor_graph"], project_id)
+    architecture = analysis.get("architecture_graph", {})
+    graphs = architecture.get("graphs", {})
+    selected_root = root_symbol if root_symbol in graphs else architecture.get("default_root")
+    selected_graph = graphs.get(selected_root, {"nodes": [], "edges": []})
+    roots = list(architecture.get("roots", []))
+    if selected_root and not any(root.get("symbol_id") == selected_root for root in roots):
+        graph_nodes = selected_graph.get("nodes", [])
+        roots.append(
+            {
+                "symbol_id": selected_root,
+                "label": selected_graph.get("root_label") or selected_root.rsplit("::", 1)[-1],
+                "source_path": graph_nodes[0].get("source_path", "") if graph_nodes else "",
+                "score": 0,
+            }
+        )
+    if view == "debug":
+        execution_symbol = selected_graph.get("execution_symbol")
+        raw_graph = analysis["tensor_graph"]
+        node_ids = {
+            str(node["id"])
+            for node in raw_graph.get("nodes", [])
+            if not execution_symbol or node.get("symbol_id") == execution_symbol
+        }
+        debug_graph = {
+            "nodes": [node for node in raw_graph.get("nodes", []) if str(node["id"]) in node_ids],
+            "edges": [
+                edge
+                for edge in raw_graph.get("edges", [])
+                if str(edge["source"]) in node_ids and str(edge["target"]) in node_ids
+            ],
+            "root_symbol": selected_root,
+            "root_label": selected_graph.get("root_label"),
+        }
+        return layout_tensor_graph(
+            debug_graph,
+            project_id,
+            renderer="semantic-dag-v1",
+            view="debug",
+            available_roots=roots,
+        )
+    return layout_tensor_graph(
+        selected_graph,
+        project_id,
+        renderer="architecture-dag-v2",
+        view="architecture",
+        available_roots=roots,
+    )
 
 
-def get_tensor_flow(session: Session, project_id: int) -> dict[str, Any]:
-    return build_tensor_flow_payload(_latest_code(session, project_id), str(project_id))
+def get_tensor_flow(
+    session: Session,
+    project_id: int,
+    *,
+    view: str = "architecture",
+    root_symbol: str | None = None,
+) -> dict[str, Any]:
+    return build_tensor_flow_payload(
+        _latest_code(session, project_id),
+        str(project_id),
+        view=view,
+        root_symbol=root_symbol,
+    )
 
 
 def get_code_analysis(session: Session, project_id: int) -> dict[str, Any] | None:
