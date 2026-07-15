@@ -65,10 +65,26 @@
             @click="$emit('nodeClick', node)"
             @keydown.enter.prevent="$emit('nodeClick', node)"
           >
+            <title>{{ node.title }} · {{ node.kindLabel }} · {{ node.tensorShape }} · {{ node.sourcePath }}:{{ node.lineStart }}</title>
             <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="10" />
-            <text :x="node.x + 16" :y="node.y + 26" class="node-kind">{{ node.kindLabel }}</text>
-            <text :x="node.x + 16" :y="node.y + 56" class="node-title">{{ node.title }}</text>
-            <text :x="node.x + 16" :y="node.y + 84" class="node-detail">{{ node.detail }}</text>
+            <text
+              :ref="(el) => registerText(node.id, 'kind', el as SVGTextElement)"
+              :x="node.x + 12"
+              :y="node.y + 24"
+              class="node-kind"
+            >{{ node.kindLabel }}</text>
+            <text
+              :ref="(el) => registerText(node.id, 'title', el as SVGTextElement)"
+              :x="node.x + 12"
+              :y="node.y + 50"
+              class="node-title"
+            >{{ node.title }}</text>
+            <text
+              :ref="(el) => registerText(node.id, 'detail', el as SVGTextElement)"
+              :x="node.x + 12"
+              :y="node.y + 74"
+              class="node-detail"
+            >{{ node.detail }}</text>
           </g>
         </g>
         <g class="edge-label-layer">
@@ -97,7 +113,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onMounted, watch } from 'vue'
 import type { TensorFlowEdge, TensorFlowEdgeLabel, TensorFlowNode } from '@/composables/useTensorFlow'
 
 const props = defineProps<{
@@ -120,6 +136,49 @@ const viewBox = computed(() => {
 defineEmits<{
   nodeClick: [node: TensorFlowNode]
 }>()
+
+// Track text elements that need fitting
+const textRefs = new Map<string, SVGTextElement>()
+
+function registerText(nodeId: string, slot: string, el: SVGTextElement | null): void {
+  const key = `${nodeId}:${slot}`
+  if (el) {
+    textRefs.set(key, el)
+  } else {
+    textRefs.delete(key)
+  }
+}
+
+/**
+ * After render, measure each text element's natural width.
+ * If it exceeds the node width, set textLength to compress it.
+ * Uses SVG's native lengthAdjust="spacingAndGlyphs" for clean scaling.
+ */
+function fitTextToNodes(): void {
+  for (const node of props.nodes) {
+    const maxWidth = node.width - 24 // padding
+    for (const slot of ['kind', 'title', 'detail'] as const) {
+      const el = textRefs.get(`${node.id}:${slot}`)
+      if (!el) continue
+      // Remove any previous textLength to measure natural width
+      el.removeAttribute('textLength')
+      el.removeAttribute('lengthAdjust')
+      const naturalWidth = el.getComputedTextLength()
+      if (naturalWidth > maxWidth) {
+        el.setAttribute('textLength', String(maxWidth))
+        el.setAttribute('lengthAdjust', 'spacingAndGlyphs')
+      }
+    }
+  }
+}
+
+onMounted(() => {
+  nextTick(() => fitTextToNodes())
+})
+
+watch(() => props.nodes, () => {
+  nextTick(() => fitTextToNodes())
+}, { deep: true })
 </script>
 
 <style scoped>
@@ -232,7 +291,7 @@ defineEmits<{
 
 .node-title {
   fill: #24313d;
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
 }
 

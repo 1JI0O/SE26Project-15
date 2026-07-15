@@ -40,6 +40,7 @@
       </div>
 
       <div class="pdf-reader">
+        <!-- Page rail -->
         <aside class="page-rail">
           <button
             v-for="page in pageNumbers"
@@ -59,7 +60,13 @@
             <p v-if="activePage === 1 && abstract" class="paper-abstract">
               {{ abstract }}
             </p>
-            <section v-for="(paragraph, index) in activeContent.body" :key="index" class="paper-section">
+            <section
+              v-for="(paragraph, index) in activeContent.body"
+              :key="index"
+              :class="['paper-section', { highlighted: activeBlockIndex === index }]"
+              :ref="(el) => registerBlockRef(index, el as HTMLElement)"
+              @click="$emit('selectBlock', index)"
+            >
               <p>{{ paragraph }}</p>
             </section>
           </div>
@@ -71,6 +78,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { WorkspacePaperPage } from '@/types/papers'
 
 defineProps<{
@@ -84,12 +92,33 @@ defineProps<{
   error: string | null
   parser: string
   parseStatus: string
+  activeBlockIndex: number
 }>()
 
 defineEmits<{
   'update:activePage': [page: number]
+  selectBlock: [index: number]
   retry: []
 }>()
+
+const blockRefs = ref<Map<number, HTMLElement>>(new Map())
+
+function registerBlockRef(index: number, el: HTMLElement | null): void {
+  if (el) {
+    blockRefs.value.set(index, el)
+  } else {
+    blockRefs.value.delete(index)
+  }
+}
+
+function scrollToBlock(index: number): void {
+  const el = blockRefs.value.get(index)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+defineExpose({ scrollToBlock })
 </script>
 
 <style scoped>
@@ -244,6 +273,22 @@ defineEmits<{
   color: #2d3b48;
   font-family: Georgia, "Times New Roman", serif;
   line-height: 1.8;
+}
+
+.paper-section {
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.paper-section:hover {
+  background: rgba(31, 143, 120, 0.04);
+}
+
+.paper-section.highlighted {
+  background: rgba(31, 143, 120, 0.1);
+  border-left: 3px solid #1f8f78;
 }
 
 @media (max-width: 1180px) {

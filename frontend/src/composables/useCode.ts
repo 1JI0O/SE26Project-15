@@ -274,16 +274,35 @@ export function useCode(projectId: () => number) {
     if (!selectedFile.value) return
     saving.value = true
     try {
-      await saveWorkspaceCodeFile(projectId(), selectedFile.value.path, editorContentBuffer)
+      const result = await saveWorkspaceCodeFile(projectId(), selectedFile.value.path, editorContentBuffer)
       selectedFile.value.content = editorContentBuffer
       editorContent.value = editorContentBuffer
       isEditorDirty.value = false
+      // Refresh version status after save
+      if (result.status) {
+        selectedFile.value.status = result.message ?? '已保存'
+        selectedFile.value.statusType = 'success'
+      }
       ElMessage.success('代码编辑已保存')
     } catch (e) {
       ElMessage.error('保存失败')
       console.error(e)
     } finally {
       saving.value = false
+    }
+  }
+
+  async function refreshFileStatus(path: string): Promise<void> {
+    try {
+      const payload = await getWorkspaceCodeFile(projectId(), path)
+      const existing = codeFiles.value.find(f => f.path === path)
+      if (existing) {
+        existing.status = payload.status
+        existing.statusType = payload.status_type as TagType
+        existing.badge = payload.badge
+      }
+    } catch {
+      // silent fail for refresh
     }
   }
 
@@ -350,6 +369,7 @@ export function useCode(projectId: () => number) {
     saveEditorBuffer,
     loadCodeTree,
     openCodeFile,
+    refreshFileStatus,
     handleUpload,
     handleGitHubImport,
   }

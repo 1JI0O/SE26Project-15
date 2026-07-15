@@ -7,6 +7,7 @@
         <div class="title-row">
           <h1>论文代码双向追溯工作台</h1>
           <el-tag effect="plain" type="warning">最终 UI 演示版</el-tag>
+          <el-tag v-if="desktop.isDesktop.value" effect="plain" type="success">桌面模式</el-tag>
         </div>
         <p>
           输入论文 PDF 与代码 ZIP 后，左侧只读展示论文原文，右侧以 IDE 方式展示过滤后的代码仓库、
@@ -64,7 +65,9 @@
         :error="paper.error.value"
         :parser="paper.parserName.value"
         :parse-status="paper.parseStatus.value"
+        :active-block-index="paper.activeBlockIndex.value"
         @update:active-page="(p) => (paper.activePaperPage.value = p)"
+        @select-block="paper.selectBlock"
         @retry="paper.loadPaperPages"
       />
 
@@ -118,6 +121,7 @@
           />
 
           <CodeEditor
+            ref="codeEditorRef"
             :file="code.selectedFile.value"
             :content="code.editorContent.value"
             :is-dirty="code.isEditorDirty.value"
@@ -146,6 +150,7 @@
           :degraded="trace.degraded.value"
           @suggest="trace.generateSuggestions(true)"
           @review="trace.reviewTrace"
+          @select-row="onTraceRowSelect"
         />
         <article class="assistant-panel">
           <h2>候选生成状态</h2>
@@ -187,7 +192,7 @@
       <ReportPanel v-else-if="activeInsight === 'report'" :cards="insights.reportCards.value" />
 
       <AgentPanel
-        v-else
+        v-else-if="activeInsight === 'agent'"
         :project-id="workspace.projectId.value"
         :paper-ref="trace.traceRows.value[0]?.paper"
         :code-ref="code.selectedFile.value?.symbol || code.selectedPath.value"
@@ -195,11 +200,20 @@
         @executed="reloadAfterAgentAction"
       />
     </InsightDock>
+
+    <!-- Evidence drawer -->
+    <EvidenceDrawer
+      :visible="evidenceDrawerVisible"
+      :row="selectedTraceRow"
+      @close="evidenceDrawerVisible = false"
+      @confirm="onEvidenceConfirm"
+      @reject="onEvidenceReject"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 // Composables
@@ -223,8 +237,10 @@ import InsightDock from '@/features/tracing/InsightDock.vue'
 import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
 import ConflictPanel from '@/features/tracing/ConflictPanel.vue'
 import ReportPanel from '@/features/tracing/ReportPanel.vue'
+import EvidenceDrawer from '@/features/tracing/EvidenceDrawer.vue'
 import AgentPanel from '@/features/agent/AgentPanel.vue'
 import type { TensorFlowNode } from '@/composables/useTensorFlow'
+import type { TraceRowView } from '@/composables/useTrace'
 
 // Initialize composables
 const workspace = useWorkspace()
@@ -252,6 +268,13 @@ const insightTabs = [
   { key: 'report', label: '报告与质量门禁' },
   { key: 'agent', label: '论文与代码 Agent' },
 ]
+
+// Evidence drawer state
+const evidenceDrawerVisible = ref(false)
+const selectedTraceRow = ref<TraceRowView | null>(null)
+
+// Code editor ref for line jumping
+const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null)
 
 // File input refs
 const paperInputRef = ref<HTMLInputElement | null>(null)
@@ -329,11 +352,43 @@ async function onCodeSelected(event: Event): Promise<void> {
 // Tensor flow handlers
 function onTensorNodeClick(node: TensorFlowNode): void {
   tensorFlow.selectNode(node)
-  void code.openCodeFile(node.sourcePath)
+  void jumpToCode(node.sourcePath, node.lineStart)
 }
 
 function onTensorJumpToCode(node: TensorFlowNode): void {
-  void code.openCodeFile(node.sourcePath)
+  void jumpToCode(node.sourcePath, node.lineStart)
+}
+
+async function jumpToCode(path: string, line: number): Promise<void> {
+  await code.openCodeFile(path)
+  await nextTick()
+  codeEditorRef.value?.goToLine(line)
+}
+
+// Trace evidence handlers
+function onTraceRowSelect(row: TraceRowView): void {
+  selectedTraceRow.value = row
+  evidenceDrawerVisible.value = true
+}
+
+async function onEvidenceConfirm(row: TraceRowView): Promise<void> {
+  if (!row.id) {
+    ElMessage.info('当前为预览数据，生成追溯候选后才能审阅')
+    return
+  }
+  await trace.reviewTrace(row.id, 'accepted')
+  ElMessage.success(`已确认追溯关系: ${row.paper} ↔ ${row.code}`)
+  evidenceDrawerVisible.value = false
+}
+
+async function onEvidenceReject(row: TraceRowView): Promise<void> {
+  if (!row.id) {
+    ElMessage.info('当前为预览数据，生成追溯候选后才能审阅')
+    return
+  }
+  await trace.reviewTrace(row.id, 'rejected')
+  ElMessage.warning(`已驳回追溯关系: ${row.paper} ↔ ${row.code}`)
+  evidenceDrawerVisible.value = false
 }
 
 async function onGitHubImport(): Promise<void> {

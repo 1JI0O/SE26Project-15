@@ -28,6 +28,7 @@ export function usePaper(projectId: () => number) {
   const parserName = ref('')
   const parseStatus = ref<PaperParseJob['status'] | 'idle'>('idle')
   const activePaperPage = ref(1)
+  const activeBlockIndex = ref(-1)
   const uploading = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -74,6 +75,10 @@ export function usePaper(projectId: () => number) {
     throw new Error('论文解析等待超时')
   }
 
+  function selectBlock(index: number): void {
+    activeBlockIndex.value = index
+  }
+
   async function handleUpload(file: File): Promise<boolean> {
     uploading.value = true
     error.value = null
@@ -111,6 +116,7 @@ export function usePaper(projectId: () => number) {
     parserName,
     parseStatus,
     activePaperPage,
+    activeBlockIndex,
     uploading,
     loading,
     error,
@@ -119,5 +125,6 @@ export function usePaper(projectId: () => number) {
     hasPaper,
     loadPaperPages,
     handleUpload,
+    selectBlock,
   }
 }

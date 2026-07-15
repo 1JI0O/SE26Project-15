@@ -3,7 +3,7 @@
     <header>
       <div>
         <h2>双向追溯矩阵</h2>
-        <p>论文段落、公式、图表与代码文件/符号的关联审阅队列。</p>
+        <p>论文段落、公式、图表与代码文件/符号的关联审阅队列。点击行查看证据详情。</p>
       </div>
       <el-button type="primary" :loading="generating" @click="$emit('suggest')">
         生成候选
@@ -38,7 +38,12 @@
         <span>状态 / 来源</span>
         <span>审阅</span>
       </div>
-      <div v-for="row in rows" :key="`${row.paper}-${row.code}`" class="trace-row">
+      <div
+        v-for="(row, index) in rows"
+        :key="`${row.paper}-${row.code}`"
+        class="trace-row clickable"
+        @click="$emit('selectRow', row, index)"
+      >
         <span :title="row.rationale">{{ row.paper }}</span>
         <span :title="row.rationale">{{ row.code }}</span>
         <span>{{ row.type }} · {{ row.evidenceCount }} 证据</span>
@@ -51,10 +56,10 @@
         </span>
         <span class="review-actions">
           <template v-if="row.id && row.status === 'proposed'">
-            <el-button size="small" text type="danger" @click="$emit('review', row.id, 'rejected')">
+            <el-button size="small" text type="danger" @click.stop="$emit('review', row.id, 'rejected')">
               拒绝
             </el-button>
-            <el-button size="small" text type="success" @click="$emit('review', row.id, 'accepted')">
+            <el-button size="small" text type="success" @click.stop="$emit('review', row.id, 'accepted')">
               接受
             </el-button>
           </template>
@@ -82,6 +87,7 @@ defineProps<{
 defineEmits<{
   suggest: []
   review: [traceId: string, status: Extract<TraceStatus, 'accepted' | 'rejected'>]
+  selectRow: [row: TraceRowView, index: number]
 }>()
 
 function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'info' | 'danger' {
@@ -161,11 +167,27 @@ function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'in
   color: #667789;
 }
 
+.trace-row.clickable {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 12px 8px;
+  transition: background 0.15s ease;
+}
+
+.trace-row.clickable:hover {
+  background: #f0faf7;
+}
+
 .trace-head {
   margin-top: 12px;
   color: #667789;
   font-size: 12px;
   font-weight: 700;
+  cursor: default;
+}
+
+.trace-head:hover {
+  background: transparent;
 }
 
 @media (max-width: 820px) {
