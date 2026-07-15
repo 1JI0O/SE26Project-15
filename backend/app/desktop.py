@@ -1,3 +1,4 @@
+import ctypes
 import multiprocessing
 import os
 import threading
@@ -28,14 +29,39 @@ def _watch_desktop_parent() -> None:
     except ValueError:
         return
 
-    def monitor() -> None:
-        while True:
+    def parent_is_running() -> bool:
+        if os.name != "nt":
             try:
                 os.kill(parent_pid, 0)
             except ProcessLookupError:
-                os._exit(0)
+                return False
             except PermissionError:
-                pass
+                return True
+            return True
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        handle = ctypes.windll.kernel32.OpenProcess(
+            process_query_limited_information,
+            False,
+            parent_pid,
+        )
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            process_is_queryable = ctypes.windll.kernel32.GetExitCodeProcess(
+                handle,
+                ctypes.byref(exit_code),
+            )
+            return bool(process_is_queryable) and exit_code.value == still_active
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+
+    def monitor() -> None:
+        while True:
+            if not parent_is_running():
+                os._exit(0)
             time.sleep(0.5)
 
     threading.Thread(target=monitor, name="desktop-parent-watch", daemon=True).start()

@@ -92,6 +92,32 @@ pnpm dev
 
 打开 `http://127.0.0.1:5173`。Vite 会把 `/api` 代理到 `http://127.0.0.1:8000`；OpenAPI 文档位于 `http://127.0.0.1:8000/docs`。
 
+### Windows（PowerShell）启动 Web 版
+
+在 Windows 10/11 上安装 Python 3.11+、[uv](https://docs.astral.sh/uv/)、Node.js 20+ 和 pnpm 9+ 后，在仓库根目录分别打开两个 PowerShell 窗口。首次启动可先复制默认配置：
+
+```powershell
+Copy-Item .env.example backend\.env
+```
+
+终端 1 启动后端：
+
+```powershell
+Set-Location backend
+uv sync --extra dev
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+终端 2 启动前端：
+
+```powershell
+Set-Location frontend
+pnpm install
+pnpm dev
+```
+
+浏览器打开 `http://127.0.0.1:5173`。若需要本地论文解析，另开一个终端运行 `mineru-api --host 127.0.0.1 --port 8001 --enable-vlm-preload true`，或在应用设置中改用 MinerU 官方 API。
+
 ## 启动桌面版
 
 开发模式会先把 FastAPI 构建为本机后端运行目录，再由 Tauri 自动启动前端和后端：
@@ -122,6 +148,28 @@ open "src-tauri/target/release/bundle/macos/TraceLab.app"
 frontend/src-tauri/target/release/bundle/macos/TraceLab.app
 frontend/src-tauri/target/release/bundle/dmg/TraceLab_0.1.0_aarch64.dmg
 ```
+
+### Windows 桌面版
+
+桌面开发需要额外安装 Rust stable（`x86_64-pc-windows-msvc` 工具链）和 Visual Studio 2022 的“使用 C++ 的桌面开发”工作负载；Windows 10/11 通常已自带 Microsoft Edge WebView2 Runtime，缺失时需先安装。安装好 Python、uv、Node.js 和 pnpm 后，在 PowerShell 中运行：
+
+```powershell
+Set-Location frontend
+pnpm install
+pnpm desktop:dev
+```
+
+该命令会打包并启动内置 FastAPI 后端，然后启动 Tauri 窗口；不需要另行启动 Uvicorn。首次运行会下载 Rust/Python/Node 依赖，耗时较长。
+
+要生成可安装的 Windows 包，请在 Windows 主机上执行：
+
+```powershell
+Set-Location frontend
+pnpm install
+pnpm exec tauri build --bundles nsis
+```
+
+安装程序输出在 `frontend\src-tauri\target\release\bundle\nsis\`；安装后从开始菜单启动 TraceLab。当前包未进行 Windows 代码签名，首次运行可能出现 SmartScreen 提示。桌面数据保存在 `%LOCALAPPDATA%\com.se26project.tracelab\`；启动失败时可查看其中的 `startup-error.log`。
 
 应用内已包含 FastAPI 后端和展开后的 Python 运行目录，启动和退出由 Tauri 自动管理，不会在每次启动时重复解压。桌面数据保存在 `~/Library/Application Support/com.se26project.tracelab/`。当前本地构建使用 ad-hoc 签名并启用 Hardened Runtime，产物面向 Apple Silicon。为 Intel Mac、Windows 或 Linux 分发时，应在对应目标平台重新构建。对外分发 macOS 安装包时，应改用 Developer ID 并完成公证。
 
