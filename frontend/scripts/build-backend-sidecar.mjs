@@ -29,6 +29,7 @@ const pyinstallerArgs = [
   '--clean',
   '--noconfirm',
   '--onedir',
+  '--noconsole',
   '--name',
   'tracelab-backend',
   '--paths',
