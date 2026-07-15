@@ -41,3 +41,22 @@ export interface WorkspacePaperPage {
   body: string[]
   anchors: Array<Record<string, unknown>>
 }
+
+export interface WorkspacePaperSection {
+  id: string
+  title: string
+  level: number
+  page: number | null
+}
+
+export interface WorkspacePaperDocument {
+  document_id: number
+  filename: string
+  title: string
+  markdown: string
+  sections: WorkspacePaperSection[]
+  asset_base_url: string
+  parser: string
+  parser_version: string
+  source: 'mineru-markdown' | 'normalized-fallback'
+}

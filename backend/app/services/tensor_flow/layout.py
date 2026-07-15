@@ -25,13 +25,37 @@ def _node_ranks(graph: dict[str, Any]) -> dict[str, int]:
     return ranks
 
 
-def layout_tensor_graph(graph: dict[str, Any], project_id: str) -> dict[str, Any]:
+def _edge_points(source: dict[str, Any], target: dict[str, Any]) -> list[list[int]]:
+    source_x = int(source["x"] + source["width"])
+    source_y = int(source["y"] + source["height"] // 2)
+    target_x = int(target["x"])
+    target_y = int(target["y"] + target["height"] // 2)
+    if source_y == target_y:
+        return [[source_x, source_y], [target_x, target_y]]
+    middle_x = source_x + max((target_x - source_x) // 2, 24)
+    return [
+        [source_x, source_y],
+        [middle_x, source_y],
+        [middle_x, target_y],
+        [target_x, target_y],
+    ]
+
+
+def layout_tensor_graph(
+    graph: dict[str, Any],
+    project_id: str,
+    *,
+    renderer: str = "semantic-dag-v1",
+    view: str = "debug",
+    available_roots: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     ranks = _node_ranks(graph)
     rows: dict[int, int] = defaultdict(int)
-    width = 220
-    height = 104
-    horizontal_gap = 84
-    vertical_gap = 56
+    architecture = view == "architecture"
+    width = 204 if architecture else 220
+    height = 88 if architecture else 104
+    horizontal_gap = 96 if architecture else 84
+    vertical_gap = 48 if architecture else 56
     positioned: dict[str, dict[str, Any]] = {}
     nodes: list[dict[str, Any]] = []
     for node in graph.get("nodes", []):
@@ -39,6 +63,7 @@ def layout_tensor_graph(graph: dict[str, Any], project_id: str) -> dict[str, Any
         rank = ranks.get(node_id, 0)
         row = rows[rank]
         rows[rank] += 1
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
         laid_out = {
             "id": node_id,
             "label": str(node.get("label") or node.get("op") or node_id),
@@ -51,6 +76,9 @@ def layout_tensor_graph(graph: dict[str, Any], project_id: str) -> dict[str, Any
             "shape_reason": node.get("shape_reason"),
             "op": str(node.get("op", "unknown")),
             "symbol_id": str(node.get("symbol_id", "")),
+            "component_symbol_id": metadata.get("component_symbol_id"),
+            "expandable": bool(metadata.get("expandable", False)),
+            "external": bool(metadata.get("external", False)),
             "x": 32 + rank * (width + horizontal_gap),
             "y": 32 + row * (height + vertical_gap),
             "width": width,
@@ -70,11 +98,17 @@ def layout_tensor_graph(graph: dict[str, Any], project_id: str) -> dict[str, Any
                 "source": source["id"],
                 "target": target["id"],
                 "kind": str(edge.get("kind", "tensor")),
-                "label": str(edge.get("label", edge.get("kind", "tensor"))),
-                "points": [
-                    [source["x"] + source["width"], source["y"] + source["height"] // 2],
-                    [target["x"], target["y"] + target["height"] // 2],
-                ],
+                "label": str(edge.get("label", "")),
+                "points": _edge_points(source, target),
             }
         )
-    return {"project_id": project_id, "renderer": "semantic-dag-v1", "nodes": nodes, "edges": edges}
+    return {
+        "project_id": project_id,
+        "renderer": renderer,
+        "view": view,
+        "root_symbol": graph.get("root_symbol"),
+        "root_label": graph.get("root_label"),
+        "available_roots": available_roots or [],
+        "nodes": nodes,
+        "edges": edges,
+    }

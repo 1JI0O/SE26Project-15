@@ -124,6 +124,9 @@ class WorkspaceTensorFlowNode(BaseModel):
     shape_reason: str | None = None
     op: str = "unknown"
     symbol_id: str = ""
+    component_symbol_id: str | None = None
+    expandable: bool = False
+    external: bool = False
     x: int
     y: int
     width: int
@@ -142,5 +145,9 @@ class WorkspaceTensorFlowEdge(BaseModel):
 class WorkspaceTensorFlowRead(BaseModel):
     project_id: str
     renderer: str
+    view: str = "architecture"
+    root_symbol: str | None = None
+    root_label: str | None = None
+    available_roots: list[dict[str, Any]] = Field(default_factory=list)
     nodes: list[WorkspaceTensorFlowNode]
     edges: list[WorkspaceTensorFlowEdge]

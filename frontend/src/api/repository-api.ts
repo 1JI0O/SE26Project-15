@@ -75,9 +75,19 @@ export async function saveWorkspaceCodeFile(
 
 export async function getWorkspaceTensorFlow(
   projectId: number | string,
+  options: {
+    view?: 'architecture' | 'debug'
+    rootSymbol?: string | null
+  } = {},
 ): Promise<WorkspaceTensorFlow> {
   const { data } = await http.get<WorkspaceTensorFlow>(
     `/projects/${projectId}/workspace/tensor-flow`,
+    {
+      params: {
+        view: options.view ?? 'architecture',
+        root_symbol: options.rootSymbol || undefined,
+      },
+    },
   )
   return data
 }

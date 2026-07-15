@@ -1,312 +1,300 @@
 <template>
   <article class="paper-panel">
-    <header class="panel-title">
-      <div>
-        <h2>论文原文</h2>
-        <p>只读 PDF 页视图，支持段落、公式、图表锚点高亮，不提供内容编辑。</p>
-      </div>
-      <div class="paper-tags">
-        <el-tag v-if="parser" type="success" effect="plain">{{ parser }}</el-tag>
-        <el-tag :type="parseStatus === 'failed' ? 'danger' : 'info'" effect="plain">
-          {{ filename || '未上传论文' }}
-        </el-tag>
-      </div>
-    </header>
-
-    <!-- Loading state -->
-    <div v-if="loading" class="state-placeholder">
-      <el-icon class="is-loading" :size="24"><i class="el-icon-loading" /></el-icon>
-      <span>加载论文中...</span>
-    </div>
-
-    <!-- Error state -->
+    <div v-if="loading" class="state-placeholder">加载论文中...</div>
     <div v-else-if="error" class="state-placeholder state-error">
       <span>{{ error }}</span>
       <el-button size="small" @click="$emit('retry')">重试</el-button>
     </div>
-
-    <!-- Empty state -->
     <el-empty v-else-if="!hasPaper" description="请先上传论文 PDF" />
-
-    <!-- Content -->
     <template v-else>
-      <div class="pdf-toolbar">
-        <span>第 {{ activePage }} / {{ pageNumbers.length || 1 }} 页</span>
-        <div>
-          <button>缩小</button>
-          <button>100%</button>
-          <button>放大</button>
+      <div class="markdown-toolbar">
+        <span>{{ source === 'mineru-markdown' ? 'MinerU 结构化 Markdown' : '结构化文本兼容模式' }}</span>
+        <div class="zoom-controls">
+          <button aria-label="缩小论文" @click="zoom = Math.max(75, zoom - 10)">−</button>
+          <button aria-label="重置论文缩放" @click="zoom = 100">{{ zoom }}%</button>
+          <button aria-label="放大论文" @click="zoom = Math.min(150, zoom + 10)">＋</button>
         </div>
       </div>
-
-      <div class="pdf-reader">
-        <!-- Page rail -->
-        <aside class="page-rail">
-          <button
-            v-for="page in pageNumbers"
-            :key="page"
-            :class="{ active: page === activePage }"
-            @click="$emit('update:activePage', page)"
-          >
-            <span>Page</span>
-            <strong>{{ page }}</strong>
-          </button>
-        </aside>
-
-        <div class="paper-scroll">
-          <div v-if="activeContent" class="paper-page" aria-label="只读论文预览">
-            <div class="paper-meta">Page {{ activeContent.page_number }}</div>
-            <h3>{{ activeContent.title }}</h3>
-            <p v-if="activePage === 1 && abstract" class="paper-abstract">
-              {{ abstract }}
-            </p>
-            <section
-              v-for="(paragraph, index) in activeContent.body"
-              :key="index"
-              :class="['paper-section', { highlighted: activeBlockIndex === index }]"
-              :ref="(el) => registerBlockRef(index, el as HTMLElement)"
-              @click="$emit('selectBlock', index)"
-            >
-              <p>{{ paragraph }}</p>
-            </section>
-          </div>
-          <el-empty v-else description="请先上传论文 PDF" />
-        </div>
+      <div ref="scrollRef" class="paper-scroll" @scroll="updateActiveSection">
+        <article
+          ref="markdownRef"
+          class="markdown-body"
+          :style="{ fontSize: `${zoom}%` }"
+          aria-label="只读论文 Markdown"
+          v-html="renderedMarkdown"
+        />
       </div>
     </template>
   </article>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import type { WorkspacePaperPage } from '@/types/papers'
+import 'katex/dist/katex.min.css'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { getPaperAssetBlob, resolvePaperAssetUrl } from '@/api/paper-api'
+import { renderPaperMarkdown } from './markdown-renderer'
 
-defineProps<{
-  filename: string
-  abstract: string
-  pageNumbers: number[]
-  activePage: number
-  activeContent: WorkspacePaperPage | undefined
+const props = defineProps<{
+  markdown: string
+  assetBaseUrl: string
+  activeSectionId: string
   hasPaper: boolean
   loading: boolean
   error: string | null
-  parser: string
-  parseStatus: string
-  activeBlockIndex: number
+  source: string
 }>()
 
-defineEmits<{
-  'update:activePage': [page: number]
-  selectBlock: [index: number]
+const emit = defineEmits<{
+  selectSection: [sectionId: string]
   retry: []
 }>()
 
-const blockRefs = ref<Map<number, HTMLElement>>(new Map())
+const scrollRef = ref<HTMLElement | null>(null)
+const markdownRef = ref<HTMLElement | null>(null)
+const zoom = ref(100)
+const desktopRuntime = '__TAURI_INTERNALS__' in window
+const imageObjectUrls = new Set<string>()
+let scrollFrame = 0
+let suppressScrollTrackingUntil = 0
 
-function registerBlockRef(index: number, el: HTMLElement | null): void {
-  if (el) {
-    blockRefs.value.set(index, el)
-  } else {
-    blockRefs.value.delete(index)
-  }
+const renderedMarkdown = computed(() =>
+  renderPaperMarkdown(props.markdown, (path) => resolvePaperAssetUrl(props.assetBaseUrl, path)),
+)
+
+function revokeImageObjectUrls(): void {
+  for (const objectUrl of imageObjectUrls) URL.revokeObjectURL(objectUrl)
+  imageObjectUrls.clear()
 }
 
-function scrollToBlock(index: number): void {
-  const el = blockRefs.value.get(index)
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }
+async function hydrateDesktopImages(): Promise<void> {
+  if (!desktopRuntime) return
+  const root = markdownRef.value
+  if (!root) return
+  revokeImageObjectUrls()
+  const images = [...root.querySelectorAll<HTMLImageElement>('img[data-paper-asset-url]')]
+  await Promise.all(
+    images.map(async (image) => {
+      const assetUrl = image.dataset.paperAssetUrl
+      if (!assetUrl) return
+      try {
+        const blob = await getPaperAssetBlob(assetUrl)
+        if (!root.contains(image)) return
+        const objectUrl = URL.createObjectURL(blob)
+        imageObjectUrls.add(objectUrl)
+        image.src = objectUrl
+      } catch {
+        image.classList.add('image-load-error')
+      }
+    }),
+  )
 }
 
-defineExpose({ scrollToBlock })
+function scrollToSection(sectionId: string): void {
+  const root = scrollRef.value
+  const section = root?.querySelector<HTMLElement>(`#${CSS.escape(sectionId)}`)
+  if (!root || !section) return
+  const top =
+    sectionId === 'section-1'
+      ? 0
+      : section.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - 18
+  suppressScrollTrackingUntil = Date.now() + 150
+  root.scrollTo({ top, behavior: 'auto' })
+}
+
+function updateActiveSection(): void {
+  if (Date.now() < suppressScrollTrackingUntil) return
+  window.cancelAnimationFrame(scrollFrame)
+  scrollFrame = window.requestAnimationFrame(() => {
+    const root = scrollRef.value
+    if (!root) return
+    const headings = [...root.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')]
+    const active = headings.reduce<HTMLElement | null>((current, heading) => {
+      return heading.offsetTop <= root.scrollTop + 70 ? heading : current
+    }, headings[0] ?? null)
+    if (active?.id && active.id !== props.activeSectionId) emit('selectSection', active.id)
+  })
+}
+
+watch(
+  () => props.activeSectionId,
+  async (sectionId, previous) => {
+    if (!sectionId || sectionId === previous) return
+    await nextTick()
+    scrollToSection(sectionId)
+  },
+)
+
+watch(
+  () => props.markdown,
+  async () => {
+    await nextTick()
+    scrollRef.value?.scrollTo({ top: 0 })
+    await hydrateDesktopImages()
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(revokeImageObjectUrls)
+
+defineExpose({ scrollToSection })
 </script>
 
 <style scoped>
 .paper-panel {
   display: flex;
-  height: var(--workspace-panel-height, 1040px);
-  max-height: var(--workspace-panel-height, 1040px);
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
-  background: #ffffff;
   overflow: hidden;
-}
-
-.panel-title {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.panel-title h2 {
-  margin: 0;
-}
-
-.panel-title p {
-  margin: 6px 0 0;
-  color: #667789;
-  line-height: 1.6;
-}
-
-.paper-tags {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
+  background: #ffffff;
 }
 
 .state-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 48px;
-  color: #667789;
+  display: grid;
+  min-height: 220px;
+  flex: 1;
+  place-content: center;
+  gap: 10px;
+  color: #6b7785;
+  font-size: 12px;
+  text-align: center;
 }
 
 .state-error {
-  color: #e15a4a;
+  color: #b64a3c;
 }
 
-.pdf-toolbar {
+.markdown-toolbar {
   display: flex;
+  min-height: 34px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #536475;
-  font-size: 13px;
+  gap: 10px;
+  padding: 0 8px 0 11px;
+  border-bottom: 1px solid #d8dee6;
+  background: #f8fafb;
+  color: #71808e;
+  font-size: 10px;
 }
 
-.pdf-toolbar div {
-  display: inline-flex;
-  gap: 6px;
-}
-
-.pdf-toolbar button {
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #536475;
-  cursor: pointer;
-  font: inherit;
-}
-
-.pdf-reader {
-  display: grid;
-  grid-template-columns: 76px minmax(0, 1fr);
-  gap: 12px;
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.page-rail {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.page-rail button {
-  display: grid;
+.zoom-controls {
+  display: flex;
   gap: 2px;
-  padding: 8px;
-  border: 1px solid #dce3ea;
-  border-radius: 6px;
+}
+
+.zoom-controls button {
+  min-width: 27px;
+  height: 23px;
+  padding: 0 5px;
+  border: 1px solid #d8dee6;
+  border-radius: 3px;
   background: #ffffff;
-  color: #667789;
+  color: #586675;
   cursor: pointer;
   font: inherit;
-}
-
-.page-rail button.active {
-  border-color: #1f8f78;
-  background: #e9f6f3;
-  color: #1f8f78;
-}
-
-.page-rail span {
-  font-size: 11px;
 }
 
 .paper-scroll {
   min-height: 0;
-  overflow-y: auto;
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
-  background: #fbfcfd;
+  flex: 1;
+  overflow: auto;
+  background: #eef1f4;
 }
 
-.paper-page {
-  min-height: 0;
-  padding: 32px 36px;
+.markdown-body {
+  width: min(100%, 920px);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 34px clamp(24px, 5%, 62px) 80px;
+  overflow-wrap: anywhere;
   background: #ffffff;
-  box-shadow: inset 0 0 0 1px #edf1f4;
-}
-
-.paper-meta {
-  color: #8a97a5;
-  font-size: 12px;
-  text-transform: uppercase;
-}
-
-.paper-page h3 {
-  margin: 12px 0 14px;
-  color: #16232f;
+  color: #26323d;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 26px;
-  line-height: 1.25;
+  font-size: 100%;
+  line-height: 1.72;
+  box-sizing: border-box;
 }
 
-.paper-abstract,
-.paper-section p {
-  color: #2d3b48;
-  font-family: Georgia, "Times New Roman", serif;
-  line-height: 1.8;
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4) {
+  scroll-margin-top: 20px;
+  color: #15232f;
+  line-height: 1.3;
 }
 
-.paper-section {
+.markdown-body :deep(h1) {
+  margin: 0 0 24px;
+  font-size: 1.8em;
+}
+
+.markdown-body :deep(h2) {
+  margin: 34px 0 14px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e1e6eb;
+  font-size: 1.35em;
+}
+
+.markdown-body :deep(h3) {
+  margin: 26px 0 10px;
+  font-size: 1.14em;
+}
+
+.markdown-body :deep(p) {
+  margin: 0 0 1em;
+}
+
+.markdown-body :deep(img) {
+  display: block;
+  max-width: 100%;
+  max-height: 68vh;
+  margin: 20px auto 8px;
+  object-fit: contain;
+}
+
+.markdown-body :deep(.table-scroll) {
+  max-width: 100%;
+  margin: 18px 0;
+  overflow-x: auto;
+}
+
+.markdown-body :deep(table) {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.76em;
+}
+
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
   padding: 6px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 0.15s ease;
+  border: 1px solid #cfd7df;
+  overflow-wrap: anywhere;
+  vertical-align: top;
 }
 
-.paper-section:hover {
-  background: rgba(31, 143, 120, 0.04);
+.markdown-body :deep(.math-display) {
+  max-width: 100%;
+  margin: 18px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
 }
 
-.paper-section.highlighted {
-  background: rgba(31, 143, 120, 0.1);
-  border-left: 3px solid #1f8f78;
+.markdown-body :deep(pre) {
+  max-width: 100%;
+  padding: 12px;
+  overflow: auto;
+  background: #f4f6f8;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82em;
 }
 
-@media (max-width: 1180px) {
-  .paper-panel {
-    height: auto;
-    max-height: none;
-    min-height: 840px;
-  }
-}
-
-@media (max-width: 820px) {
-  .panel-title {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .paper-page {
-    padding: 26px 22px;
-  }
+.markdown-body :deep(a) {
+  color: #147866;
 }
 </style>

@@ -94,9 +94,9 @@
 
 符号 ID 固定为 `{规范化相对路径}::{限定名}`。源码行号从 1 开始；`line_end` 为包含式结束行。调用位置同时提供从 0 开始的 AST 列偏移。
 
-## 4. 张量语义图
+## 4. 分层模型架构图与张量语义图
 
-分析器从 PyTorch `forward` 方法中识别输入、模块/函数调用、张量二元运算、条件分支、分支合并、残差合并、`torch.cat/concat/stack`、`nn.Sequential` 调用和返回值。
+分析器保留两种用途不同的图。默认架构图先从 PyTorch 模块组合关系中识别主模型，沿真实 `forward` 或其委托的 `forward_step` 提取输入、模块调用、关键融合和输出；损失、数据集、渲染器等辅助类不进入默认总览。原有语句级分析继续识别函数调用、张量二元运算、条件分支、残差、`torch.cat/concat/stack` 和返回值，作为按模块查看的调试图。
 
 语义节点不包含布局坐标：
 
@@ -119,7 +119,12 @@
 
 边的 `kind` 可为 `tensor`、`control`、`branch` 或 `residual`。当前迭代不伪造静态 shape；未执行运行时 shape propagation 时必须返回 `null` 和原因。
 
-`GET /workspace/tensor-flow` 返回同一语义图经独立布局服务生成的可视化数据。该响应增加 `x`、`y`、`width`、`height` 和边 `points`，`renderer` 为 `semantic-dag-v1`。前端可使用节点的 `source_path`、`line_start`、`line_end` 跳转源码，不应依赖节点 ID 推断路径。
+`GET /workspace/tensor-flow` 默认返回 `view=architecture`，`renderer` 为 `architecture-dag-v2`。可使用以下查询参数：
+
+- `view=architecture|debug`：切换模块级架构图或当前模块的语句级调试图。
+- `root_symbol={path}::{ClassName}`：选择主模型或下钻到 `expandable=true` 的自定义组件。
+
+响应通过 `root_symbol`、`root_label` 和 `available_roots` 描述当前层级；节点通过 `component_symbol_id`、`expandable`、`external` 区分可下钻的自定义模块与默认折叠的外部黑盒。两种视图均增加 `x`、`y`、`width`、`height` 和正交边 `points`。前端应使用 `source_path`、`line_start`、`line_end` 跳转源码，不应依赖节点 ID 推断路径。
 
 ## 5. 文件树、读取与保存
 

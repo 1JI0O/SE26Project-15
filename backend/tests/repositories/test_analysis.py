@@ -125,6 +125,52 @@ def test_tensor_graph_contains_branch_residual_merge_and_concat(tmp_path: Path) 
     assert all(node["shape"] is None and node["shape_reason"] for node in graph["nodes"])
 
 
+def test_architecture_graph_selects_main_model_and_keeps_debug_graph(tmp_path: Path) -> None:
+    archive_path = tmp_path / "repository.zip"
+    _write_zip(
+        archive_path,
+        {
+            "sample/models/model.py": (
+                "import torch.nn as nn\n\n"
+                "class Encoder(nn.Module):\n"
+                "    def __init__(self):\n"
+                "        super().__init__()\n"
+                "        self.conv = nn.Conv2d(3, 16, 3)\n"
+                "    def forward(self, x):\n"
+                "        return self.conv(x)\n\n"
+                "class Model(nn.Module):\n"
+                "    def __init__(self):\n"
+                "        super().__init__()\n"
+                "        self.encoder = Encoder()\n"
+                "        self.head = nn.Linear(16, 4)\n"
+                "    def forward(self, images):\n"
+                "        features = self.encoder(images)\n"
+                "        return self.head(features)\n\n"
+                "class TrainingLoss(nn.Module):\n"
+                "    def forward(self, prediction, target):\n"
+                "        return prediction + target\n"
+            )
+        },
+    )
+
+    analysis = analyze_code_archive(archive_path)
+    architecture = analysis["architecture_graph"]
+    graph = architecture["graphs"][architecture["default_root"]]
+
+    assert architecture["default_root"] == "models/model.py::Model"
+    assert [node["label"] for node in graph["nodes"]] == [
+        "Images",
+        "Encoder",
+        "Head",
+        "Output",
+    ]
+    encoder = next(node for node in graph["nodes"] if node["label"] == "Encoder")
+    assert encoder["metadata"]["expandable"] is True
+    assert encoder["metadata"]["component_symbol_id"] == "models/model.py::Encoder"
+    assert all("Loss" not in root["label"] for root in architecture["roots"])
+    assert any(node["op"] == "add" for node in analysis["tensor_graph"]["nodes"])
+
+
 def test_analysis_uses_saved_edit_overlay(tmp_path: Path) -> None:
     archive_path = tmp_path / "repository.zip"
     edits_root = tmp_path / "edits"

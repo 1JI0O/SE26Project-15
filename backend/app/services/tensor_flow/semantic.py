@@ -33,8 +33,8 @@ def _iter_forward_methods(
             continue
         for child in node.body:
             is_function = isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
-            if is_function and child.name == "forward":
-                yield f"{node.name}.forward", child
+            if is_function and child.name in {"forward", "forward_step"}:
+                yield f"{node.name}.{child.name}", child
 
 
 def _collect_module_specs(

@@ -1,207 +1,456 @@
 <template>
-  <div class="prototype-page">
-    <!-- Header -->
-    <section class="workspace-head">
-      <div>
-        <el-button text @click="$router.push('/')">返回项目入口</el-button>
-        <div class="title-row">
-          <h1>论文代码双向追溯工作台</h1>
-          <el-tag effect="plain" type="warning">最终 UI 演示版</el-tag>
-          <el-tag v-if="desktop.isDesktop.value" effect="plain" type="success">桌面模式</el-tag>
-        </div>
-        <p>
-          输入论文 PDF 与代码 ZIP 后，左侧只读展示论文原文，右侧以 IDE 方式展示过滤后的代码仓库、
-          可编辑代码文件，并基于项目代码生成张量流追踪图。
-        </p>
-      </div>
-      <div class="head-meta">
-        <span>Project {{ workspace.projectIdLabel }}</span>
-        <strong>{{ workspace.projectName }}</strong>
-      </div>
-    </section>
-
-    <!-- Hidden file inputs -->
+  <div class="ide-workbench">
     <input ref="paperInputRef" type="file" accept=".pdf,application/pdf" hidden @change="onPaperSelected" />
     <input ref="codeInputRef" type="file" accept=".zip,application/zip" hidden @change="onCodeSelected" />
 
-    <!-- Import strip -->
-    <ImportStrip
-      :steps="importSteps"
-      :loading-map="{ '01': paper.uploading.value, '02': code.uploading.value }"
-      @action="handleImportAction"
-    />
+    <header class="command-bar">
+      <div class="project-breadcrumb">
+        <el-tooltip content="返回项目列表" placement="bottom">
+          <el-button text :icon="Back" aria-label="返回项目列表" @click="$router.push('/')" />
+        </el-tooltip>
+        <span class="project-name">{{ workspace.projectName.value }}</span>
+        <span class="breadcrumb-separator">/</span>
+        <span>论文代码工作台</span>
+        <el-tag v-if="desktop.isDesktop.value" size="small" type="success" effect="plain">
+          Desktop
+        </el-tag>
+      </div>
 
-    <!-- Review toolbar -->
-    <section class="review-toolbar">
-      <div class="toolbar-group">
+      <div class="mode-switch" aria-label="工作模式">
         <button
           v-for="mode in reviewModes"
           :key="mode"
-          :class="['mode-button', { active: activeMode === mode }]"
+          :class="{ active: activeMode === mode }"
           @click="activeMode = mode"
         >
           {{ mode }}
         </button>
       </div>
-      <div class="toolbar-actions">
-        <el-tag type="success" effect="plain">{{ trace.traceRows.value.length }} 条追溯候选</el-tag>
-        <el-tag type="info" effect="plain">论文只读 / 代码可编辑</el-tag>
-        <el-tooltip content="报告导出接口已预留，当前迭代不生成文件">
-          <span><el-button type="primary" disabled>导出报告（接口预留）</el-button></span>
-        </el-tooltip>
+
+      <div class="command-actions">
+        <el-button size="small" aria-label="交换论文与代码视图" @click="paperFirst = !paperFirst">
+          <span>交换视图</span>
+        </el-button>
+        <el-button
+          size="small"
+          :icon="DocumentAdd"
+          :loading="paper.uploading.value"
+          @click="handleImportAction('01')"
+        >
+          <span>导入论文</span>
+        </el-button>
+        <el-button
+          size="small"
+          :icon="UploadFilled"
+          :loading="code.uploading.value"
+          @click="handleImportAction('02')"
+        >
+          <span>导入代码</span>
+        </el-button>
+        <el-button
+          size="small"
+          type="primary"
+          :icon="MagicStick"
+          :loading="trace.generating.value"
+          @click="openTraceAndGenerate"
+        >
+          <span>生成追溯</span>
+        </el-button>
       </div>
-    </section>
+    </header>
 
-    <!-- Main analysis canvas -->
-    <section class="analysis-canvas">
-      <PaperReader
-        :filename="paper.paperFilename.value"
-        :abstract="paper.paperAbstract.value"
-        :page-numbers="paper.paperPageNumbers.value"
-        :active-page="paper.activePaperPage.value"
-        :active-content="paper.activePaperContent.value"
-        :has-paper="paper.hasPaper.value"
-        :loading="paper.loading.value"
-        :error="paper.error.value"
-        :parser="paper.parserName.value"
-        :parse-status="paper.parseStatus.value"
-        :active-block-index="paper.activeBlockIndex.value"
-        @update:active-page="(p) => (paper.activePaperPage.value = p)"
-        @select-block="paper.selectBlock"
-        @retry="paper.loadPaperPages"
-      />
-
-      <article class="code-panel">
-        <header class="panel-title">
-          <div>
-            <h2>代码工作区</h2>
-            <p>过滤 .gitignore 与 macOS 元数据后的完整仓库树，代码文件可直接编辑。</p>
-          </div>
-          <el-tag type="success" effect="plain">{{ code.codeFilename.value || '未上传代码' }}</el-tag>
-        </header>
-
-        <div class="repository-actions">
-          <el-input
-            v-model="githubUrl"
-            placeholder="https://github.com/owner/repository"
-            clearable
-            @keyup.enter="onGitHubImport"
-          />
-          <el-button
-            :loading="code.importingGithub.value"
-            :disabled="!githubUrl.trim()"
-            @click="onGitHubImport"
+    <div ref="ideBodyRef" class="ide-body">
+      <nav class="activity-bar" aria-label="工作台工具">
+        <el-tooltip content="资源管理器" placement="right">
+          <button
+            :class="['activity-button', { active: explorerOpen }]"
+            aria-label="资源管理器"
+            @click="explorerOpen = !explorerOpen"
           >
-            从 GitHub 导入
-          </el-button>
-          <div v-if="code.analysisSummary.value" class="analysis-summary">
-            <el-tag effect="plain">{{ code.analysisSummary.value.file_count }} 文件</el-tag>
-            <el-tag effect="plain">{{ code.analysisSummary.value.symbol_count }} 符号</el-tag>
-            <el-tag effect="plain">{{ code.analysisSummary.value.call_count }} 调用</el-tag>
-            <el-tag type="info" effect="plain">
-              忽略 {{ code.analysisSummary.value.ignored_count }}
-            </el-tag>
+            <el-icon :size="21"><Files /></el-icon>
+          </button>
+        </el-tooltip>
+        <el-tooltip content="双向追溯" placement="right">
+          <button
+            :class="['activity-button', { active: bottomPanelOpen && activeBottomPanel === 'trace' }]"
+            aria-label="双向追溯"
+            @click="openBottomPanel('trace')"
+          >
+            <el-icon :size="21"><Connection /></el-icon>
+            <span v-if="trace.traceRows.value.length" class="activity-badge">
+              {{ Math.min(trace.traceRows.value.length, 99) }}
+            </span>
+          </button>
+        </el-tooltip>
+        <el-tooltip content="张量流图" placement="right">
+          <button
+            :class="['activity-button', { active: bottomPanelOpen && activeBottomPanel === 'flow' }]"
+            aria-label="张量流图"
+            @click="openBottomPanel('flow')"
+          >
+            <el-icon :size="21"><Share /></el-icon>
+          </button>
+        </el-tooltip>
+        <el-tooltip content="魔改冲突分析" placement="right">
+          <button
+            :class="['activity-button', { active: bottomPanelOpen && activeBottomPanel === 'conflict' }]"
+            aria-label="魔改冲突分析"
+            @click="openBottomPanel('conflict')"
+          >
+            <el-icon :size="21"><Warning /></el-icon>
+          </button>
+        </el-tooltip>
+        <el-tooltip content="报告与质量" placement="right">
+          <button
+            :class="['activity-button', { active: bottomPanelOpen && activeBottomPanel === 'report' }]"
+            aria-label="报告与质量"
+            @click="openBottomPanel('report')"
+          >
+            <el-icon :size="21"><DataAnalysis /></el-icon>
+          </button>
+        </el-tooltip>
+
+        <div class="activity-spacer" />
+
+        <el-tooltip content="论文与代码 Agent" placement="right">
+          <button
+            :class="['activity-button', { active: agentOpen }]"
+            aria-label="论文与代码 Agent"
+            @click="agentOpen = !agentOpen"
+          >
+            <el-icon :size="21"><ChatLineRound /></el-icon>
+          </button>
+        </el-tooltip>
+      </nav>
+
+      <aside
+        v-if="explorerOpen"
+        class="explorer-sidebar"
+        :style="{ width: `${explorerWidth}px`, flexBasis: `${explorerWidth}px` }"
+      >
+        <header class="sidebar-header">
+          <span>资源管理器</span>
+          <el-button text :icon="Close" aria-label="关闭资源管理器" @click="explorerOpen = false" />
+        </header>
+        <nav class="explorer-tabs" aria-label="资源管理器视图">
+          <button
+            :class="{ active: activeExplorerView === 'files' }"
+            @click="activeExplorerView = 'files'"
+          >
+            文件
+          </button>
+          <button
+            :class="{ active: activeExplorerView === 'outline' }"
+            @click="activeExplorerView = 'outline'"
+          >
+            论文目录
+          </button>
+        </nav>
+
+        <div v-show="activeExplorerView === 'files'" class="explorer-content file-explorer-content">
+          <section class="project-overview">
+            <div class="project-root-row">
+              <el-icon><FolderOpened /></el-icon>
+              <strong :title="workspace.projectName.value">{{ workspace.projectName.value }}</strong>
+            </div>
+            <div class="import-state-list">
+              <button
+                v-for="step in importSteps"
+                :key="step.index"
+                :class="['import-state', { ready: step.tagType === 'success' }]"
+                :disabled="!step.action"
+                @click="step.action && handleImportAction(step.index)"
+              >
+                <span>{{ step.index }}</span>
+                <div>
+                  <strong>{{ step.title }}</strong>
+                  <small>{{ step.status }}</small>
+                </div>
+              </button>
+            </div>
+          </section>
+
+          <section class="github-import">
+            <el-input
+              v-model="githubUrl"
+              size="small"
+              placeholder="GitHub 仓库 URL"
+              clearable
+              @keyup.enter="onGitHubImport"
+            />
+            <el-tooltip content="从 GitHub 导入公开仓库" placement="bottom">
+              <el-button
+                size="small"
+                :icon="Download"
+                :loading="code.importingGithub.value"
+                :disabled="!githubUrl.trim()"
+                aria-label="从 GitHub 导入"
+                @click="onGitHubImport"
+              />
+            </el-tooltip>
+          </section>
+
+          <div v-if="code.analysisSummary.value" class="repository-stats">
+            <span>{{ code.analysisSummary.value.file_count }} 文件</span>
+            <span>{{ code.analysisSummary.value.symbol_count }} 符号</span>
+            <span>{{ code.analysisSummary.value.call_count }} 调用</span>
+          </div>
+
+          <div class="tree-container">
+            <RepositoryTree
+              :visible-tree="code.visibleCodeTree.value"
+              :selected-path="code.selectedPath.value"
+              :ignore-summary="code.ignoreSummary.value"
+              :has-code="code.hasCode.value"
+              :loading="code.loading.value"
+              :error="code.error.value"
+              :is-folder-expanded="code.isFolderExpanded"
+              :chevron="code.folderChevron"
+              :icon="fileIcon"
+              :is-editable="isEditableFile"
+              @node-click="code.handleTreeNodeClick"
+              @retry="code.loadCodeTree"
+            />
           </div>
         </div>
 
-        <div class="code-workbench">
-          <RepositoryTree
-            :visible-tree="code.visibleCodeTree.value"
-            :selected-path="code.selectedPath.value"
-            :ignore-summary="code.ignoreSummary.value"
-            :has-code="code.hasCode.value"
-            :loading="code.loading.value"
-            :error="code.error.value"
-            :is-folder-expanded="code.isFolderExpanded"
-            :chevron="code.folderChevron"
-            :icon="fileIcon"
-            :is-editable="isEditableFile"
-            @node-click="code.handleTreeNodeClick"
-            @retry="code.loadCodeTree"
-          />
-
-          <CodeEditor
-            ref="codeEditorRef"
-            :file="code.selectedFile.value"
-            :content="code.editorContent.value"
-            :is-dirty="code.isEditorDirty.value"
-            :saving="code.saving.value"
-            @change="code.handleEditorInput"
-            @save="onSaveCode"
+        <div v-show="activeExplorerView === 'outline'" class="explorer-content outline-content">
+          <PaperOutlineTree
+            :sections="paper.paperSections.value"
+            :active-section-id="paper.activeSectionId.value"
+            @select="onOutlineSelect"
           />
         </div>
-      </article>
-    </section>
+      </aside>
 
-    <!-- Insight dock -->
-    <InsightDock
-      :tabs="insightTabs"
-      :active-tab="activeInsight"
-      @update:active-tab="(t) => (activeInsight = t)"
-    >
-      <!-- Trace matrix tab -->
-      <div v-if="activeInsight === 'trace'" class="dock-grid">
-        <TraceMatrix
-          :rows="trace.traceRows.value"
-          :loading="trace.loading.value"
-          :generating="trace.generating.value"
-          :error="trace.error.value"
-          :mode="trace.mode.value"
-          :degraded="trace.degraded.value"
-          @suggest="trace.generateSuggestions(true)"
-          @review="trace.reviewTrace"
-          @select-row="onTraceRowSelect"
-        />
-        <article class="assistant-panel">
-          <h2>候选生成状态</h2>
-          <p v-if="trace.mode.value">当前模式：{{ trace.mode.value }}</p>
-          <p v-else>上传论文和代码后，可运行静态分析与可选 LLM 增强生成候选。</p>
-          <p v-if="trace.degradedReason.value">降级原因：{{ trace.degradedReason.value }}</p>
-          <div class="suggestion-actions">
-            <el-button type="primary" :loading="trace.generating.value" @click="trace.generateSuggestions(true)">
-              生成追溯候选
-            </el-button>
-          </div>
-        </article>
-      </div>
-
-      <!-- Tensor flow tab -->
-      <div v-else-if="activeInsight === 'flow'" class="tensor-flow-layout">
-        <TensorFlowCanvas
-          :nodes="tensorFlow.nodes.value"
-          :edges="tensorFlow.edges.value"
-          :edge-labels="tensorFlow.edgeLabels.value"
-          :selected-node="tensorFlow.selectedNode.value"
-          :edge-path="tensorFlow.edgePath"
-          :loading="tensorFlow.loading.value"
-          :error="tensorFlow.error.value"
-          :degraded="tensorFlow.degraded.value"
-          @node-click="onTensorNodeClick"
-        />
-        <TensorFlowInspector
-          :node="tensorFlow.selectedNode.value"
-          :current-file-path="code.selectedPath.value"
-          @jump-to-code="onTensorJumpToCode"
-        />
-      </div>
-
-      <!-- Conflict tab -->
-      <ConflictPanel v-else-if="activeInsight === 'conflict'" :items="insights.conflictItems.value" />
-
-      <!-- Report tab -->
-      <ReportPanel v-else-if="activeInsight === 'report'" :cards="insights.reportCards.value" />
-
-      <AgentPanel
-        v-else-if="activeInsight === 'agent'"
-        :project-id="workspace.projectId.value"
-        :paper-ref="trace.traceRows.value[0]?.paper"
-        :code-ref="code.selectedFile.value?.symbol || code.selectedPath.value"
-        :graph-node-id="tensorFlow.selectedNode.value?.id"
-        @executed="reloadAfterAgentAction"
+      <div
+        v-if="explorerOpen"
+        class="explorer-resize-handle"
+        role="separator"
+        aria-label="调整文件树宽度"
+        aria-orientation="vertical"
+        @pointerdown="startResize('explorer', $event)"
       />
-    </InsightDock>
 
-    <!-- Evidence drawer -->
+      <main ref="workAreaRef" class="work-area">
+        <section
+          ref="editorGridRef"
+          class="editor-grid"
+          :style="{ '--left-pane-width': `${editorLeftPercent}%` }"
+        >
+          <article
+            class="editor-pane paper-pane"
+            :style="{ order: paperFirst ? 0 : 2 }"
+            @dragover.prevent
+            @drop="dropPane('paper')"
+          >
+            <div
+              class="pane-tab-strip draggable-tab"
+              draggable="true"
+              title="拖动到另一侧可交换视图"
+              @dragstart="startPaneDrag('paper', $event)"
+              @dragend="draggedPane = null"
+            >
+              <span class="pane-tab active">
+                <el-icon><Document /></el-icon>
+                {{ paper.paperFilename.value || '论文.pdf' }}
+              </span>
+              <span class="pane-meta">只读 · {{ paper.parserName.value || '等待解析' }}</span>
+            </div>
+            <PaperReader
+              :markdown="paper.paperDocument.value?.markdown || ''"
+              :asset-base-url="paper.paperDocument.value?.asset_base_url || ''"
+              :active-section-id="paper.activeSectionId.value"
+              :has-paper="paper.hasPaper.value"
+              :loading="paper.loading.value"
+              :error="paper.error.value"
+              :source="paper.paperDocument.value?.source || ''"
+              @select-section="paper.selectSection"
+              @retry="paper.loadPaperPages"
+            />
+          </article>
+
+          <div
+            class="editor-resize-handle"
+            :style="{ order: 1 }"
+            role="separator"
+            aria-label="调整论文与代码视图宽度"
+            aria-orientation="vertical"
+            @pointerdown="startResize('editor', $event)"
+          />
+
+          <article
+            class="editor-pane code-pane"
+            :style="{ order: paperFirst ? 2 : 0 }"
+            @dragover.prevent
+            @drop="dropPane('code')"
+          >
+            <div
+              class="pane-tab-strip draggable-tab"
+              draggable="true"
+              title="拖动到另一侧可交换视图"
+              @dragstart="startPaneDrag('code', $event)"
+              @dragend="draggedPane = null"
+            >
+              <span class="pane-tab active">
+                <el-icon><Tickets /></el-icon>
+                {{ code.selectedPath.value || '选择代码文件' }}
+              </span>
+              <span v-if="code.isEditorDirty.value" class="dirty-indicator">未保存</span>
+            </div>
+            <CodeEditor
+              ref="codeEditorRef"
+              :file="code.selectedFile.value"
+              :content="code.editorContent.value"
+              :is-dirty="code.isEditorDirty.value"
+              :saving="code.saving.value"
+              @change="code.handleEditorInput"
+              @save="onSaveCode"
+            />
+          </article>
+        </section>
+
+        <section
+          v-if="bottomPanelOpen"
+          :class="['bottom-panel', { maximized: bottomPanelMaximized }]"
+          :style="bottomPanelMaximized ? undefined : { height: `${bottomPanelHeight}px` }"
+        >
+          <div
+            class="bottom-resize-handle"
+            role="separator"
+            aria-label="调整底部面板高度"
+            aria-orientation="horizontal"
+            @pointerdown="startResize('bottom', $event)"
+          />
+          <header class="bottom-panel-header">
+            <nav class="bottom-tabs" aria-label="底部工具面板">
+              <button
+                v-for="tab in bottomTabs"
+                :key="tab.key"
+                :class="{ active: activeBottomPanel === tab.key }"
+                @click="openBottomPanel(tab.key)"
+              >
+                {{ tab.label }}
+                <span v-if="tab.key === 'trace'">{{ trace.traceRows.value.length }}</span>
+              </button>
+            </nav>
+            <div class="panel-controls">
+              <el-tooltip :content="bottomPanelMaximized ? '还原面板' : '最大化面板'" placement="top">
+                <el-button
+                  text
+                  :icon="bottomPanelMaximized ? ArrowDown : ArrowUp"
+                  :aria-label="bottomPanelMaximized ? '还原面板' : '最大化面板'"
+                  @click="bottomPanelMaximized = !bottomPanelMaximized"
+                />
+              </el-tooltip>
+              <el-tooltip content="关闭面板" placement="top">
+                <el-button text :icon="Close" aria-label="关闭底部面板" @click="bottomPanelOpen = false" />
+              </el-tooltip>
+            </div>
+          </header>
+
+          <div class="bottom-panel-content">
+            <div v-if="activeBottomPanel === 'trace'" class="trace-panel-layout">
+              <TraceMatrix
+                :rows="trace.traceRows.value"
+                :loading="trace.loading.value"
+                :generating="trace.generating.value"
+                :error="trace.error.value"
+                :mode="trace.mode.value"
+                :degraded="trace.degraded.value"
+                @suggest="trace.generateSuggestions(true)"
+                @review="trace.reviewTrace"
+                @select-row="onTraceRowSelect"
+              />
+              <aside class="trace-summary">
+                <strong>候选生成</strong>
+                <span v-if="trace.mode.value">{{ trace.mode.value }}</span>
+                <span v-else>静态分析 + 可选 LLM 增强</span>
+                <p v-if="trace.degradedReason.value">{{ trace.degradedReason.value }}</p>
+                <el-button
+                  size="small"
+                  type="primary"
+                  :loading="trace.generating.value"
+                  @click="trace.generateSuggestions(true)"
+                >
+                  重新生成
+                </el-button>
+              </aside>
+            </div>
+
+            <div v-else-if="activeBottomPanel === 'flow'" class="tensor-flow-layout">
+              <TensorFlowCanvas
+                :nodes="tensorFlow.nodes.value"
+                :edges="tensorFlow.edges.value"
+                :edge-labels="tensorFlow.edgeLabels.value"
+                :selected-node="tensorFlow.selectedNode.value"
+                :edge-path="tensorFlow.edgePath"
+                :loading="tensorFlow.loading.value"
+                :error="tensorFlow.error.value"
+                :degraded="tensorFlow.degraded.value"
+                :current-view="tensorFlow.currentView.value"
+                :root-symbol="tensorFlow.rootSymbol.value"
+                :root-label="tensorFlow.rootLabel.value"
+                :available-roots="tensorFlow.availableRoots.value"
+                :can-go-back="tensorFlow.navigationStack.value.length > 0"
+                @node-click="onTensorNodeClick"
+                @expand-node="tensorFlow.expandNode"
+                @view-change="tensorFlow.setView"
+                @root-change="tensorFlow.selectRoot"
+                @back="tensorFlow.navigateBack"
+              />
+              <TensorFlowInspector
+                :node="tensorFlow.selectedNode.value"
+                :current-file-path="code.selectedPath.value"
+                @jump-to-code="onTensorJumpToCode"
+                @expand-node="tensorFlow.expandNode"
+              />
+            </div>
+
+            <ConflictPanel
+              v-else-if="activeBottomPanel === 'conflict'"
+              :items="insights.conflictItems.value"
+            />
+
+            <div v-else-if="activeBottomPanel === 'report'" class="report-panel-wrap">
+              <div class="report-actions">
+                <span>质量指标与报告接口状态</span>
+                <el-tooltip content="报告导出接口已预留，当前迭代不生成文件">
+                  <span><el-button size="small" :icon="Download" disabled>导出报告</el-button></span>
+                </el-tooltip>
+              </div>
+              <ReportPanel :cards="insights.reportCards.value" />
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <aside v-if="agentOpen" class="agent-sidebar">
+        <header class="sidebar-header">
+          <span>论文与代码 Agent</span>
+          <el-button text :icon="Close" aria-label="关闭 Agent" @click="agentOpen = false" />
+        </header>
+        <div class="agent-content">
+          <AgentPanel
+            :project-id="workspace.projectId.value"
+            :paper-ref="trace.traceRows.value[0]?.paper"
+            :code-ref="code.selectedFile.value?.symbol || code.selectedPath.value"
+            :graph-node-id="tensorFlow.selectedNode.value?.id"
+            @executed="reloadAfterAgentAction"
+          />
+        </div>
+      </aside>
+    </div>
+
+    <footer class="status-bar">
+      <span><el-icon><Connection /></el-icon> {{ trace.traceRows.value.length }} 条追溯</span>
+      <span>{{ paper.hasPaper.value ? '论文已解析' : '等待论文' }}</span>
+      <span>{{ code.hasCode.value ? '仓库已分析' : '等待代码' }}</span>
+      <span class="status-spacer" />
+      <span>{{ code.selectedFile.value?.symbol || '无活动符号' }}</span>
+      <span>Project {{ workspace.projectIdLabel }}</span>
+    </footer>
+
     <EvidenceDrawer
       :visible="evidenceDrawerVisible"
       :row="selectedTraceRow"
@@ -213,36 +462,54 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import {
+  ArrowDown,
+  ArrowUp,
+  Back,
+  ChatLineRound,
+  Close,
+  Connection,
+  DataAnalysis,
+  Document,
+  DocumentAdd,
+  Download,
+  Files,
+  FolderOpened,
+  MagicStick,
+  Share,
+  Tickets,
+  UploadFilled,
+  Warning,
+} from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
-// Composables
-import { useWorkspace } from '@/composables/useWorkspace'
+import { isEditableFile, fileIcon, useCode } from '@/composables/useCode'
+import { useDesktop } from '@/composables/useDesktop'
+import { useImport } from '@/composables/useImport'
+import { useInsights } from '@/composables/useInsights'
 import { usePaper } from '@/composables/usePaper'
-import { useCode, isEditableFile, fileIcon } from '@/composables/useCode'
 import { useTensorFlow } from '@/composables/useTensorFlow'
 import { useTrace } from '@/composables/useTrace'
-import { useInsights } from '@/composables/useInsights'
-import { useImport } from '@/composables/useImport'
-import { useDesktop } from '@/composables/useDesktop'
-
-// Feature components
-import ImportStrip from '@/features/papers/ImportStrip.vue'
+import { useWorkspace } from '@/composables/useWorkspace'
+import AgentPanel from '@/features/agent/AgentPanel.vue'
+import PaperOutlineTree from '@/features/papers/PaperOutlineTree.vue'
 import PaperReader from '@/features/papers/PaperReader.vue'
-import RepositoryTree from '@/features/repository/RepositoryTree.vue'
 import CodeEditor from '@/features/repository/CodeEditor.vue'
+import RepositoryTree from '@/features/repository/RepositoryTree.vue'
 import TensorFlowCanvas from '@/features/tensor-flow/TensorFlowCanvas.vue'
 import TensorFlowInspector from '@/features/tensor-flow/TensorFlowInspector.vue'
-import InsightDock from '@/features/tracing/InsightDock.vue'
-import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
 import ConflictPanel from '@/features/tracing/ConflictPanel.vue'
-import ReportPanel from '@/features/tracing/ReportPanel.vue'
 import EvidenceDrawer from '@/features/tracing/EvidenceDrawer.vue'
-import AgentPanel from '@/features/agent/AgentPanel.vue'
+import ReportPanel from '@/features/tracing/ReportPanel.vue'
+import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
 import type { TensorFlowNode } from '@/composables/useTensorFlow'
 import type { TraceRowView } from '@/composables/useTrace'
 
-// Initialize composables
+type BottomPanelKey = 'trace' | 'flow' | 'conflict' | 'report'
+type PaneKey = 'paper' | 'code'
+type ResizeMode = 'explorer' | 'editor' | 'bottom'
+
 const workspace = useWorkspace()
 const paper = usePaper(() => workspace.projectId.value)
 const code = useCode(() => workspace.projectId.value)
@@ -255,32 +522,38 @@ const { importSteps } = useImport(
   () => code.hasCode.value,
 )
 
-// Local state
-const activeMode = ref('审阅模式')
-const activeInsight = ref('trace')
+const activeMode = ref('审阅')
+const reviewModes = ['审阅', '标注', '冲突']
+const activeBottomPanel = ref<BottomPanelKey>('trace')
+const bottomPanelOpen = ref(false)
+const bottomPanelMaximized = ref(false)
+const explorerOpen = ref(true)
+const agentOpen = ref(false)
 const githubUrl = ref('')
-const reviewModes = ['审阅模式', '标注模式', '冲突模式']
+const activeExplorerView = ref<'files' | 'outline'>('files')
+const paperFirst = ref(true)
+const draggedPane = ref<PaneKey | null>(null)
+const explorerWidth = ref(260)
+const editorLeftPercent = ref(50)
+const bottomPanelHeight = ref(290)
+const resizeMode = ref<ResizeMode | null>(null)
 
-const insightTabs = [
+const bottomTabs: Array<{ key: BottomPanelKey; label: string }> = [
   { key: 'trace', label: '追溯矩阵' },
-  { key: 'flow', label: '张量流流程图' },
-  { key: 'conflict', label: '魔改冲突分析' },
-  { key: 'report', label: '报告与质量门禁' },
-  { key: 'agent', label: '论文与代码 Agent' },
+  { key: 'flow', label: '张量流图' },
+  { key: 'conflict', label: '冲突分析' },
+  { key: 'report', label: '报告与质量' },
 ]
 
-// Evidence drawer state
 const evidenceDrawerVisible = ref(false)
 const selectedTraceRow = ref<TraceRowView | null>(null)
-
-// Code editor ref for line jumping
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null)
-
-// File input refs
 const paperInputRef = ref<HTMLInputElement | null>(null)
 const codeInputRef = ref<HTMLInputElement | null>(null)
+const ideBodyRef = ref<HTMLElement | null>(null)
+const editorGridRef = ref<HTMLElement | null>(null)
+const workAreaRef = ref<HTMLElement | null>(null)
 
-// Load workspace on mount
 onMounted(async () => {
   if (!workspace.projectId.value || Number.isNaN(workspace.projectId.value)) return
   workspace.loadingWorkspace.value = true
@@ -300,7 +573,80 @@ onMounted(async () => {
   }
 })
 
-// Import actions — use Tauri system dialog in desktop, fallback to HTML input in browser
+onUnmounted(() => stopResize())
+
+function startPaneDrag(pane: PaneKey, event: DragEvent): void {
+  draggedPane.value = pane
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', pane)
+  }
+}
+
+function dropPane(target: PaneKey): void {
+  if (draggedPane.value && draggedPane.value !== target) {
+    paperFirst.value = !paperFirst.value
+  }
+  draggedPane.value = null
+}
+
+function startResize(mode: ResizeMode, event: PointerEvent): void {
+  event.preventDefault()
+  resizeMode.value = mode
+  if (mode === 'bottom') bottomPanelMaximized.value = false
+  document.body.style.cursor = mode === 'bottom' ? 'row-resize' : 'col-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('pointermove', handleResize)
+  window.addEventListener('pointerup', stopResize, { once: true })
+}
+
+function handleResize(event: PointerEvent): void {
+  if (resizeMode.value === 'explorer') {
+    const body = ideBodyRef.value?.getBoundingClientRect()
+    if (!body) return
+    explorerWidth.value = Math.round(
+      Math.min(Math.max(event.clientX - body.left - 46, 190), Math.min(440, body.width * 0.42)),
+    )
+    return
+  }
+  if (resizeMode.value === 'editor') {
+    const editor = editorGridRef.value?.getBoundingClientRect()
+    if (!editor) return
+    const percent = ((event.clientX - editor.left) / editor.width) * 100
+    editorLeftPercent.value = Math.min(Math.max(percent, 22), 78)
+    return
+  }
+  if (resizeMode.value === 'bottom') {
+    const workArea = workAreaRef.value?.getBoundingClientRect()
+    if (!workArea) return
+    bottomPanelHeight.value = Math.round(
+      Math.min(Math.max(workArea.bottom - event.clientY, 150), workArea.height - 140),
+    )
+  }
+}
+
+function stopResize(): void {
+  resizeMode.value = null
+  window.removeEventListener('pointermove', handleResize)
+  window.removeEventListener('pointerup', stopResize)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+function onOutlineSelect(sectionId: string): void {
+  paper.selectSection(sectionId)
+}
+
+function openBottomPanel(tab: BottomPanelKey): void {
+  activeBottomPanel.value = tab
+  bottomPanelOpen.value = true
+}
+
+function openTraceAndGenerate(): void {
+  openBottomPanel('trace')
+  void trace.generateSuggestions(true)
+}
+
 async function handleImportAction(stepIndex: string): Promise<void> {
   if (stepIndex === '01') {
     if (desktop.isDesktop.value) {
@@ -333,9 +679,7 @@ async function onPaperSelected(event: Event): Promise<void> {
   input.value = ''
   if (!file) return
   const success = await paper.handleUpload(file)
-  if (success) {
-    await reloadDerivedViews()
-  }
+  if (success) await reloadDerivedViews()
 }
 
 async function onCodeSelected(event: Event): Promise<void> {
@@ -344,12 +688,9 @@ async function onCodeSelected(event: Event): Promise<void> {
   input.value = ''
   if (!file) return
   const success = await code.handleUpload(file)
-  if (success) {
-    await reloadDerivedViews()
-  }
+  if (success) await reloadDerivedViews()
 }
 
-// Tensor flow handlers
 function onTensorNodeClick(node: TensorFlowNode): void {
   tensorFlow.selectNode(node)
   void jumpToCode(node.sourcePath, node.lineStart)
@@ -365,7 +706,6 @@ async function jumpToCode(path: string, line: number): Promise<void> {
   codeEditorRef.value?.goToLine(line)
 }
 
-// Trace evidence handlers
 function onTraceRowSelect(row: TraceRowView): void {
   selectedTraceRow.value = row
   evidenceDrawerVisible.value = true
@@ -377,7 +717,6 @@ async function onEvidenceConfirm(row: TraceRowView): Promise<void> {
     return
   }
   await trace.reviewTrace(row.id, 'accepted')
-  ElMessage.success(`已确认追溯关系: ${row.paper} ↔ ${row.code}`)
   evidenceDrawerVisible.value = false
 }
 
@@ -387,7 +726,6 @@ async function onEvidenceReject(row: TraceRowView): Promise<void> {
     return
   }
   await trace.reviewTrace(row.id, 'rejected')
-  ElMessage.warning(`已驳回追溯关系: ${row.paper} ↔ ${row.code}`)
   evidenceDrawerVisible.value = false
 }
 
@@ -403,11 +741,7 @@ async function onGitHubImport(): Promise<void> {
 
 async function onSaveCode(): Promise<void> {
   await code.saveEditorBuffer()
-  await Promise.allSettled([
-    tensorFlow.loadTensorFlow(),
-    trace.loadTraceRows(),
-    insights.loadInsights(),
-  ])
+  await reloadDerivedViews()
 }
 
 async function reloadDerivedViews(): Promise<void> {
@@ -419,241 +753,892 @@ async function reloadDerivedViews(): Promise<void> {
 }
 
 async function reloadAfterAgentAction(): Promise<void> {
-  await Promise.allSettled([
-    code.loadCodeTree(),
-    reloadDerivedViews(),
-  ])
+  await Promise.allSettled([code.loadCodeTree(), reloadDerivedViews()])
 }
 
-watch(activeInsight, (tab) => {
+watch(activeBottomPanel, (tab) => {
   if (tab === 'flow') void tensorFlow.loadTensorFlow()
   if (tab === 'conflict' || tab === 'report') void insights.loadInsights()
 })
 </script>
 
 <style scoped>
-.prototype-page {
+.ide-workbench {
+  --ide-border: #d8dee6;
+  --ide-muted: #6b7785;
+  --ide-surface: #ffffff;
   display: grid;
-  gap: 18px;
-  --workspace-panel-height: 1040px;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 42px minmax(0, 1fr) 23px;
+  overflow: hidden;
+  background: #f5f7f9;
+  color: #26323d;
 }
 
-.workspace-head,
-.review-toolbar {
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
+.command-bar,
+.status-bar,
+.sidebar-header,
+.pane-tab-strip,
+.bottom-panel-header {
+  display: flex;
+  align-items: center;
+}
+
+.command-bar {
+  z-index: 4;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--ide-border);
   background: #ffffff;
 }
 
-.workspace-head {
+.project-breadcrumb,
+.command-actions,
+.project-root-row,
+.repository-stats,
+.status-bar span,
+.pane-tab,
+.panel-controls {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 20px;
-}
-
-.title-row {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-top: 4px;
 }
 
-.workspace-head h1 {
-  margin: 0;
-  font-size: 26px;
-}
-
-.workspace-head p {
-  margin: 6px 0 0;
-  color: #667789;
-  line-height: 1.6;
-}
-
-.head-meta {
-  display: grid;
+.project-breadcrumb {
+  min-width: 0;
   gap: 6px;
-  min-width: 180px;
-  padding: 12px;
-  border-radius: 8px;
-  background: #f3f7f6;
-  text-align: right;
+  color: var(--ide-muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
-.head-meta span {
-  color: #667789;
+.project-name {
+  max-width: 180px;
+  overflow: hidden;
+  color: #26323d;
+  font-weight: 700;
+  text-overflow: ellipsis;
+}
+
+.breadcrumb-separator {
+  color: #a0a9b3;
+}
+
+.mode-switch {
+  display: flex;
+  padding: 2px;
+  border: 1px solid var(--ide-border);
+  border-radius: 5px;
+  background: #f6f8fa;
+}
+
+.mode-switch button {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #667382;
+  cursor: pointer;
   font-size: 12px;
 }
 
-.review-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px;
-}
-
-.toolbar-group {
-  display: inline-flex;
-  gap: 6px;
-  padding: 4px;
-  border-radius: 8px;
-  background: #eef3f2;
-}
-
-.mode-button {
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #536475;
-  cursor: pointer;
-  font: inherit;
-}
-
-.mode-button.active {
-  background: #1f8f78;
-  color: #ffffff;
-}
-
-.toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.analysis-canvas {
-  display: grid;
-  grid-template-columns: minmax(460px, 0.92fr) minmax(560px, 1.08fr);
-  gap: 16px;
-  align-items: stretch;
-}
-
-.code-panel {
-  display: flex;
-  height: var(--workspace-panel-height);
-  max-height: var(--workspace-panel-height);
-  flex-direction: column;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
+.mode-switch button.active {
   background: #ffffff;
+  color: #147866;
+  box-shadow: 0 1px 3px rgba(28, 43, 54, 0.12);
+  font-weight: 700;
+}
+
+.command-actions {
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.ide-body {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
-.panel-title {
+.activity-bar {
+  z-index: 6;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
+  width: 46px;
+  flex: 0 0 46px;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 4px 0;
+  border-right: 1px solid var(--ide-border);
+  background: #f8f9fb;
 }
 
-.panel-title h2 {
-  margin: 0;
-}
-
-.panel-title p {
-  margin: 6px 0 0;
-  color: #667789;
-  line-height: 1.6;
-}
-
-.code-workbench {
+.activity-button {
+  position: relative;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  gap: 12px;
-  min-height: 0;
+  width: 100%;
+  height: 43px;
+  place-items: center;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: #6b7785;
+  cursor: pointer;
+}
+
+.activity-button:hover {
+  color: #26323d;
+  background: #eef2f4;
+}
+
+.activity-button.active {
+  border-left-color: #1f8f78;
+  color: #1f8f78;
+  background: #edf7f4;
+}
+
+.activity-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: grid;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  place-items: center;
+  border-radius: 8px;
+  background: #1f8f78;
+  color: #ffffff;
+  font-size: 9px;
+}
+
+.activity-spacer {
   flex: 1;
 }
 
-.repository-actions {
+.explorer-sidebar,
+.agent-sidebar {
+  z-index: 3;
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto;
-  gap: 8px;
-  align-items: center;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--ide-border);
+  background: #f8fafb;
 }
 
-.analysis-summary {
+.explorer-sidebar {
+  flex: 0 0 auto;
+  grid-template-rows: 35px 29px minmax(0, 1fr);
+}
+
+.explorer-resize-handle,
+.editor-resize-handle,
+.bottom-resize-handle {
+  z-index: 8;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.explorer-resize-handle {
+  width: 4px;
+  flex: 0 0 4px;
+  margin-left: -4px;
+  cursor: col-resize;
+}
+
+.explorer-resize-handle:hover,
+.editor-resize-handle:hover,
+.bottom-resize-handle:hover {
+  background: #1f8f78;
+}
+
+.explorer-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--ide-border);
+  background: #f3f6f8;
+}
+
+.explorer-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #6c7885;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.explorer-tabs button.active {
+  border-bottom-color: #1f8f78;
+  background: #ffffff;
+  color: #176f60;
+  font-weight: 700;
+}
+
+.explorer-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-explorer-content {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.outline-content {
+  display: grid;
+}
+
+.sidebar-header {
+  justify-content: space-between;
+  min-height: 35px;
+  padding: 0 7px 0 12px;
+  border-bottom: 1px solid var(--ide-border);
+  color: #5f6b78;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.project-overview {
+  border-bottom: 1px solid var(--ide-border);
+}
+
+.project-root-row {
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.project-root-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-state-list {
+  display: grid;
+  padding: 2px 6px 7px;
+}
+
+.import-state {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #657281;
+  text-align: left;
+}
+
+.import-state:not(:disabled) {
+  cursor: pointer;
+}
+
+.import-state:not(:disabled):hover {
+  background: #edf2f4;
+}
+
+.import-state > span {
+  color: #9aa4ae;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+.import-state div {
   display: flex;
-  grid-column: 1 / -1;
-  flex-wrap: wrap;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
   gap: 6px;
 }
 
-.dock-grid {
+.import-state strong,
+.import-state small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-state strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.import-state small {
+  color: #8995a1;
+  font-size: 10px;
+}
+
+.import-state.ready > span,
+.import-state.ready small {
+  color: #1f8f78;
+}
+
+.github-import {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.7fr);
-  gap: 16px;
-  padding: 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+  padding: 7px;
+  border-bottom: 1px solid var(--ide-border);
 }
 
-.assistant-panel {
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
+.repository-stats {
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--ide-border);
+  color: #75818e;
+  font-size: 10px;
+}
+
+.tree-container {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tree-container :deep(.file-tree) {
+  height: 100%;
+  gap: 5px;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.tree-container :deep(.tree-head span) {
+  display: none;
+}
+
+.tree-container :deep(.tree-head strong),
+.tree-container :deep(.ignore-summary strong) {
+  font-size: 11px;
+}
+
+.tree-container :deep(.file-node) {
+  min-height: 25px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.tree-container :deep(.ignore-summary) {
+  font-size: 10px;
+}
+
+.work-area {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
   background: #ffffff;
-  padding: 16px;
 }
 
-.assistant-panel h2 {
-  margin: 0;
+.editor-grid {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns:
+    minmax(0, var(--left-pane-width, 50%))
+    5px
+    minmax(0, calc(100% - var(--left-pane-width, 50%) - 5px));
+  overflow: hidden;
 }
 
-.assistant-panel p {
-  margin: 6px 0 0;
-  color: #667789;
-  line-height: 1.6;
+.editor-resize-handle {
+  width: 5px;
+  cursor: col-resize;
+  border-right: 1px solid var(--ide-border);
+  border-left: 1px solid var(--ide-border);
 }
 
-.suggestion-actions {
+.editor-pane {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 32px minmax(0, 1fr);
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.pane-tab-strip {
+  min-width: 0;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--ide-border);
+  background: #f6f8fa;
+}
+
+.draggable-tab {
+  cursor: grab;
+}
+
+.draggable-tab:active {
+  cursor: grabbing;
+}
+
+.pane-tab {
+  min-width: 0;
+  height: 32px;
+  gap: 6px;
+  padding: 0 11px;
+  overflow: hidden;
+  border-right: 1px solid var(--ide-border);
+  color: #566371;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-tab.active {
+  border-top: 2px solid #1f8f78;
+  background: #ffffff;
+  color: #26323d;
+}
+
+.pane-meta,
+.dirty-indicator {
+  flex: 0 0 auto;
+  padding-right: 9px;
+  color: #7b8793;
+  font-size: 10px;
+}
+
+.dirty-indicator {
+  color: #a15f00;
+}
+
+.paper-pane :deep(.paper-panel) {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.paper-pane :deep(.panel-title) {
+  display: none;
+}
+
+.paper-pane :deep(.pdf-toolbar) {
+  min-height: 34px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--ide-border);
+  border-radius: 0;
+}
+
+.paper-pane :deep(.pdf-reader) {
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 0;
+}
+
+.paper-pane :deep(.page-rail) {
+  gap: 4px;
+  padding: 6px 5px;
+  border-right: 1px solid var(--ide-border);
+  background: #f7f9fa;
+}
+
+.paper-pane :deep(.page-rail button) {
+  padding: 5px;
+  border-radius: 3px;
+}
+
+.paper-pane :deep(.paper-scroll) {
+  border: 0;
+  border-radius: 0;
+}
+
+.paper-pane :deep(.paper-page) {
+  padding: 24px 30px;
+  box-shadow: none;
+}
+
+.paper-pane :deep(.paper-page h3) {
+  font-size: 21px;
+}
+
+.code-pane :deep(.editor-shell) {
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.code-pane :deep(.editor-tabs),
+.code-pane :deep(.editor-footer) {
+  min-height: 32px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+
+.bottom-panel {
+  position: relative;
+  display: grid;
+  height: clamp(230px, 32vh, 340px);
+  min-height: 190px;
+  grid-template-rows: 34px minmax(0, 1fr);
+  overflow: hidden;
+  border-top: 1px solid #bfc8d2;
+  background: #ffffff;
+}
+
+.bottom-resize-handle {
+  position: absolute;
+  top: -3px;
+  right: 0;
+  left: 0;
+  height: 6px;
+  cursor: row-resize;
+}
+
+.bottom-panel.maximized {
+  height: min(62vh, 680px);
+}
+
+.bottom-panel-header {
+  justify-content: space-between;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--ide-border);
+  background: #f8f9fb;
+}
+
+.bottom-tabs {
   display: flex;
-  gap: 10px;
-  margin-top: 18px;
+  height: 100%;
+  gap: 18px;
+}
+
+.bottom-tabs button {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: 5px;
+  padding: 0 1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #657281;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.bottom-tabs button.active {
+  border-bottom-color: #1f8f78;
+  color: #1f8f78;
+  font-weight: 700;
+}
+
+.bottom-tabs button span {
+  display: grid;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  place-items: center;
+  border-radius: 8px;
+  background: #e6ecef;
+  color: #667382;
+  font-size: 9px;
+}
+
+.panel-controls {
+  gap: 1px;
+}
+
+.bottom-panel-content {
+  min-height: 0;
+  overflow: auto;
+}
+
+.trace-panel-layout {
+  display: grid;
+  min-height: 100%;
+  grid-template-columns: minmax(700px, 1fr) 220px;
+}
+
+.trace-panel-layout :deep(.trace-matrix) {
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 0;
+}
+
+.trace-panel-layout :deep(.trace-matrix header) {
+  margin-bottom: 5px;
+}
+
+.trace-panel-layout :deep(.trace-matrix h2) {
+  font-size: 14px;
+}
+
+.trace-panel-layout :deep(.trace-matrix p) {
+  display: none;
+}
+
+.trace-panel-layout :deep(.trace-row) {
+  min-width: 700px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  font-size: 11px;
+}
+
+.trace-summary {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 12px;
+  border-left: 1px solid var(--ide-border);
+  background: #f8fafb;
+  color: #667382;
+  font-size: 11px;
+}
+
+.trace-summary strong {
+  color: #26323d;
+  font-size: 12px;
+}
+
+.trace-summary p {
+  margin: 0;
+  line-height: 1.5;
 }
 
 .tensor-flow-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
-  gap: 16px;
-  padding: 16px;
+  height: 100%;
+  min-height: 0;
+  grid-template-columns: minmax(720px, 1fr) 300px;
 }
 
-@media (max-width: 1180px) {
-  .analysis-canvas,
-  .dock-grid,
-  .tensor-flow-layout {
-    grid-template-columns: 1fr;
+.tensor-flow-layout :deep(.tensor-flow-board),
+.tensor-flow-layout :deep(.flow-inspector) {
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+}
+
+.tensor-flow-layout :deep(.tensor-flow-board h2),
+.tensor-flow-layout :deep(.flow-inspector h2) {
+  font-size: 14px;
+}
+
+.tensor-flow-layout :deep(.tensor-flow-board > header p),
+.tensor-flow-layout :deep(.api-note) {
+  display: none;
+}
+
+.tensor-flow-layout :deep(.tensor-flow-canvas) {
+  min-height: 0;
+  max-height: none;
+  margin-top: 7px;
+  overflow: hidden;
+  border-radius: 3px;
+}
+
+.tensor-flow-layout :deep(.flow-inspector) {
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--ide-border);
+  background: #f8fafb;
+}
+
+.bottom-panel-content :deep(.placeholder-notice) {
+  margin: 8px 10px 0;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.bottom-panel-content :deep(.conflict-grid),
+.bottom-panel-content :deep(.report-layout) {
+  gap: 8px;
+  padding: 9px 10px;
+}
+
+.bottom-panel-content :deep(.conflict-card),
+.bottom-panel-content :deep(.report-card) {
+  gap: 7px;
+  padding: 10px;
+  border-radius: 4px;
+}
+
+.bottom-panel-content :deep(.conflict-card h2) {
+  font-size: 13px;
+}
+
+.bottom-panel-content :deep(.conflict-card p),
+.bottom-panel-content :deep(.report-card p) {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.bottom-panel-content :deep(.report-card strong) {
+  font-size: 20px;
+}
+
+.report-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--ide-border);
+  color: #667382;
+  font-size: 11px;
+}
+
+.agent-sidebar {
+  width: clamp(300px, 24vw, 380px);
+  flex: 0 0 clamp(300px, 24vw, 380px);
+  grid-template-rows: 35px minmax(0, 1fr);
+  border-right: 0;
+  border-left: 1px solid var(--ide-border);
+  background: #ffffff;
+}
+
+.agent-content {
+  min-height: 0;
+  overflow: auto;
+}
+
+.agent-content :deep(.agent-panel) {
+  min-height: 100%;
+  gap: 11px;
+  padding: 11px;
+}
+
+.agent-content :deep(.agent-panel header) {
+  align-items: center;
+}
+
+.agent-content :deep(.agent-panel h2) {
+  font-size: 14px;
+}
+
+.agent-content :deep(.agent-panel header p) {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.agent-content :deep(.context-row span),
+.agent-content :deep(.citation-list span) {
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.agent-content :deep(.answer-block),
+.agent-content :deep(.confirmation-card) {
+  padding: 10px;
+  border-radius: 4px;
+}
+
+.status-bar {
+  gap: 14px;
+  padding: 0 9px;
+  overflow: hidden;
+  background: #1f8f78;
+  color: #ffffff;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.status-bar span {
+  gap: 4px;
+}
+
+.status-spacer {
+  flex: 1;
+}
+
+@media (max-width: 1200px) {
+  .explorer-sidebar {
+    width: 230px;
+    flex-basis: 230px;
   }
 
-  .code-panel {
-    height: auto;
-    max-height: none;
-    min-height: 840px;
+  .agent-sidebar {
+    width: 310px;
+    flex-basis: 310px;
+  }
+
+  .command-bar .mode-switch {
+    display: none;
   }
 }
 
-@media (max-width: 820px) {
-  .workspace-head,
-  .review-toolbar,
-  .toolbar-actions,
-  .panel-title {
-    align-items: stretch;
-    flex-direction: column;
+@media (max-width: 980px) {
+  .explorer-resize-handle {
+    display: none;
   }
 
-  .analysis-canvas,
-  .code-workbench {
+  .explorer-sidebar,
+  .agent-sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    box-shadow: 0 8px 24px rgba(28, 43, 54, 0.18);
+  }
+
+  .explorer-sidebar {
+    left: 46px;
+    width: min(300px, calc(100vw - 92px));
+  }
+
+  .agent-sidebar {
+    right: 0;
+    width: min(380px, calc(100vw - 46px));
+  }
+}
+
+@media (max-width: 760px) {
+  .project-breadcrumb > span:not(.project-name),
+  .command-actions .el-button span > span {
+    display: none;
+  }
+
+  .command-actions {
+    margin-left: auto;
+  }
+
+  .editor-grid {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(300px, 1fr) minmax(320px, 1fr);
+    overflow: auto;
   }
 
-  .repository-actions {
-    grid-template-columns: 1fr;
+  .editor-resize-handle {
+    display: none;
   }
 
-  .head-meta {
-    text-align: left;
+  .paper-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--ide-border);
+  }
+
+  .bottom-tabs {
+    gap: 10px;
+  }
+
+  .bottom-tabs button {
+    font-size: 10px;
+  }
+
+  .status-bar span:nth-of-type(2),
+  .status-bar span:nth-of-type(3) {
+    display: none;
   }
 }
 </style>

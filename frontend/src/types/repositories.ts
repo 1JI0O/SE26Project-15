@@ -62,6 +62,15 @@ export interface WorkspaceCodeFile {
 export interface WorkspaceTensorFlow {
   project_id: string
   renderer: string
+  view: 'architecture' | 'debug'
+  root_symbol: string | null
+  root_label: string | null
+  available_roots: Array<{
+    symbol_id: string
+    label: string
+    source_path: string
+    score: number
+  }>
   nodes: Array<{
     id: string
     label: string
@@ -74,6 +83,9 @@ export interface WorkspaceTensorFlow {
     shape_reason: string | null
     op: string
     symbol_id: string
+    component_symbol_id: string | null
+    expandable: boolean
+    external: boolean
     x: number
     y: number
     width: number
