@@ -41,7 +41,15 @@
           size="small"
           placeholder="项目说明（可选）"
         />
-        <el-button size="small" type="primary" native-type="submit">创建</el-button>
+        <el-button
+          size="small"
+          type="primary"
+          native-type="submit"
+          :loading="store.creating"
+          :disabled="!form.name.trim()"
+        >
+          创建
+        </el-button>
       </el-form>
 
       <div class="project-content">
@@ -126,8 +134,13 @@ const partlySelected = computed(
   () => selectedIds.value.length > 0 && selectedIds.value.length < store.projects.length,
 )
 
-onMounted(() => {
-  void store.fetchProjects()
+onMounted(async () => {
+  try {
+    await store.fetchProjects()
+  } catch (error) {
+    console.error('Failed to load projects', error)
+    ElMessage.error('项目列表加载失败，请确认本地后端已启动')
+  }
 })
 
 async function submit() {
@@ -135,13 +148,18 @@ async function submit() {
     ElMessage.warning('请输入项目名称')
     return
   }
-  const project = await store.create({
-    name: form.name.trim(),
-    description: form.description.trim(),
-  })
-  form.name = ''
-  form.description = ''
-  await router.push({ name: 'workspace', params: { id: project.id } })
+  try {
+    const project = await store.create({
+      name: form.name.trim(),
+      description: form.description.trim(),
+    })
+    form.name = ''
+    form.description = ''
+    await router.push({ name: 'workspace', params: { id: project.id } })
+  } catch (error) {
+    console.error('Failed to create project', error)
+    ElMessage.error('项目创建失败，请检查后端连接后重试')
+  }
 }
 
 function openProject(projectId: number) {
