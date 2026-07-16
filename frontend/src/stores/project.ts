@@ -6,6 +6,7 @@ import type { Project, ProjectCreate } from '@/types/api'
 interface ProjectState {
   projects: Project[]
   loading: boolean
+  creating: boolean
   deleting: boolean
 }
 
@@ -15,6 +16,7 @@ export const useProjectStore = defineStore('project', {
   state: (): ProjectState => ({
     projects: [],
     loading: false,
+    creating: false,
     deleting: false,
   }),
   actions: {
@@ -27,9 +29,14 @@ export const useProjectStore = defineStore('project', {
       }
     },
     async create(payload: ProjectCreate) {
-      const project = await createProject(payload)
-      this.projects.unshift(project)
-      return project
+      this.creating = true
+      try {
+        const project = await createProject(payload)
+        this.projects.unshift(project)
+        return project
+      } finally {
+        this.creating = false
+      }
     },
     async deleteMany(projectIds: number[]) {
       this.deleting = true
