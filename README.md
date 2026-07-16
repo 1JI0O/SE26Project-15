@@ -9,7 +9,7 @@ TraceLab 是面向论文复现与代码审阅的本地工作台。当前技术�
 - 后端：FastAPI、Pydantic v2、SQLModel/SQLAlchemy、SQLite
 - 论文解析：MinerU 本地服务或 MinerU 官方 API，异步任务与本地缓存
 - 代码分析：安全 ZIP/GitHub 导入、`.gitignore`/macOS 元数据过滤、Python AST、语义张量图
-- 智能能力：静态追溯基线、可选 OpenAI-compatible LLM、持久化 Agent 会话/记忆、工具与技能链、人工确认
+- 智能能力：静态追溯基线、可选 OpenAI-compatible LLM、流式 Agent Run、持久化会话/记忆、AgentSkills/MCP 能力注册表、人工确认
 
 ## 目录
 
@@ -184,9 +184,11 @@ MinerU 官方 API 可直接在设置窗口配置。选择“本地 MinerU”时�
 5. 查看主模型的分层架构图，双击自定义模块下钻；需要排查时切换算子调试图，点击节点可跳转到对应代码。
 6. 生成追溯候选并人工接受或拒绝；未配置 LLM 时自动降级为静态结果。
 7. 在 Agent 侧栏连续对话；可新建、重命名和归档会话，并管理项目/跨项目记忆。Agent 可读取当前论文、代码、架构图和追溯证据，定位代码或聚焦架构图。
-8. Agent 保存代码前必须先生成补丁并完成风险分析；保存代码、重跑分析、创建/更新追溯关系仍须人工确认。
-9. 通过右上角设置窗口切换 Agent 服务或 MinerU 本地/官方接入，无需重启。
-10. 返回项目入口，点击“批量管理”，可全选或勾选多个项目并永久删除其关联数据。
+8. Agent 回答通过 SSE 逐步显示，同时展示可审计的进度摘要和工具交互；重复的成功读取会复用证据，达到预算后强制收敛为结论。
+9. Agent“能力”页可查看和开关内置/外部 Skill 与 Tool。外部能力默认关闭且不受信任；保存代码、重跑分析、创建/更新追溯关系仍须人工确认。
+10. 上传大型仓库或保存代码后，架构图在后台生成并持久化；打开流程图只读取缓存，分析完成后 UI 自动刷新。
+11. 通过右上角设置窗口切换 Agent 服务或 MinerU 本地/官方接入，无需重启。
+12. 返回项目入口，点击“批量管理”，可全选或勾选多个项目并永久删除其关联数据。
 
 “魔改冲突分析”和“报告文件导出”当前仅保留稳定 UI/接口，不应视为算法已实现。
 
@@ -203,6 +205,12 @@ pnpm build
 ```
 
 SQLite 表结构迁移会在 FastAPI 启动时自动执行。开发数据默认写入 `backend/data/` 和 `backend/uploads/`（取决于启动工作目录与 `.env` 配置）。
+
+## 外部 Agent 能力
+
+TraceLab 直接发现符合 AgentSkills `SKILL.md` 约定的目录。可放入仓库根目录 `skills/<name>/SKILL.md`、`~/.tracelab/skills/` 或 `~/.openclaw/skills/`。其他目录可通过 `TRACELAB_AGENT_SKILL_ROOTS` 显式追加。外部 Skill 首次出现时不会自动进入 Agent 上下文，需要在 Agent 侧栏“能力”页同时启用并标记为可信。
+
+外部可调用工具通过 `plugins/<plugin>/tracelab.plugin.json` 声明 HTTP MCP server。TraceLab 会读取 `tools/list` 的 JSON Schema，并在执行前后校验参数/结构化输出；外部写工具沿用人工确认。完整格式和安全边界见 [Agent 契约](docs/contracts/agent.md)。
 
 ## 接口文档
 

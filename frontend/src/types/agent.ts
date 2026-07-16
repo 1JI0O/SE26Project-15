@@ -68,7 +68,7 @@ export interface AgentUiAction {
 
 export interface AgentToolEvent {
   tool_name: string
-  status: 'succeeded' | 'failed' | 'pending_confirmation'
+  status: 'running' | 'succeeded' | 'failed' | 'pending_confirmation'
   summary: string
   result: Record<string, unknown> & { ui_action?: AgentUiAction }
 }
@@ -99,6 +99,40 @@ export interface AgentTurnResponse {
   run_id: string
   status: string
   confirmation: AgentConfirmation | null
+}
+
+export interface AgentRunSubmission {
+  conversation: AgentConversation
+  user_message: AgentMessage
+  run_id: string
+  status: string
+}
+
+export interface AgentRunEvent {
+  event_id: string
+  run_id: string
+  conversation_id: string
+  project_id: number
+  sequence: number
+  event_type: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface AgentCapability {
+  capability_id: string
+  name: string
+  title: string
+  description: string
+  kind: 'skill' | 'tool' | 'plugin'
+  source: string
+  version: string
+  enabled: boolean
+  trusted: boolean
+  eligible: boolean
+  read_only: boolean
+  requires_confirmation: boolean
+  reason: string | null
 }
 
 export interface AgentConversationDecisionResponse {

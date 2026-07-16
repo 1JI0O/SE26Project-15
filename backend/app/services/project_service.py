@@ -11,10 +11,12 @@ from app.models.entities import (
     AgentMemory,
     AgentMessage,
     AgentRun,
+    AgentRunEvent,
     AgentToolRequest,
     CodeRepository,
     PaperDocument,
     Project,
+    RepositoryAnalysisJob,
     TraceLink,
 )
 
@@ -31,12 +33,14 @@ def _delete_project_rows(session: Session, project_ids: list[int]) -> list[int]:
 
     for model in (
         AgentToolRequest,
+        AgentRunEvent,
         AgentMessage,
         AgentRun,
         AgentMemory,
         AgentConversation,
         TraceLink,
         PaperDocument,
+        RepositoryAnalysisJob,
         CodeRepository,
     ):
         rows = session.exec(select(model).where(model.project_id.in_(existing_ids))).all()

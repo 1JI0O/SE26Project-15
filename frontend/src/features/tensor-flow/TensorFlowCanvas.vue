@@ -17,6 +17,14 @@
         <el-tag v-if="degraded" type="warning" effect="plain" size="small">
           兼容数据
         </el-tag>
+        <el-tag
+          v-if="['pending', 'queued', 'running', 'stale'].includes(analysisStatus)"
+          type="info"
+          effect="plain"
+          size="small"
+        >
+          后台分析{{ analysisStale ? ' · 显示旧缓存' : '' }}
+        </el-tag>
       </div>
 
       <div class="flow-toolbar">
@@ -35,22 +43,16 @@
             :value="root.symbolId"
           />
         </el-select>
-        <el-select
+        <el-select-v2
           v-model="focusedNodeId"
           class="node-search"
           size="small"
           filterable
           clearable
+          :options="nodeSearchOptions"
           placeholder="搜索节点"
           @change="focusSelectedNode"
-        >
-          <el-option
-            v-for="node in nodes"
-            :key="node.id"
-            :label="node.title"
-            :value="node.id"
-          />
-        </el-select>
+        />
         <el-button-group>
           <el-button
             size="small"
@@ -86,13 +88,22 @@
 
     <div v-if="loading" class="state-placeholder">
       <el-icon class="is-loading" :size="24"><Loading /></el-icon>
-      <span>分析模型结构...</span>
+      <span>正在读取模型架构缓存...</span>
     </div>
     <div v-else-if="error" class="state-placeholder state-error">
       <span>{{ error }}</span>
     </div>
     <div v-else-if="!nodes.length" class="state-placeholder">
-      <span>未识别到可展示的模型主路径</span>
+      <el-icon
+        v-if="['pending', 'queued', 'running', 'stale'].includes(analysisStatus)"
+        class="is-loading"
+        :size="22"
+      ><Loading /></el-icon>
+      <span>
+        {{ ['pending', 'queued', 'running', 'stale'].includes(analysisStatus)
+          ? '模型架构正在后台生成，完成后会自动显示'
+          : '未识别到可展示的模型主路径' }}
+      </span>
     </div>
 
     <div v-else class="tensor-flow-canvas">
@@ -123,15 +134,15 @@
         </defs>
         <g class="edge-layer">
           <path
-            v-for="edge in edges"
+            v-for="edge in visibleEdges"
             :key="`${edge.id}-path`"
             :d="edgePath(edge.points)"
             class="flow-edge"
             marker-end="url(#flow-arrow)"
           />
         </g>
-        <g class="edge-label-layer">
-          <g v-for="label in edgeLabels" :key="`${label.id}-label`">
+        <g v-if="showEdgeLabels" class="edge-label-layer">
+          <g v-for="label in visibleEdgeLabels" :key="`${label.id}-label`">
             <rect
               :x="label.rectX"
               :y="label.rectY"
@@ -147,7 +158,7 @@
         </g>
         <g class="node-layer">
           <g
-            v-for="node in nodes"
+            v-for="node in visibleNodes"
             :key="node.id"
             :class="[
               'flow-node',
@@ -166,7 +177,7 @@
               {{ node.sourcePath }}:{{ node.lineStart }}
             </title>
             <rect :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="6" />
-            <text :x="node.x + 12" :y="node.y + 20" class="node-kind">
+            <text v-if="showNodeDetails" :x="node.x + 12" :y="node.y + 20" class="node-kind">
               {{ node.external && node.kind === 'component' ? 'Black box' : node.kindLabel }}
             </text>
             <g v-if="node.expandable" class="expand-badge">
@@ -174,13 +185,15 @@
               <text :x="node.x + node.width - 17" :y="node.y + 20">+</text>
             </g>
             <text
-              :ref="(el) => registerText(node.id, 'title', el as SVGTextElement)"
+              v-if="showNodeTitles"
+              :ref="(el) => registerText(node, 'title', el as SVGTextElement)"
               :x="node.x + 12"
               :y="node.y + 45"
               class="node-title"
             >{{ node.title }}</text>
             <text
-              :ref="(el) => registerText(node.id, 'detail', el as SVGTextElement)"
+              v-if="showNodeDetails"
+              :ref="(el) => registerText(node, 'detail', el as SVGTextElement)"
               :x="node.x + 12"
               :y="node.y + 68"
               class="node-detail"
@@ -194,7 +207,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ArrowLeft, FullScreen, Loading, ZoomIn, ZoomOut } from '@element-plus/icons-vue'
 import type {
   TensorFlowEdge,
@@ -213,6 +226,8 @@ const props = defineProps<{
   loading: boolean
   error: string | null
   degraded: boolean
+  analysisStatus: 'missing' | 'pending' | 'queued' | 'running' | 'ready' | 'failed' | 'stale'
+  analysisStale: boolean
   currentView: TensorFlowView
   rootSymbol: string | null
   rootLabel: string
@@ -231,6 +246,9 @@ const emit = defineEmits<{
 const svgRef = ref<SVGSVGElement | null>(null)
 const focusedNodeId = ref('')
 const view = reactive({ x: 0, y: 0, width: 1040, height: 520 })
+const fittedWidth = ref(1040)
+const canvasSize = reactive({ width: 1040, height: 520 })
+let resizeObserver: ResizeObserver | null = null
 const panState = ref<{
   clientX: number
   clientY: number
@@ -240,10 +258,16 @@ const panState = ref<{
 
 const graphBounds = computed(() => {
   if (!props.nodes.length) return { x: 0, y: 0, width: 1040, height: 520 }
-  const minX = Math.min(...props.nodes.map((node) => node.x))
-  const minY = Math.min(...props.nodes.map((node) => node.y))
-  const maxX = Math.max(...props.nodes.map((node) => node.x + node.width))
-  const maxY = Math.max(...props.nodes.map((node) => node.y + node.height))
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const node of props.nodes) {
+    minX = Math.min(minX, node.x)
+    minY = Math.min(minY, node.y)
+    maxX = Math.max(maxX, node.x + node.width)
+    maxY = Math.max(maxY, node.y + node.height)
+  }
   return {
     x: minX - 44,
     y: minY - 44,
@@ -252,64 +276,134 @@ const graphBounds = computed(() => {
   }
 })
 const viewBox = computed(() => `${view.x} ${view.y} ${view.width} ${view.height}`)
-const zoomPercent = computed(() => Math.round((graphBounds.value.width / view.width) * 100))
+const zoomPercent = computed(() => Math.round((fittedWidth.value / view.width) * 100))
+const projectedNodeWidth = computed(() => {
+  const representative = props.nodes[Math.floor(props.nodes.length / 2)]?.width || 180
+  return (representative / Math.max(view.width, 1)) * canvasSize.width
+})
+const nodeSearchOptions = computed(() =>
+  props.nodes.map((node) => ({ label: `${node.title} · ${node.sourcePath}`, value: node.id })),
+)
+const showNodeTitles = computed(() => projectedNodeWidth.value >= 42)
+const showNodeDetails = computed(() => projectedNodeWidth.value >= 86)
+const showEdgeLabels = computed(
+  () => projectedNodeWidth.value >= 74 && (
+    props.edges.length <= 800 || projectedNodeWidth.value >= 160
+  ),
+)
+const visibleNodes = computed(() => {
+  if (props.nodes.length < 220) return props.nodes
+  const margin = Math.max(view.width * 0.08, 100)
+  const inViewport = props.nodes.filter((node) => (
+    node.x + node.width >= view.x - margin &&
+    node.x <= view.x + view.width + margin &&
+    node.y + node.height >= view.y - margin &&
+    node.y <= view.y + view.height + margin
+  ))
+  const maximum = projectedNodeWidth.value < 28 ? 320 : 520
+  if (inViewport.length <= maximum) return inViewport
+  const selectedId = props.selectedNode?.id
+  const connected = new Set<string>([selectedId || ''])
+  if (selectedId) {
+    for (const edge of props.edges) {
+      if (edge.source === selectedId) connected.add(edge.target)
+      if (edge.target === selectedId) connected.add(edge.source)
+    }
+  }
+  const essential = inViewport.filter((node) => connected.has(node.id))
+  const essentialIds = new Set(essential.map((node) => node.id))
+  const remaining = Math.max(maximum - essential.length, 0)
+  const stride = Math.ceil(inViewport.length / Math.max(remaining, 1))
+  return [
+    ...essential,
+    ...inViewport.filter(
+      (node, index) => !essentialIds.has(node.id) && index % stride === 0,
+    ),
+  ].slice(0, maximum)
+})
+const visibleEdges = computed(() => {
+  if (props.edges.length < 300) return props.edges
+  const visibleIds = new Set(visibleNodes.value.map((node) => node.id))
+  const connected = props.edges.filter(
+    (edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target),
+  )
+  if (connected.length <= 700) return connected
+  const selectedId = props.selectedNode?.id
+  const selectedEdges = selectedId
+    ? connected.filter((edge) => edge.source === selectedId || edge.target === selectedId)
+    : []
+  const selectedEdgeIds = new Set(selectedEdges.map((edge) => edge.id))
+  const stride = Math.ceil(connected.length / Math.max(700 - selectedEdges.length, 1))
+  return [
+    ...selectedEdges,
+    ...connected.filter((edge, index) => !selectedEdgeIds.has(edge.id) && index % stride === 0),
+  ].slice(0, 700)
+})
+const visibleEdgeLabels = computed(() => {
+  const visibleIds = new Set(visibleEdges.value.map((edge) => edge.id))
+  return props.edgeLabels.filter((label) => visibleIds.has(label.id))
+})
 
-const textRefs = new Map<string, SVGTextElement>()
+const textRefs = new Map<string, { element: SVGTextElement; maxWidth: number }>()
 
-function registerText(nodeId: string, slot: string, element: SVGTextElement | null): void {
-  const key = `${nodeId}:${slot}`
-  if (element) textRefs.set(key, element)
+function registerText(node: TensorFlowNode, slot: string, element: SVGTextElement | null): void {
+  const key = `${node.id}:${slot}`
+  if (element) textRefs.set(key, { element, maxWidth: node.width - 24 })
   else textRefs.delete(key)
 }
 
 function fitTextToNodes(): void {
-  for (const node of props.nodes) {
-    const maxWidth = node.width - 24
-    for (const slot of ['title', 'detail'] as const) {
-      const element = textRefs.get(`${node.id}:${slot}`)
-      if (!element) continue
-      element.removeAttribute('textLength')
-      element.removeAttribute('lengthAdjust')
-      if (element.getComputedTextLength() > maxWidth) {
-        element.setAttribute('textLength', String(maxWidth))
-        element.setAttribute('lengthAdjust', 'spacingAndGlyphs')
-      }
+  for (const { element, maxWidth } of textRefs.values()) {
+    element.removeAttribute('textLength')
+    element.removeAttribute('lengthAdjust')
+    if (element.getComputedTextLength() > maxWidth) {
+      element.setAttribute('textLength', String(maxWidth))
+      element.setAttribute('lengthAdjust', 'spacingAndGlyphs')
     }
   }
 }
 
 function fitView(): void {
-  Object.assign(view, graphBounds.value)
+  const bounds = graphBounds.value
+  const aspect = canvasSize.width / Math.max(canvasSize.height, 1)
+  let width = bounds.width
+  let height = bounds.height
+  if (width / height < aspect) width = height * aspect
+  else height = width / aspect
+  view.x = bounds.x + bounds.width / 2 - width / 2
+  view.y = bounds.y + bounds.height / 2 - height / 2
+  view.width = width
+  view.height = height
+  fittedWidth.value = width
 }
 
 function fitReadableView(): void {
-  const bounds = graphBounds.value
   const svg = svgRef.value
   if (!svg) {
     fitView()
     return
   }
   const rect = svg.getBoundingClientRect()
-  const readableWidth = Math.max(rect.width / 0.72, 640)
-  if (bounds.width <= readableWidth) {
-    fitView()
-    return
-  }
-  const width = Math.min(readableWidth, bounds.width)
-  const height = Math.max(bounds.height, width * (rect.height / Math.max(rect.width, 1)))
-  view.x = bounds.x
-  view.y = bounds.y + bounds.height / 2 - height / 2
-  view.width = width
-  view.height = height
+  canvasSize.width = Math.max(rect.width, 1)
+  canvasSize.height = Math.max(rect.height, 1)
+  fitView()
 }
 
 function zoomBy(factor: number, anchorX?: number, anchorY?: number): void {
-  const minimumWidth = Math.max(graphBounds.value.width * 0.22, 180)
-  const maximumWidth = Math.max(graphBounds.value.width * 5, 1600)
+  const narrowestNode = props.nodes.reduce(
+    (minimum, node) => Math.min(minimum, node.width),
+    180,
+  )
+  const minimumWidth = Math.max(
+    narrowestNode * 0.75,
+    72,
+  )
+  const maximumWidth = Math.max(fittedWidth.value * 12, 2400)
   const nextWidth = Math.min(Math.max(view.width / factor, minimumWidth), maximumWidth)
   const ratio = nextWidth / view.width
-  const x = anchorX ?? view.x + view.width / 2
-  const y = anchorY ?? view.y + view.height / 2
+  const selected = props.selectedNode
+  const x = anchorX ?? (selected ? selected.x + selected.width / 2 : view.x + view.width / 2)
+  const y = anchorY ?? (selected ? selected.y + selected.height / 2 : view.y + view.height / 2)
   view.x = x - (x - view.x) * ratio
   view.y = y - (y - view.y) * ratio
   view.height *= ratio
@@ -369,7 +463,7 @@ function focusSelectedNode(value: string): void {
   const node = props.nodes.find((candidate) => candidate.id === value)
   if (!node) return
   const width = Math.min(Math.max(node.width * 2.7, 420), graphBounds.value.width)
-  const height = width * (view.height / view.width)
+  const height = width / (canvasSize.width / Math.max(canvasSize.height, 1))
   view.x = node.x + node.width / 2 - width / 2
   view.y = node.y + node.height / 2 - height / 2
   view.width = width
@@ -385,8 +479,20 @@ onMounted(() => {
   nextTick(() => {
     fitReadableView()
     fitTextToNodes()
+    if (svgRef.value) {
+      resizeObserver = new ResizeObserver(() => {
+        const rect = svgRef.value?.getBoundingClientRect()
+        if (!rect) return
+        canvasSize.width = Math.max(rect.width, 1)
+        canvasSize.height = Math.max(rect.height, 1)
+        view.height = view.width / (canvasSize.width / canvasSize.height)
+      })
+      resizeObserver.observe(svgRef.value)
+    }
   })
 })
+
+onBeforeUnmount(() => resizeObserver?.disconnect())
 
 watch(
   () => props.nodes,

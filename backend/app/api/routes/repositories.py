@@ -5,6 +5,7 @@ from sqlmodel import Session, select
 
 from app.api.routes.helpers import parse_workspace_project_id
 from app.api.routes.projects import get_project_or_404
+from app.core.config import settings
 from app.db.session import get_session
 from app.integrations.github import GitHubImportError, import_github_archive
 from app.models.entities import CodeRepository
@@ -19,6 +20,12 @@ from app.schemas.repositories import (
     WorkspaceTensorFlowRead,
 )
 from app.services import workspace_service
+from app.services.analysis_jobs import (
+    ANALYZER_VERSION,
+    enqueue_repository_analysis,
+    persist_analysis,
+)
+from app.services.code_analysis.analyzer import scan_code_archive
 from app.services.code_analysis.archive import InvalidCodeArchiveError
 from app.services.code_analysis.editor import (
     FileAccessError,
@@ -42,7 +49,21 @@ def _code_read(
     repository: CodeRepository,
     analysis: dict | None = None,
 ) -> CodeRepositoryRead:
-    analysis = analysis or analyze_code_archive(repository.storage_path)
+    analysis = analysis or repository.analysis_json or {
+        "symbols": repository.symbols_json,
+        "imports": repository.imports_json,
+        "calls": [],
+        "pytorch_candidates": repository.pytorch_candidates_json,
+        "tensor_graph": repository.tensor_graph_json,
+        "summary": {
+            "file_count": len(repository.file_tree_json),
+            "python_file_count": 0,
+            "symbol_count": len(repository.symbols_json),
+            "call_count": 0,
+            "ignored_count": 0,
+            "total_bytes": sum(int(item.get("size", 0)) for item in repository.file_tree_json),
+        },
+    }
     return CodeRepositoryRead(
         id=repository.id or 0,
         project_id=repository.project_id,
@@ -65,6 +86,8 @@ def _store_repository(
     filename: str,
     storage_path: str,
     analysis: dict,
+    *,
+    ready: bool,
 ) -> CodeRepository:
     repository = CodeRepository(
         project_id=project_id,
@@ -75,7 +98,12 @@ def _store_repository(
         imports_json=analysis["imports"],
         pytorch_candidates_json=analysis["pytorch_candidates"],
         tensor_graph_json=analysis["tensor_graph"],
+        analysis_json=analysis,
+        analysis_status="queued",
     )
+    if ready:
+        persist_analysis(repository, analysis)
+        repository.analysis_version = ANALYZER_VERSION
     session.add(repository)
     session.commit()
     session.refresh(repository)
@@ -94,11 +122,24 @@ async def upload_code(
 
     storage_path = save_upload(project_id, "code", file)
     try:
-        analyzed = analyze_code_archive(storage_path)
+        scanned = scan_code_archive(storage_path)
+        should_inline = (
+            scanned["summary"]["total_bytes"] <= settings.tracelab_analysis_inline_max_bytes
+        )
+        analyzed = analyze_code_archive(storage_path) if should_inline else scanned
     except (zipfile.BadZipFile, InvalidCodeArchiveError) as exc:
         storage_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Invalid ZIP archive: {exc}") from exc
-    repository = _store_repository(session, project_id, file.filename, str(storage_path), analyzed)
+    repository = _store_repository(
+        session,
+        project_id,
+        file.filename,
+        str(storage_path),
+        analyzed,
+        ready=should_inline,
+    )
+    if not should_inline:
+        enqueue_repository_analysis(project_id, ["all"], "automatic-upload")
     return _code_read(repository, analyzed)
 
 
@@ -115,10 +156,23 @@ def import_code_from_github(
     get_project_or_404(project_id, session)
     try:
         storage_path, filename = import_github_archive(project_id, payload.url)
-        analyzed = analyze_code_archive(storage_path)
+        scanned = scan_code_archive(storage_path)
+        should_inline = (
+            scanned["summary"]["total_bytes"] <= settings.tracelab_analysis_inline_max_bytes
+        )
+        analyzed = analyze_code_archive(storage_path) if should_inline else scanned
     except (GitHubImportError, zipfile.BadZipFile, InvalidCodeArchiveError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    repository = _store_repository(session, project_id, filename, str(storage_path), analyzed)
+    repository = _store_repository(
+        session,
+        project_id,
+        filename,
+        str(storage_path),
+        analyzed,
+        ready=should_inline,
+    )
+    if not should_inline:
+        enqueue_repository_analysis(project_id, ["all"], "automatic-github-import")
     return _code_read(repository, analyzed)
 
 

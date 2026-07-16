@@ -68,7 +68,8 @@ export async function getWorkspacePaperDocument(
 }
 
 export function resolvePaperAssetUrl(assetBaseUrl: string, assetPath: string): string {
-  if (/^(?:https?:|data:|blob:)/i.test(assetPath)) return assetPath
+  if (/^(?:data:image\/|blob:)/i.test(assetPath)) return assetPath
+  if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(assetPath)) return ''
   const normalizedPath = assetPath.replace(/^\.\//, '').replace(/^\//, '')
   const apiBase = String(http.defaults.baseURL || '').replace(/\/$/, '')
   const assetBase = assetBaseUrl.replace(/\/$/, '')
@@ -76,6 +77,10 @@ export function resolvePaperAssetUrl(assetBaseUrl: string, assetPath: string): s
 }
 
 export async function getPaperAssetBlob(assetUrl: string): Promise<Blob> {
+  const apiBase = String(http.defaults.baseURL || '').replace(/\/$/, '')
+  if (/^https?:/i.test(assetUrl) && !assetUrl.startsWith(`${apiBase}/`)) {
+    throw new Error('paper_asset_url_not_allowed')
+  }
   const { data } = await http.get<Blob>(assetUrl, { responseType: 'blob' })
   return data
 }

@@ -1,5 +1,6 @@
-import { http } from '@/api/http'
+import { apiBaseUrl, http } from '@/api/http'
 import type {
+  AgentCapability,
   AgentConfirmation,
   AgentContext,
   AgentConversation,
@@ -7,6 +8,8 @@ import type {
   AgentConversationDetail,
   AgentMemory,
   AgentQueryResponse,
+  AgentRunEvent,
+  AgentRunSubmission,
   AgentTurnResponse,
 } from '@/types/agent'
 
@@ -87,6 +90,104 @@ export async function sendAgentMessage(
   const { data } = await http.post<AgentTurnResponse>(
     `/projects/${projectId}/agent/conversations/${conversationId}/messages`,
     { message, context },
+  )
+  return data
+}
+
+export async function submitAgentRun(
+  projectId: number,
+  conversationId: string,
+  message: string,
+  context: AgentContext,
+): Promise<AgentRunSubmission> {
+  const { data } = await http.post<AgentRunSubmission>(
+    `/projects/${projectId}/agent/conversations/${conversationId}/runs`,
+    { message, context },
+  )
+  return data
+}
+
+export async function streamAgentRunEvents(
+  projectId: number,
+  runId: string,
+  onEvent: (event: AgentRunEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let cursor = 0
+  let retries = 0
+  let terminal = false
+
+  const consumeFrame = (frame: string): void => {
+    const dataLine = frame.split('\n').find((line) => line.startsWith('data:'))
+    if (!dataLine) return
+    const event = JSON.parse(dataLine.slice(5).trim()) as AgentRunEvent
+    if (event.sequence <= cursor) return
+    cursor = event.sequence
+    terminal = ['run.completed', 'run.failed'].includes(event.event_type)
+    onEvent(event)
+  }
+
+  while (!terminal) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/projects/${projectId}/agent/runs/${encodeURIComponent(runId)}` +
+          `/events?after=${cursor}`,
+        { headers: { Accept: 'text/event-stream' }, signal },
+      )
+      if (!response.ok || !response.body) throw new Error(`agent_stream_${response.status}`)
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        buffer += decoder.decode(value, { stream: !done })
+        const frames = buffer.split('\n\n')
+        buffer = frames.pop() || ''
+        for (const frame of frames) consumeFrame(frame)
+        if (done) {
+          if (buffer.trim()) consumeFrame(buffer)
+          break
+        }
+      }
+      retries = terminal ? retries : retries + 1
+    } catch (cause) {
+      if (signal?.aborted) throw cause
+      retries += 1
+      if (retries > 5) throw cause
+    }
+    if (!terminal) {
+      if (retries > 5) throw new Error('agent_stream_disconnected')
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(resolve, Math.min(500 * 2 ** retries, 4000))
+        signal?.addEventListener(
+          'abort',
+          () => {
+            window.clearTimeout(timeout)
+            reject(new DOMException('Aborted', 'AbortError'))
+          },
+          { once: true },
+        )
+      })
+    }
+  }
+}
+
+export async function listAgentCapabilities(projectId: number): Promise<AgentCapability[]> {
+  const { data } = await http.get<AgentCapability[]>(
+    `/projects/${projectId}/agent/capabilities`,
+  )
+  return data
+}
+
+export async function updateAgentCapability(
+  projectId: number,
+  capabilityId: string,
+  patch: { enabled: boolean; trusted: boolean },
+): Promise<AgentCapability> {
+  const { data } = await http.patch<AgentCapability>(
+    `/projects/${projectId}/agent/capabilities/${encodeURIComponent(capabilityId)}`,
+    patch,
   )
   return data
 }

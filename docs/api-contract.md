@@ -100,6 +100,11 @@
 | GET | `/projects/{project_id}/agent/conversations/{conversation_id}` | 已实现 | 消息、工具事件、引用与确认记录 |
 | PATCH | `/projects/{project_id}/agent/conversations/{conversation_id}` | 已实现 | 重命名或归档会话 |
 | POST | `/projects/{project_id}/agent/conversations/{conversation_id}/messages` | 已实现 | 多轮 Agent loop 与环境工具调用 |
+| POST | `/projects/{project_id}/agent/conversations/{conversation_id}/runs` | 已实现 | 提交持久化异步 Run，立即返回 `202` |
+| GET | `/projects/{project_id}/agent/runs/{run_id}/events` | 已实现 | SSE 文本增量、进度摘要、工具与终态事件 |
+| GET | `/projects/{project_id}/agent/runs/{run_id}/event-list` | 已实现 | 按 `after` 序号读取持久化事件，供恢复/调试 |
+| GET | `/projects/{project_id}/agent/capabilities` | 已实现 | 发现内置和外部 Skill/Tool/Plugin 及信任状态 |
+| PATCH | `/projects/{project_id}/agent/capabilities/{capability_id}` | 已实现 | 启用/禁用并显式信任外部能力 |
 | POST | `/projects/{project_id}/agent/conversations/{conversation_id}/confirmations/{confirmation_id}/decision` | 已实现 | 确认写操作并恢复同一 run |
 | GET | `/projects/{project_id}/agent/memories` | 已实现 | 项目和全局跨项目记忆 |
 | POST | `/projects/{project_id}/agent/memories` | 已实现 | 写入 Agent 记忆 |

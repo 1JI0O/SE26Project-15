@@ -76,6 +76,7 @@ async function hydrateDesktopImages(): Promise<void> {
     images.map(async (image) => {
       const assetUrl = image.dataset.paperAssetUrl
       if (!assetUrl) return
+      if (/^(?:data:image\/|blob:)/i.test(assetUrl)) return
       try {
         const blob = await getPaperAssetBlob(assetUrl)
         if (!root.contains(image)) return

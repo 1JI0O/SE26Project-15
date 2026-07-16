@@ -57,6 +57,15 @@ class CodeRepository(SQLModel, table=True):
         default_factory=lambda: {"nodes": [], "edges": []},
         sa_column=Column(JSON, nullable=False),
     )
+    analysis_json: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    analysis_revision: int = Field(default=0, ge=0)
+    analysis_version: str = Field(default="", max_length=64)
+    analysis_status: str = Field(default="pending", max_length=24, index=True)
+    analysis_error: str | None = Field(default=None, max_length=500)
+    analysis_updated_at: datetime | None = Field(default=None)
     revision: int = Field(default=1, ge=1)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -219,10 +228,43 @@ class AgentRun(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSON, nullable=False),
     )
+    capability_snapshot_json: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False),
+    )
     degraded_reason: str | None = Field(default=None, max_length=128)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     completed_at: datetime | None = Field(default=None)
+
+
+class AgentRunEvent(SQLModel, table=True):
+    __tablename__ = "agent_run_event"
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uq_agent_run_event_id"),
+        UniqueConstraint("run_id", "sequence", name="uq_agent_run_event_sequence"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    event_id: str = Field(
+        default_factory=lambda: f"event-{uuid4().hex}",
+        index=True,
+        max_length=72,
+    )
+    run_id: str = Field(foreign_key="agent_run.run_id", index=True, max_length=72)
+    conversation_id: str = Field(
+        foreign_key="agent_conversation.conversation_id",
+        index=True,
+        max_length=72,
+    )
+    project_id: int = Field(foreign_key="project.id", index=True)
+    sequence: int = Field(ge=1)
+    event_type: str = Field(max_length=64, index=True)
+    payload_json: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    created_at: datetime = Field(default_factory=utc_now, index=True)
 
 
 class AgentMemory(SQLModel, table=True):
@@ -253,6 +295,41 @@ class AgentMemory(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     last_used_at: datetime | None = Field(default=None)
+
+
+class AgentCapabilitySetting(SQLModel, table=True):
+    __tablename__ = "agent_capability_setting"
+
+    capability_id: str = Field(primary_key=True, max_length=160)
+    enabled: bool = Field(default=False, index=True)
+    trusted: bool = Field(default=False, index=True)
+    config_json: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RepositoryAnalysisJob(SQLModel, table=True):
+    __tablename__ = "repository_analysis_job"
+
+    job_id: str = Field(
+        default_factory=lambda: f"analysis-{uuid4().hex}",
+        primary_key=True,
+        max_length=72,
+    )
+    project_id: int = Field(foreign_key="project.id", index=True)
+    repository_id: int = Field(foreign_key="code_repository.id", index=True)
+    repository_revision: int = Field(ge=1, index=True)
+    status: str = Field(default="queued", max_length=24, index=True)
+    targets_json: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False),
+    )
+    error_summary: str | None = Field(default=None, max_length=500)
+    created_at: datetime = Field(default_factory=utc_now)
+    started_at: datetime | None = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
 
 
 class IntegrationConfig(SQLModel, table=True):

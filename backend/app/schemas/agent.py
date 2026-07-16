@@ -123,6 +123,45 @@ class AgentTurnResponse(BaseModel):
     confirmation: AgentConfirmationRead | None = None
 
 
+class AgentRunSubmission(BaseModel):
+    conversation: AgentConversationRead
+    user_message: AgentMessageRead
+    run_id: str
+    status: str = "queued"
+
+
+class AgentRunEventRead(BaseModel):
+    event_id: str
+    run_id: str
+    conversation_id: str
+    project_id: int
+    sequence: int
+    event_type: str
+    payload: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class AgentCapabilityRead(BaseModel):
+    capability_id: str
+    name: str
+    title: str
+    description: str
+    kind: str = Field(pattern="^(skill|tool|plugin)$")
+    source: str
+    version: str
+    enabled: bool
+    trusted: bool
+    eligible: bool
+    read_only: bool = True
+    requires_confirmation: bool = False
+    reason: str | None = None
+
+
+class AgentCapabilityUpdate(BaseModel):
+    enabled: bool
+    trusted: bool = False
+
+
 class AgentConversationDecisionResponse(BaseModel):
     confirmation: AgentConfirmationRead
     assistant_message: AgentMessageRead | None = None

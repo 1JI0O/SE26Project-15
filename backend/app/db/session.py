@@ -5,15 +5,18 @@ from sqlmodel import Session, SQLModel, create_engine
 from app.core.config import settings
 from app.db.migration_runner import upgrade_database
 from app.models.entities import (
+    AgentCapabilitySetting,
     AgentConversation,
     AgentMemory,
     AgentMessage,
     AgentRun,
+    AgentRunEvent,
     AgentToolRequest,
     CodeRepository,
     IntegrationConfig,
     PaperDocument,
     Project,
+    RepositoryAnalysisJob,
     TraceLink,
 )
 
@@ -25,8 +28,11 @@ _ = (
     AgentConversation,
     AgentMessage,
     AgentRun,
+    AgentRunEvent,
     AgentMemory,
+    AgentCapabilitySetting,
     AgentToolRequest,
+    RepositoryAnalysisJob,
     IntegrationConfig,
 )
 

@@ -1,9 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+import asyncio
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlmodel import Session
 
 from app.api.routes.projects import get_project_or_404
 from app.db.session import get_session
+from app.models.entities import AgentRun
 from app.schemas.agent import (
+    AgentCapabilityRead,
+    AgentCapabilityUpdate,
     AgentConfirmationRead,
     AgentConversationCreate,
     AgentConversationDecisionResponse,
@@ -15,15 +22,19 @@ from app.schemas.agent import (
     AgentMemoryRead,
     AgentQueryRequest,
     AgentQueryResponse,
+    AgentRunEventRead,
+    AgentRunSubmission,
     AgentTurnRequest,
     AgentTurnResponse,
 )
+from app.services.agent.capabilities import list_capabilities, update_capability
 from app.services.agent.conversations import (
     create_conversation,
     decide_conversation_confirmation,
     get_conversation_detail,
     list_conversations,
     run_conversation_turn,
+    submit_conversation_turn,
     update_conversation,
 )
 from app.services.agent.memory import (
@@ -32,6 +43,7 @@ from app.services.agent.memory import (
     list_memories,
     memory_to_read,
 )
+from app.services.agent.run_events import list_run_events
 from app.services.agent.service import (
     confirmation_to_read,
     decide_confirmation,
@@ -40,6 +52,29 @@ from app.services.agent.service import (
 )
 
 router = APIRouter(prefix="/projects/{project_id}/agent", tags=["agent"])
+
+
+@router.get("/capabilities", response_model=list[AgentCapabilityRead])
+def get_agent_capabilities(
+    project_id: int,
+    session: Session = Depends(get_session),
+) -> list[AgentCapabilityRead]:
+    get_project_or_404(project_id, session)
+    return list_capabilities(session)
+
+
+@router.patch("/capabilities/{capability_id:path}", response_model=AgentCapabilityRead)
+def patch_agent_capability(
+    project_id: int,
+    capability_id: str,
+    payload: AgentCapabilityUpdate,
+    session: Session = Depends(get_session),
+) -> AgentCapabilityRead:
+    get_project_or_404(project_id, session)
+    capability = update_capability(session, capability_id, payload)
+    if capability is None:
+        raise HTTPException(status_code=404, detail="Capability not found")
+    return capability
 
 
 @router.get("/conversations", response_model=list[AgentConversationRead])
@@ -121,6 +156,81 @@ def send_agent_message(
     if response is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return response
+
+
+@router.post(
+    "/conversations/{conversation_id}/runs",
+    response_model=AgentRunSubmission,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def submit_agent_run(
+    project_id: int,
+    conversation_id: str,
+    payload: AgentTurnRequest,
+    session: Session = Depends(get_session),
+) -> AgentRunSubmission:
+    get_project_or_404(project_id, session)
+    submission = submit_conversation_turn(session, project_id, conversation_id, payload)
+    if submission is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return submission
+
+
+@router.get("/runs/{run_id}/event-list", response_model=list[AgentRunEventRead])
+def get_agent_run_events(
+    project_id: int,
+    run_id: str,
+    after: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+) -> list[AgentRunEventRead]:
+    get_project_or_404(project_id, session)
+    return list_run_events(session, project_id, run_id, after=after)
+
+
+@router.get("/runs/{run_id}/events")
+async def stream_agent_run_events(
+    project_id: int,
+    run_id: str,
+    request: Request,
+    after: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    get_project_or_404(project_id, session)
+    run = session.get(AgentRun, run_id)
+    if run is None or run.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    async def events():
+        cursor = after
+        idle_ticks = 0
+        while idle_ticks < 1200:
+            if await request.is_disconnected():
+                break
+            session.expire_all()
+            batch = list_run_events(session, project_id, run_id, after=cursor)
+            if batch:
+                idle_ticks = 0
+                for item in batch:
+                    cursor = item.sequence
+                    data = json.dumps(item.model_dump(mode="json"), ensure_ascii=False)
+                    yield f"id: {cursor}\nevent: {item.event_type}\ndata: {data}\n\n"
+            else:
+                idle_ticks += 1
+            current = session.get(AgentRun, run_id)
+            if current is None or (
+                current.status in {"completed", "failed", "waiting_confirmation"}
+                and not batch
+            ):
+                break
+            if idle_ticks and idle_ticks % 40 == 0:
+                yield ": keep-alive\n\n"
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post(

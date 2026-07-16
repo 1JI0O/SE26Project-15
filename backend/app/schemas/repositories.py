@@ -149,5 +149,9 @@ class WorkspaceTensorFlowRead(BaseModel):
     root_symbol: str | None = None
     root_label: str | None = None
     available_roots: list[dict[str, Any]] = Field(default_factory=list)
+    analysis_status: str = "ready"
+    analysis_revision: int = 0
+    repository_revision: int = 0
+    stale: bool = False
     nodes: list[WorkspaceTensorFlowNode]
     edges: list[WorkspaceTensorFlowEdge]

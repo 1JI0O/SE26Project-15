@@ -65,10 +65,22 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
         "code_repository",
         {
             "tensor_graph_json": "JSON NOT NULL DEFAULT '{\"nodes\":[],\"edges\":[]}'",
+            "analysis_json": "JSON NOT NULL DEFAULT '{}'",
+            "analysis_revision": "INTEGER NOT NULL DEFAULT 0",
+            "analysis_version": "VARCHAR(64) NOT NULL DEFAULT ''",
+            "analysis_status": "VARCHAR(24) NOT NULL DEFAULT 'pending'",
+            "analysis_error": "VARCHAR(500)",
+            "analysis_updated_at": "DATETIME",
             "revision": "INTEGER NOT NULL DEFAULT 1",
             "updated_at": "DATETIME",
         },
     )
+    if "agent_run" in tables:
+        _add_missing_columns(
+            engine,
+            "agent_run",
+            {"capability_snapshot_json": "JSON NOT NULL DEFAULT '[]'"},
+        )
     if "agent_tool_request" in tables:
         _add_missing_columns(
             engine,

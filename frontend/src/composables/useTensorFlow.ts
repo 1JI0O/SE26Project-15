@@ -1,5 +1,6 @@
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 import { getWorkspaceTensorFlow } from '@/api/repository-api'
+import type { WorkspaceTensorFlow } from '@/types/repositories'
 
 export type TensorFlowNodeKind =
   | 'input'
@@ -65,6 +66,9 @@ const KIND_LABELS: Record<TensorFlowNodeKind, string> = {
   output: 'Output',
 }
 
+const payloadCache = new Map<string, { payload: WorkspaceTensorFlow; loadedAt: number }>()
+const inFlightRequests = new Map<string, Promise<WorkspaceTensorFlow>>()
+
 function normalizeKind(value: string): TensorFlowNodeKind {
   if (
     value === 'input' ||
@@ -117,69 +121,130 @@ export function useTensorFlow(projectId: () => number) {
   const rootLabel = ref('')
   const availableRoots = ref<TensorFlowRoot[]>([])
   const navigationStack = ref<TensorFlowRoot[]>([])
+  const analysisStatus = ref<WorkspaceTensorFlow['analysis_status']>('pending')
+  const analysisStale = ref(false)
+  let pollTimer: number | null = null
+  let requestGeneration = 0
 
   const edgeLabels = computed(() => edges.value.filter((edge) => edge.label).map(buildEdgeLabel))
 
+  function applyPayload(payload: WorkspaceTensorFlow): void {
+    renderer.value = payload.renderer
+    currentView.value = payload.view
+    rootSymbol.value = payload.root_symbol
+    rootLabel.value = payload.root_label || '模型架构'
+    analysisStatus.value = payload.analysis_status
+    analysisStale.value = payload.stale
+    availableRoots.value = payload.available_roots.map((root) => ({
+      symbolId: root.symbol_id,
+      label: root.label,
+      sourcePath: root.source_path,
+    }))
+    degraded.value = !['architecture-dag-v2', 'semantic-dag-v1'].includes(payload.renderer)
+    nodes.value = payload.nodes.map((node) => {
+      const kind = normalizeKind(node.kind)
+      return {
+        id: node.id,
+        kind,
+        kindLabel: KIND_LABELS[kind],
+        title: node.label,
+        detail: `${node.source_path}:${node.line_start}`,
+        description: node.description,
+        tensorShape: tensorShapeLabel(node.tensor_shape),
+        sourcePath: node.source_path,
+        lineStart: node.line_start,
+        lineEnd: node.line_end,
+        componentSymbolId: node.component_symbol_id,
+        expandable: node.expandable,
+        external: node.external,
+        x: node.x,
+        y: node.y,
+        width: node.width,
+        height: node.height,
+      }
+    })
+    edges.value = payload.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      label: edge.label,
+      points: edge.points.map(([x, y]) => [x, y] as [number, number]),
+    }))
+    selectedNode.value = nodes.value[0] ?? null
+  }
+
+  function scheduleRefresh(options: { view: TensorFlowView; rootSymbol: string | null }): void {
+    if (pollTimer !== null) window.clearTimeout(pollTimer)
+    if (!['pending', 'queued', 'running', 'stale'].includes(analysisStatus.value)) return
+    pollTimer = window.setTimeout(() => {
+      void loadTensorFlow({ ...options, force: true, preserveCache: true })
+    }, 1400)
+  }
+
   async function loadTensorFlow(
-    options: { view?: TensorFlowView; rootSymbol?: string | null } = {},
+    options: {
+      view?: TensorFlowView
+      rootSymbol?: string | null
+      force?: boolean
+      preserveCache?: boolean
+    } = {},
   ): Promise<void> {
-    loading.value = true
+    const generation = ++requestGeneration
+    const requestedProject = projectId()
+    const requestedView = options.view ?? currentView.value
+    const requestedRoot = options.rootSymbol === undefined ? rootSymbol.value : options.rootSymbol
+    const cacheKey = `${requestedProject}:${requestedView}:${requestedRoot || ''}`
+    if (options.force && !options.preserveCache) {
+      const prefix = `${requestedProject}:`
+      for (const key of payloadCache.keys()) {
+        if (key.startsWith(prefix)) payloadCache.delete(key)
+      }
+    }
+    const cached = payloadCache.get(cacheKey)
+    const cacheFresh = cached && (
+      cached.payload.analysis_status === 'ready' || Date.now() - cached.loadedAt < 1200
+    )
+    if (!options.force && cacheFresh) {
+      if (generation !== requestGeneration || requestedProject !== projectId()) return
+      applyPayload(cached.payload)
+      scheduleRefresh({ view: requestedView, rootSymbol: requestedRoot })
+      return
+    }
+    loading.value = nodes.value.length === 0
     error.value = null
+    let request: Promise<WorkspaceTensorFlow> | undefined
     try {
-      const payload = await getWorkspaceTensorFlow(projectId(), {
-        view: options.view ?? currentView.value,
-        rootSymbol: options.rootSymbol === undefined ? rootSymbol.value : options.rootSymbol,
-      })
-      renderer.value = payload.renderer
-      currentView.value = payload.view
-      rootSymbol.value = payload.root_symbol
-      rootLabel.value = payload.root_label || '模型架构'
-      availableRoots.value = payload.available_roots.map((root) => ({
-        symbolId: root.symbol_id,
-        label: root.label,
-        sourcePath: root.source_path,
-      }))
-      degraded.value = !['architecture-dag-v2', 'semantic-dag-v1'].includes(payload.renderer)
-      nodes.value = payload.nodes.map((node) => {
-        const kind = normalizeKind(node.kind)
-        return {
-          id: node.id,
-          kind,
-          kindLabel: KIND_LABELS[kind],
-          title: node.label,
-          detail: `${node.source_path}:${node.line_start}`,
-          description: node.description,
-          tensorShape: tensorShapeLabel(node.tensor_shape),
-          sourcePath: node.source_path,
-          lineStart: node.line_start,
-          lineEnd: node.line_end,
-          componentSymbolId: node.component_symbol_id,
-          expandable: node.expandable,
-          external: node.external,
-          x: node.x,
-          y: node.y,
-          width: node.width,
-          height: node.height,
-        }
-      })
-      edges.value = payload.edges.map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        label: edge.label,
-        points: edge.points.map(([x, y]) => [x, y] as [number, number]),
-      }))
-      selectedNode.value = nodes.value[0] ?? null
+      request = options.force ? undefined : inFlightRequests.get(cacheKey)
+      if (!request) {
+        request = getWorkspaceTensorFlow(requestedProject, {
+          view: requestedView,
+          rootSymbol: requestedRoot,
+        })
+        inFlightRequests.set(cacheKey, request)
+      }
+      const payload = await request
+      if (generation !== requestGeneration || requestedProject !== projectId()) return
+      payloadCache.set(cacheKey, { payload, loadedAt: Date.now() })
+      applyPayload(payload)
+      scheduleRefresh({ view: requestedView, rootSymbol: requestedRoot })
     } catch (cause) {
-      nodes.value = []
-      edges.value = []
-      selectedNode.value = null
+      if (generation !== requestGeneration || requestedProject !== projectId()) return
+      if (!nodes.value.length) {
+        nodes.value = []
+        edges.value = []
+        selectedNode.value = null
+      }
       error.value = '模型架构分析结果加载失败'
       console.error(cause)
     } finally {
-      loading.value = false
+      if (inFlightRequests.get(cacheKey) === request) inFlightRequests.delete(cacheKey)
+      if (generation === requestGeneration) loading.value = false
     }
   }
+
+  onScopeDispose(() => {
+    if (pollTimer !== null) window.clearTimeout(pollTimer)
+  })
 
   function edgePath(points: TensorFlowEdge['points']): string {
     return points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ')
@@ -229,6 +294,8 @@ export function useTensorFlow(projectId: () => number) {
     rootLabel,
     availableRoots,
     navigationStack,
+    analysisStatus,
+    analysisStale,
     edgeLabels,
     edgePath,
     selectNode,

@@ -19,6 +19,7 @@ mkdirSync(path.dirname(runtimeRoot), { recursive: true })
 
 const addDataSeparator = process.platform === 'win32' ? ';' : ':'
 const migrations = path.join(backendRoot, 'app', 'db', 'migrations')
+const builtinSkills = path.join(backendRoot, 'app', 'services', 'agent', 'builtin_skills')
 const pyinstallerArgs = [
   'run',
   '--project',
@@ -46,6 +47,8 @@ const pyinstallerArgs = [
   'uvicorn',
   '--add-data',
   `${migrations}${addDataSeparator}app/db/migrations`,
+  '--add-data',
+  `${builtinSkills}${addDataSeparator}app/services/agent/builtin_skills`,
   path.join(backendRoot, 'app', 'desktop.py'),
 ]
 

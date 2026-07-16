@@ -16,13 +16,14 @@ from app.schemas.agent import (
     AgentQueryResponse,
 )
 from app.services import workspace_service
+from app.services.agent.capabilities import build_registry
+from app.services.agent.mcp import validate_json_schema
 from app.services.agent.provider import (
     AgentProvider,
     AgentProviderFailure,
     CompatibleAgentProvider,
 )
 from app.services.agent.tools import (
-    READ_TOOLS,
     WRITE_TOOLS,
     CreateTraceArguments,
     RerunAnalysisArguments,
@@ -30,7 +31,6 @@ from app.services.agent.tools import (
     UpdateTraceArguments,
     build_context_snapshot,
     content_sha256,
-    execute_read_tool,
     latest_code,
     latest_paper,
     prepare_write_request,
@@ -110,7 +110,23 @@ def _create_confirmation(
     conversation_id: str | None = None,
     run_id: str | None = None,
 ) -> AgentToolRequest:
-    private_arguments, summary = prepare_write_request(session, project_id, tool_name, arguments)
+    registry = build_registry(session)
+    capability = registry.tool(tool_name)
+    if capability is None or capability.read_only:
+        raise ValueError("write_tool_not_available")
+    if tool_name in WRITE_TOOLS:
+        private_arguments, summary = prepare_write_request(
+            session, project_id, tool_name, arguments
+        )
+    else:
+        validate_json_schema(arguments, capability.input_schema)
+        private_arguments = arguments
+        summary = {
+            "tool": capability.title,
+            "source": capability.source,
+            "argument_keys": sorted(arguments),
+            "external": True,
+        }
     request = AgentToolRequest(
         project_id=project_id,
         conversation_id=conversation_id,
@@ -165,6 +181,8 @@ def query_agent(
     provider: AgentProvider | None = None,
 ) -> AgentQueryResponse:
     context = build_context_snapshot(session, project_id, payload.context)
+    registry = build_registry(session)
+    context["tool_definitions"] = registry.tool_definitions()
     actual_provider = provider
     degraded_reason: str | None = None
     if actual_provider is None:
@@ -197,9 +215,12 @@ def query_agent(
                 answer=step.answer,
                 citations=_safe_citations(step.citations),
             )
-        if step.tool_name in READ_TOOLS:
+        capability = registry.tool(step.tool_name or "")
+        if capability is not None and capability.read_only:
             try:
-                result = execute_read_tool(session, project_id, step.tool_name, step.arguments)
+                result = registry.execute(
+                    session, project_id, step.tool_name or "", step.arguments
+                )
             except (ValueError, ValidationError):
                 return AgentQueryResponse(
                     answer="Agent 提出的只读工具参数无效。",
@@ -208,7 +229,7 @@ def query_agent(
                 )
             tool_results.append({"tool": step.tool_name, "result": result})
             continue
-        if step.tool_name in WRITE_TOOLS:
+        if capability is not None and not capability.read_only:
             try:
                 confirmation = _create_confirmation(
                     session, project_id, step.tool_name, step.arguments
@@ -355,6 +376,20 @@ def _execute_create_trace(
 
 
 def _execute_tool(session: Session, request: AgentToolRequest) -> dict[str, Any]:
+    if request.tool_name not in WRITE_TOOLS:
+        registry = build_registry(session)
+        capability = registry.tool(request.tool_name)
+        if capability is None or capability.read_only:
+            raise ToolExecutionError("tool_not_executable")
+        try:
+            return registry.execute(
+                session,
+                request.project_id,
+                request.tool_name,
+                request.private_arguments_json,
+            )
+        except Exception as exc:
+            raise ToolExecutionError("external_tool_execution_error") from exc
     arguments = validate_tool_arguments(request.tool_name, request.private_arguments_json)
     if isinstance(arguments, SaveCodeArguments):
         return _execute_save_code(session, request, arguments)

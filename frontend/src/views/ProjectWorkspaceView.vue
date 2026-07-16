@@ -388,6 +388,8 @@
                 :loading="tensorFlow.loading.value"
                 :error="tensorFlow.error.value"
                 :degraded="tensorFlow.degraded.value"
+                :analysis-status="tensorFlow.analysisStatus.value"
+                :analysis-stale="tensorFlow.analysisStale.value"
                 :current-view="tensorFlow.currentView.value"
                 :root-symbol="tensorFlow.rootSymbol.value"
                 :root-label="tensorFlow.rootLabel.value"
@@ -463,7 +465,7 @@
     <footer class="status-bar">
       <span><el-icon><Connection /></el-icon> {{ trace.traceRows.value.length }} 条追溯</span>
       <span>{{ paper.hasPaper.value ? '论文已解析' : '等待论文' }}</span>
-      <span>{{ code.hasCode.value ? '仓库已分析' : '等待代码' }}</span>
+      <span>{{ repositoryStatusLabel }}</span>
       <span class="status-spacer" />
       <span>{{ code.selectedFile.value?.symbol || '无活动符号' }}</span>
       <span>Project {{ workspace.projectIdLabel }}</span>
@@ -500,7 +502,7 @@ import {
   Warning,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { isEditableFile, fileIcon, useCode } from '@/composables/useCode'
 import { useDesktop } from '@/composables/useDesktop'
@@ -539,7 +541,14 @@ const desktop = useDesktop()
 const { importSteps } = useImport(
   () => paper.hasPaper.value,
   () => code.hasCode.value,
+  () => tensorFlow.analysisStatus.value,
 )
+const repositoryStatusLabel = computed(() => {
+  if (!code.hasCode.value) return '等待代码'
+  if (tensorFlow.analysisStatus.value === 'ready') return '仓库已分析'
+  if (tensorFlow.analysisStatus.value === 'failed') return '仓库分析失败'
+  return '仓库分析中'
+})
 
 const activeMode = ref('审阅')
 const reviewModes = ['审阅', '标注', '冲突']
@@ -810,7 +819,7 @@ async function onSaveCode(): Promise<void> {
 async function reloadDerivedViews(): Promise<void> {
   await Promise.allSettled([
     trace.loadTraceRows(),
-    tensorFlow.loadTensorFlow(),
+    tensorFlow.loadTensorFlow({ force: true }),
     insights.loadInsights(),
   ])
 }

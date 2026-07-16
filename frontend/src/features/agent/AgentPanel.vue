@@ -11,6 +11,14 @@
       </el-tooltip>
       <strong :title="activeConversation?.title">{{ toolbarTitle }}</strong>
       <div class="toolbar-actions">
+        <el-tooltip content="Agent 能力" placement="bottom">
+          <el-button
+            text
+            :icon="SetUp"
+            aria-label="Agent 能力"
+            @click="openCapabilities"
+          />
+        </el-tooltip>
         <el-tooltip content="Agent 记忆" placement="bottom">
           <el-button
             text
@@ -20,7 +28,7 @@
           />
         </el-tooltip>
         <el-tooltip content="新建会话" placement="bottom">
-          <el-button text :icon="Plus" aria-label="新建会话" @click="startConversation" />
+          <el-button text :icon="Plus" aria-label="新建会话" @click="startConversation()" />
         </el-tooltip>
       </div>
     </header>
@@ -28,7 +36,7 @@
     <section v-if="mode === 'history'" class="session-view">
       <div class="section-heading">
         <span>会话</span>
-        <label><input v-model="showArchived" type="checkbox" @change="loadConversations" /> 已归档</label>
+        <label><input v-model="showArchived" type="checkbox" @change="loadConversations()" /> 已归档</label>
       </div>
       <div v-if="conversationLoading" class="panel-state">正在加载会话…</div>
       <div v-else-if="!conversations.length" class="panel-state">暂无会话</div>
@@ -105,6 +113,49 @@
             aria-label="删除记忆"
             @click="removeMemory(memory.memory_id)"
           />
+        </article>
+      </div>
+    </section>
+
+    <section v-else-if="mode === 'capabilities'" class="capability-view">
+      <div class="section-heading">
+        <span>Skill 与 Tool</span>
+        <small>{{ capabilities.filter((item) => item.eligible).length }} 个可用</small>
+      </div>
+      <p class="capability-notice">
+        外部能力默认关闭。启用前需明确标记为可信；写工具仍需逐次确认。
+      </p>
+      <div v-if="capabilityLoading" class="panel-state">正在发现能力…</div>
+      <div v-else class="capability-list">
+        <article
+          v-for="capability in capabilities"
+          :key="capability.capability_id"
+          class="capability-item"
+        >
+          <div class="capability-main">
+            <div>
+              <span class="capability-kind">{{ capability.kind }}</span>
+              <strong>{{ capability.title }}</strong>
+            </div>
+            <p>{{ capability.description }}</p>
+            <small :title="capability.source">{{ shortRef(capability.source) }}</small>
+          </div>
+          <div class="capability-controls">
+            <label v-if="capability.source !== 'builtin' && capability.source !== 'bundled'">
+              <input
+                :checked="capability.trusted"
+                type="checkbox"
+                @change="setCapabilityTrust(capability, $event)"
+              />
+              信任
+            </label>
+            <el-switch
+              :model-value="capability.enabled"
+              size="small"
+              :disabled="capabilityUpdating === capability.capability_id"
+              @change="setCapabilityEnabled(capability, Boolean($event))"
+            />
+          </div>
         </article>
       </div>
     </section>
@@ -214,10 +265,25 @@
             </div>
           </article>
         </template>
-        <div v-if="sending" class="thinking-row">
-          <span /><span /><span />
-          Agent 正在分析环境
-        </div>
+        <details v-if="sending" class="run-progress" open>
+          <summary>
+            <span class="progress-spinner" />
+            {{ activeProgress || 'Agent 正在分析环境' }}
+          </summary>
+          <div v-if="liveToolEvents.length" class="live-tool-list">
+            <div
+              v-for="(event, index) in liveToolEvents"
+              :key="`${event.tool_name}-${index}`"
+              :class="['tool-event', event.status]"
+            >
+              <span class="event-status" />
+              <div>
+                <strong>{{ toolLabel(event.tool_name) }}</strong>
+                <small>{{ event.summary }}</small>
+              </div>
+            </div>
+          </div>
+        </details>
         </section>
       </div>
 
@@ -228,7 +294,8 @@
           :autosize="{ minRows: 2, maxRows: 6 }"
           maxlength="8000"
           resize="none"
-          placeholder="询问或要求 Agent 修改当前环境"
+          :disabled="hasPendingConfirmation"
+          :placeholder="hasPendingConfirmation ? '请先处理待确认的工具操作' : '询问或要求 Agent 修改当前环境'"
           @keydown.meta.enter.prevent="send"
           @keydown.ctrl.enter.prevent="send"
         />
@@ -239,7 +306,7 @@
             type="primary"
             :icon="Promotion"
             :loading="sending"
-            :disabled="!draft.trim() || !activeConversationId"
+            :disabled="!draft.trim() || !activeConversationId || hasPendingConfirmation"
             aria-label="发送消息"
             @click="send"
           />
@@ -261,6 +328,7 @@ import {
   FolderDelete,
   Plus,
   Promotion,
+  SetUp,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
@@ -271,18 +339,24 @@ import {
   decideConversationConfirmation,
   deleteAgentMemory,
   getAgentConversation,
+  listAgentCapabilities,
   listAgentConversations,
   listAgentMemories,
-  sendAgentMessage,
+  streamAgentRunEvents,
+  submitAgentRun,
+  updateAgentCapability,
   updateAgentConversation,
 } from '@/api/agent-api'
 import { renderPaperMarkdown } from '@/features/papers/markdown-renderer'
 import type {
+  AgentCapability,
   AgentConfirmation,
   AgentConversation,
   AgentConversationDetail,
   AgentMemory,
   AgentMessage,
+  AgentRunEvent,
+  AgentToolEvent,
   AgentUiAction,
 } from '@/types/agent'
 
@@ -302,7 +376,7 @@ const emit = defineEmits<{
   uiAction: [action: AgentUiAction]
 }>()
 
-const mode = ref<'chat' | 'history' | 'memory'>('chat')
+const mode = ref<'chat' | 'history' | 'memory' | 'capabilities'>('chat')
 const conversations = ref<AgentConversation[]>([])
 const activeConversationId = ref('')
 const detail = ref<AgentConversationDetail | null>(null)
@@ -317,6 +391,15 @@ const memoryDraft = ref('')
 const memoryScope = ref<'project' | 'global'>('project')
 const memoryLoading = ref(false)
 const memorySaving = ref(false)
+const capabilities = ref<AgentCapability[]>([])
+const capabilityLoading = ref(false)
+const capabilityUpdating = ref('')
+const activeProgress = ref('')
+const liveToolEvents = ref<AgentToolEvent[]>([])
+let initializeGeneration = 0
+let conversationLoadGeneration = 0
+let activationGeneration = 0
+let activeRunAbort: AbortController | null = null
 
 const activeConversation = computed(() =>
   conversations.value.find((item) => item.conversation_id === activeConversationId.value),
@@ -324,9 +407,13 @@ const activeConversation = computed(() =>
 const messages = computed<AgentMessage[]>(() =>
   (detail.value?.messages || []).filter((item) => item.role !== 'system'),
 )
+const hasPendingConfirmation = computed(() =>
+  messages.value.some((item) => item.confirmation?.status === 'pending'),
+)
 const toolbarTitle = computed(() => {
   if (mode.value === 'history') return '会话历史'
   if (mode.value === 'memory') return 'Agent 记忆'
+  if (mode.value === 'capabilities') return 'Agent 能力'
   return activeConversation.value?.title || 'Agent'
 })
 const hasContext = computed(() => Boolean(props.paperRef || props.codeRef || props.graphNodeId))
@@ -338,38 +425,52 @@ const contextLabel = computed(() => {
 onMounted(initialize)
 watch(
   () => props.projectId,
-  () => void initialize(),
+  () => {
+    activeRunAbort?.abort()
+    void initialize()
+  },
 )
 
 async function initialize(): Promise<void> {
+  const generation = ++initializeGeneration
+  const projectId = props.projectId
   activeConversationId.value = ''
   detail.value = null
   mode.value = 'chat'
-  await loadConversations()
+  await loadConversations(projectId)
+  if (generation !== initializeGeneration || projectId !== props.projectId) return
   const active = conversations.value.find((item) => item.status === 'active')
-  if (active) await activateConversation(active.conversation_id)
-  else await startConversation()
+  if (active) await activateConversation(active.conversation_id, true, projectId)
+  else await startConversation(true, projectId)
 }
 
-async function loadConversations(): Promise<void> {
+async function loadConversations(projectId = props.projectId): Promise<void> {
+  const generation = ++conversationLoadGeneration
   conversationLoading.value = true
   try {
-    conversations.value = await listAgentConversations(props.projectId, showArchived.value)
+    const loaded = await listAgentConversations(projectId, showArchived.value)
+    if (generation === conversationLoadGeneration && projectId === props.projectId) {
+      conversations.value = loaded
+    }
   } catch (cause) {
     ElMessage.error('会话历史加载失败')
     console.error(cause)
   } finally {
-    conversationLoading.value = false
+    if (generation === conversationLoadGeneration) conversationLoading.value = false
   }
 }
 
-async function startConversation(): Promise<void> {
+async function startConversation(
+  preserveMode = false,
+  projectId = props.projectId,
+): Promise<void> {
   try {
-    const conversation = await createAgentConversation(props.projectId)
-    await loadConversations()
+    const conversation = await createAgentConversation(projectId)
+    if (projectId !== props.projectId) return
+    await loadConversations(projectId)
     activeConversationId.value = conversation.conversation_id
     detail.value = { ...conversation, messages: [] }
-    mode.value = 'chat'
+    if (!preserveMode) mode.value = 'chat'
     draft.value = ''
   } catch (cause) {
     ElMessage.error('新建会话失败')
@@ -377,18 +478,25 @@ async function startConversation(): Promise<void> {
   }
 }
 
-async function activateConversation(conversationId: string): Promise<void> {
+async function activateConversation(
+  conversationId: string,
+  preserveMode = false,
+  projectId = props.projectId,
+): Promise<void> {
+  const generation = ++activationGeneration
   conversationLoading.value = true
   try {
     activeConversationId.value = conversationId
-    detail.value = await getAgentConversation(props.projectId, conversationId)
-    mode.value = 'chat'
+    const loaded = await getAgentConversation(projectId, conversationId)
+    if (generation !== activationGeneration || projectId !== props.projectId) return
+    detail.value = loaded
+    if (!preserveMode) mode.value = 'chat'
     await scrollToBottom()
   } catch (cause) {
     ElMessage.error('会话加载失败')
     console.error(cause)
   } finally {
-    conversationLoading.value = false
+    if (generation === activationGeneration) conversationLoading.value = false
   }
 }
 
@@ -429,13 +537,20 @@ async function archiveActive(): Promise<void> {
 
 async function send(): Promise<void> {
   const text = draft.value.trim()
-  if (!text || !activeConversationId.value || sending.value) return
+  if (!text || !activeConversationId.value || sending.value || hasPendingConfirmation.value) return
+  const projectId = props.projectId
+  const conversationId = activeConversationId.value
+  const controller = new AbortController()
+  activeRunAbort = controller
   sending.value = true
   draft.value = ''
+  activeProgress.value = '正在创建持久化运行'
+  liveToolEvents.value = []
+  let submitted = false
   try {
-    const response = await sendAgentMessage(
-      props.projectId,
-      activeConversationId.value,
+    const response = await submitAgentRun(
+      projectId,
+      conversationId,
       text,
       {
         paper_block_id: props.paperRef || undefined,
@@ -447,22 +562,117 @@ async function send(): Promise<void> {
         graph_root_symbol: props.graphRootSymbol || undefined,
       },
     )
-    if (detail.value) {
-      detail.value.messages.push(response.user_message, response.assistant_message)
+    submitted = true
+    if (props.projectId === projectId && activeConversationId.value === conversationId && detail.value) {
+      detail.value.messages.push(response.user_message)
       Object.assign(detail.value, response.conversation)
-    } else {
-      detail.value = await getAgentConversation(props.projectId, activeConversationId.value)
     }
-    runUiActions(response.assistant_message)
-    await loadConversations()
-    await scrollToBottom()
+    const streamingMessage: AgentMessage = {
+      message_id: `stream-${response.run_id}`,
+      conversation_id: conversationId,
+      project_id: projectId,
+      role: 'assistant',
+      content: '',
+      citations: [],
+      tool_events: [],
+      degraded: false,
+      degraded_reason: null,
+      run_id: response.run_id,
+      confirmation: null,
+      created_at: new Date().toISOString(),
+    }
+    if (props.projectId === projectId && activeConversationId.value === conversationId) {
+      detail.value?.messages.push(streamingMessage)
+      await scrollToBottom()
+    }
+    await streamAgentRunEvents(
+      projectId,
+      response.run_id,
+      (event) => {
+        if (props.projectId === projectId && activeConversationId.value === conversationId) {
+          handleRunEvent(event, streamingMessage)
+        }
+      },
+      controller.signal,
+    )
+    const completedDetail = await getAgentConversation(projectId, conversationId)
+    if (props.projectId === projectId && activeConversationId.value === conversationId) {
+      detail.value = completedDetail
+      const completed = [...completedDetail.messages]
+        .reverse()
+        .find((item) => item.run_id === response.run_id)
+      if (completed) runUiActions(completed)
+      await loadConversations(projectId)
+      await scrollToBottom()
+    }
   } catch (cause) {
-    draft.value = text
-    ElMessage.error('Agent 请求失败')
-    console.error(cause)
+    if (!submitted) draft.value = text
+    if (
+      submitted &&
+      props.projectId === projectId &&
+      activeConversationId.value === conversationId
+    ) {
+      detail.value = await getAgentConversation(projectId, conversationId)
+    }
+    if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
+      ElMessage.error('Agent 请求失败')
+      console.error(cause)
+    }
   } finally {
+    if (activeRunAbort === controller) activeRunAbort = null
     sending.value = false
+    activeProgress.value = ''
+    liveToolEvents.value = []
   }
+}
+
+function handleRunEvent(event: AgentRunEvent, streamingMessage: AgentMessage): void {
+  const payload = event.payload
+  if (event.event_type === 'message.delta') {
+    streamingMessage.content += String(payload.delta || '')
+    void scrollToBottom()
+    return
+  }
+  if (event.event_type === 'message.reset') {
+    streamingMessage.content = ''
+    return
+  }
+  if (event.event_type === 'reasoning.summary') {
+    activeProgress.value = String(payload.summary || '正在分析当前证据')
+    return
+  }
+  if (event.event_type === 'tool.started') {
+    liveToolEvents.value.push({
+      tool_name: String(payload.tool_name || 'tool'),
+      status: 'running',
+      summary: String(payload.summary || '正在执行'),
+      result: {},
+    })
+    activeProgress.value = String(payload.summary || '正在与项目环境交互')
+    return
+  }
+  if (['tool.completed', 'tool.failed', 'tool.reused'].includes(event.event_type)) {
+    const name = String(payload.tool_name || 'tool')
+    const pending = [...liveToolEvents.value]
+      .reverse()
+      .find((item) => item.tool_name === name && item.status === 'running')
+    const status = event.event_type === 'tool.failed' ? 'failed' : 'succeeded'
+    if (pending) {
+      pending.status = status
+      pending.summary = String(payload.summary || pending.summary)
+      pending.result = (payload.result as Record<string, unknown>) || {}
+    } else {
+      liveToolEvents.value.push({
+        tool_name: name,
+        status,
+        summary: String(payload.summary || event.event_type),
+        result: (payload.result as Record<string, unknown>) || {},
+      })
+    }
+    return
+  }
+  if (event.event_type === 'run.started') activeProgress.value = '正在读取会话与项目上下文'
+  if (event.event_type === 'run.failed') activeProgress.value = '运行失败，正在保存进度'
 }
 
 async function decide(
@@ -516,6 +726,55 @@ async function openMemories(): Promise<void> {
   }
 }
 
+async function openCapabilities(): Promise<void> {
+  mode.value = 'capabilities'
+  capabilityLoading.value = true
+  try {
+    capabilities.value = await listAgentCapabilities(props.projectId)
+  } catch (cause) {
+    ElMessage.error('Agent 能力发现失败')
+    console.error(cause)
+  } finally {
+    capabilityLoading.value = false
+  }
+}
+
+async function setCapabilityEnabled(
+  capability: AgentCapability,
+  enabled: boolean,
+): Promise<void> {
+  await patchCapability(capability, enabled, capability.trusted)
+}
+
+async function setCapabilityTrust(
+  capability: AgentCapability,
+  event: Event,
+): Promise<void> {
+  const trusted = (event.target as HTMLInputElement).checked
+  await patchCapability(capability, capability.enabled, trusted)
+}
+
+async function patchCapability(
+  capability: AgentCapability,
+  enabled: boolean,
+  trusted: boolean,
+): Promise<void> {
+  capabilityUpdating.value = capability.capability_id
+  try {
+    await updateAgentCapability(
+      props.projectId,
+      capability.capability_id,
+      { enabled, trusted },
+    )
+    capabilities.value = await listAgentCapabilities(props.projectId)
+  } catch (cause) {
+    ElMessage.error('能力设置更新失败')
+    console.error(cause)
+  } finally {
+    capabilityUpdating.value = ''
+  }
+}
+
 async function addMemory(): Promise<void> {
   const content = memoryDraft.value.trim()
   if (!content) return
@@ -559,7 +818,7 @@ function shortRef(value: string): string {
 }
 
 function renderAgentMarkdown(content: string): string {
-  return renderPaperMarkdown(content, (path) => path)
+  return renderPaperMarkdown(content, () => '')
 }
 
 function formatTime(value: string): string {
@@ -893,6 +1152,11 @@ function toolLabel(toolName: string): string {
   background: #c45b4b;
 }
 
+.tool-event.running .event-status {
+  animation: pulse 1.2s infinite ease-in-out;
+  background: #4f85b5;
+}
+
 .tool-event.pending_confirmation .event-status {
   background: #c18328;
 }
@@ -1007,29 +1271,37 @@ function toolLabel(toolName: string): string {
   white-space: nowrap;
 }
 
-.thinking-row {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  color: #788592;
+.run-progress {
+  margin-top: 8px;
+  padding: 7px 8px;
+  border: 1px solid #d8e0e6;
+  border-radius: 4px;
+  background: #f8fafb;
+  color: #65727e;
   font-size: 10px;
 }
 
-.thinking-row span {
-  width: 5px;
-  height: 5px;
+.run-progress summary {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.progress-spinner {
+  width: 8px;
+  height: 8px;
+  border: 1px solid #a9c9c1;
+  border-top-color: #1f8f78;
   border-radius: 50%;
-  animation: pulse 1.2s infinite ease-in-out;
-  background: #1f8f78;
+  animation: spin 0.8s linear infinite;
 }
 
-.thinking-row span:nth-child(2) {
-  animation-delay: 0.15s;
-}
-
-.thinking-row span:nth-child(3) {
-  margin-right: 4px;
-  animation-delay: 0.3s;
+.live-tool-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 7px;
 }
 
 .composer {
@@ -1083,7 +1355,8 @@ function toolLabel(toolName: string): string {
 }
 
 .session-view,
-.memory-view {
+.memory-view,
+.capability-view {
   display: grid;
   min-height: 0;
   grid-column: 1;
@@ -1154,6 +1427,89 @@ function toolLabel(toolName: string): string {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
+.capability-view {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.capability-notice {
+  margin: 0;
+  padding: 7px 9px;
+  border-bottom: 1px solid #e0e5ea;
+  background: #fffaf0;
+  color: #7d673f;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.capability-list {
+  min-height: 0;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.capability-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid #e3e8ec;
+}
+
+.capability-main {
+  min-width: 0;
+}
+
+.capability-main > div {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.capability-main strong {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capability-main p {
+  margin: 4px 0;
+  color: #66727e;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.capability-main small {
+  display: block;
+  overflow: hidden;
+  color: #929ca6;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capability-kind {
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: #edf3f2;
+  color: #426b62;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.capability-controls {
+  display: grid;
+  align-content: center;
+  justify-items: end;
+  gap: 6px;
+}
+
+.capability-controls label {
+  color: #6f7b87;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
 .memory-create {
   display: grid;
   gap: 6px;
@@ -1220,6 +1576,12 @@ function toolLabel(toolName: string): string {
   40% {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>

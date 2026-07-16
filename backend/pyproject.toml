@@ -10,6 +10,7 @@ dependencies = [
   "pydantic-settings>=2.4.0",
   "python-multipart>=0.0.9",
   "python-dotenv>=1.0.1",
+  "pyyaml>=6.0",
   "pathspec>=0.12.1",
   "sqlmodel>=0.0.22",
   "uvicorn[standard]>=0.30.0",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -51,16 +52,12 @@ class CompatibleAgentProvider:
         self.timeout = timeout
         self.thinking_mode = thinking_mode
 
-    def next_step(
+    def _request_components(
         self,
         message: str,
         context: dict[str, Any],
         tool_results: list[dict[str, Any]],
-    ) -> AgentProviderStep:
-        try:
-            import httpx
-        except ModuleNotFoundError as exc:
-            raise AgentProviderFailure("llm_dependency_missing") from exc
+    ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
         history = context.get("history") if isinstance(context.get("history"), list) else []
         messages: list[dict[str, str]] = [
             {
@@ -86,25 +83,40 @@ class CompatibleAgentProvider:
                         "skills": context.get("skills", []),
                         "tool_results": tool_results,
                         "instruction": (
-                            "Use tools when evidence is missing. If tool_results contain an error, "
-                            "correct the call instead of repeating it. Return a normal final "
-                            "answer when the task is complete."
+                            "Use tools when evidence is missing. If tool_results contain an "
+                            "error, correct the call instead of repeating it. Return a normal "
+                            "final answer when the task is complete."
                         ),
                     },
                     ensure_ascii=False,
                 ),
             }
         )
-        from app.services.agent.tools import tool_definitions
+        definitions = context.get("tool_definitions")
+        if not isinstance(definitions, list):
+            from app.services.agent.tools import tool_definitions
 
-        definitions = tool_definitions()
+            definitions = tool_definitions()
+        return messages, definitions
+
+    def next_step(
+        self,
+        message: str,
+        context: dict[str, Any],
+        tool_results: list[dict[str, Any]],
+    ) -> AgentProviderStep:
+        try:
+            import httpx
+        except ModuleNotFoundError as exc:
+            raise AgentProviderFailure("llm_dependency_missing") from exc
+        messages, definitions = self._request_components(message, context, tool_results)
         payload = {
             "model": self.model_name,
             "temperature": 0,
             "messages": messages,
-            "tools": definitions,
-            "tool_choice": "auto",
         }
+        if definitions:
+            payload.update(tools=definitions, tool_choice="auto")
         if self.thinking_mode:
             payload["thinking"] = {"type": self.thinking_mode}
 
@@ -194,3 +206,115 @@ class CompatibleAgentProvider:
             raise
         except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValidationError) as exc:
             raise AgentProviderFailure("llm_invalid_json") from exc
+
+    def next_step_stream(
+        self,
+        message: str,
+        context: dict[str, Any],
+        tool_results: list[dict[str, Any]],
+        on_event: Callable[[str, dict[str, Any]], None],
+    ) -> AgentProviderStep:
+        """Consume OpenAI-compatible SSE while retaining the non-stream fallback."""
+
+        try:
+            import httpx
+        except ModuleNotFoundError as exc:
+            raise AgentProviderFailure("llm_dependency_missing") from exc
+        messages, definitions = self._request_components(message, context, tool_results)
+        payload: dict[str, Any] = {
+            "model": self.model_name,
+            "temperature": 0,
+            "messages": messages,
+            "stream": True,
+        }
+        if definitions:
+            payload.update(tools=definitions, tool_choice="auto")
+        if self.thinking_mode:
+            payload["thinking"] = {"type": self.thinking_mode}
+        content_parts: list[str] = []
+        buffered_json: list[str] = []
+        tool_calls: dict[int, dict[str, str]] = {}
+        reasoning_announced = False
+        try:
+            with httpx.stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json=payload,
+                timeout=self.timeout,
+            ) as response:
+                if response.status_code in {400, 422}:
+                    return self.next_step(message, context, tool_results)
+                if response.status_code == 429:
+                    raise AgentProviderFailure("llm_rate_limited")
+                if response.status_code >= 500:
+                    raise AgentProviderFailure("llm_upstream_error")
+                if response.status_code >= 400:
+                    raise AgentProviderFailure("llm_request_rejected")
+                pending_text = ""
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line.removeprefix("data:").strip()
+                    if not raw or raw == "[DONE]":
+                        continue
+                    try:
+                        delta = json.loads(raw)["choices"][0].get("delta", {})
+                    except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                        continue
+                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                    if reasoning and not reasoning_announced:
+                        reasoning_announced = True
+                        on_event(
+                            "reasoning.summary",
+                            {"summary": "模型正在推理并核对当前证据"},
+                        )
+                    text = str(delta.get("content") or "")
+                    if text:
+                        content_parts.append(text)
+                        pending_text += text
+                        leading = "".join(content_parts).lstrip()[:1]
+                        if leading == "{":
+                            buffered_json.append(text)
+                        elif len(pending_text) >= 24 or "\n" in pending_text:
+                            on_event("message.delta", {"delta": pending_text})
+                            pending_text = ""
+                    for call in delta.get("tool_calls") or []:
+                        index = int(call.get("index", 0))
+                        current = tool_calls.setdefault(index, {"name": "", "arguments": ""})
+                        function = call.get("function") or {}
+                        current["name"] += str(function.get("name") or "")
+                        current["arguments"] += str(function.get("arguments") or "")
+                if pending_text and not buffered_json:
+                    on_event("message.delta", {"delta": pending_text})
+        except AgentProviderFailure:
+            raise
+        except httpx.TimeoutException as exc:
+            raise AgentProviderFailure("llm_timeout") from exc
+        except httpx.HTTPError as exc:
+            raise AgentProviderFailure("llm_transport_error") from exc
+
+        if tool_calls:
+            function = tool_calls[min(tool_calls)]
+            try:
+                arguments = json.loads(function["arguments"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                arguments = {}
+            return AgentProviderStep(
+                action="tool",
+                tool_name=function["name"],
+                arguments=arguments,
+            )
+        content = "".join(content_parts).strip()
+        if not content:
+            raise AgentProviderFailure("llm_empty_response")
+        if content.startswith("{"):
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict) and parsed.get("action") in {"final", "tool"}:
+                    parsed.setdefault("arguments", {})
+                    parsed.setdefault("citations", [])
+                    return AgentProviderStep.model_validate(parsed)
+            except (json.JSONDecodeError, ValidationError):
+                pass
+        return AgentProviderStep(action="final", answer=content)

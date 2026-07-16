@@ -71,6 +71,10 @@ export interface WorkspaceTensorFlow {
     source_path: string
     score: number
   }>
+  analysis_status: 'missing' | 'pending' | 'queued' | 'running' | 'ready' | 'failed' | 'stale'
+  analysis_revision: number
+  repository_revision: number
+  stale: boolean
   nodes: Array<{
     id: string
     label: string

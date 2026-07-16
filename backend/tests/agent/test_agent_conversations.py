@@ -13,11 +13,13 @@ from app.schemas.agent import (
 )
 from app.services.agent.conversations import (
     create_conversation,
+    decide_conversation_confirmation,
     get_conversation_detail,
     run_conversation_turn,
 )
 from app.services.agent.memory import create_memory, retrieve_memories
 from app.services.agent.provider import AgentProviderStep
+from app.services.analysis_jobs import ANALYZER_VERSION
 
 
 class StepProvider:
@@ -27,6 +29,7 @@ class StepProvider:
     def __init__(self, steps: list[AgentProviderStep]) -> None:
         self.steps = steps
         self.contexts: list[dict[str, object]] = []
+        self.messages: list[str] = []
 
     def next_step(
         self,
@@ -34,6 +37,7 @@ class StepProvider:
         context: dict[str, object],
         tool_results: list[dict[str, object]],
     ) -> AgentProviderStep:
+        self.messages.append(message)
         self.contexts.append(context)
         return self.steps.pop(0)
 
@@ -81,6 +85,10 @@ def _project(session: Session, tmp_path: Path | None = None) -> Project:
                 ],
                 imports_json=[],
                 pytorch_candidates_json=[],
+                analysis_json={"symbols": [], "calls": []},
+                analysis_revision=1,
+                analysis_version=ANALYZER_VERSION,
+                analysis_status="ready",
             )
         )
     session.commit()
@@ -275,3 +283,173 @@ def test_memory_retrieval_combines_project_and_global_scope(tmp_path: Path) -> N
     assert [item["scope"] for item in second_results] == ["global"]
     assert global_memory.conversation_id is None
     assert global_memory.source_json["conversation_id"] == conversation_id
+
+
+def test_successful_duplicate_tool_calls_reuse_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    with _session() as session:
+        project = _project(session, tmp_path)
+        conversation = create_conversation(session, project.id or 0, AgentConversationCreate())
+        provider = StepProvider(
+            [
+                AgentProviderStep(
+                    action="tool",
+                    tool_name="search_code",
+                    arguments={"query": "Net"},
+                ),
+                AgentProviderStep(
+                    action="tool",
+                    tool_name="search_code",
+                    arguments={"query": "Net"},
+                ),
+                AgentProviderStep(
+                    action="tool",
+                    tool_name="search_code",
+                    arguments={"query": "Net"},
+                ),
+                AgentProviderStep(action="final", answer="One indexed symbol was found."),
+            ]
+        )
+        calls = 0
+        original = __import__(
+            "app.services.agent.conversations",
+            fromlist=["execute_read_tool"],
+        ).execute_read_tool
+
+        def count_read(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr("app.services.agent.conversations.execute_read_tool", count_read)
+        response = run_conversation_turn(
+            session,
+            project.id or 0,
+            conversation.conversation_id,
+            AgentTurnRequest(message="Find Net without rereading the same index"),
+            provider=provider,
+        )
+
+    assert response is not None and response.status == "completed"
+    assert calls == 1
+    assert any("复用证据" in event.summary for event in response.assistant_message.tool_events)
+
+
+def test_confirmation_continues_the_run_that_created_it(tmp_path: Path) -> None:
+    target = "class Net:\n    value = 1\n"
+    with _session() as session:
+        project = _project(session, tmp_path)
+        project_id = project.id or 0
+        conversation = create_conversation(session, project_id, AgentConversationCreate())
+        first_provider = StepProvider(
+            [
+                AgentProviderStep(
+                    action="tool",
+                    tool_name="propose_code_patch",
+                    arguments={"path": "models/net.py", "content": target},
+                ),
+                AgentProviderStep(
+                    action="tool",
+                    tool_name="analyze_change_risk",
+                    arguments={"path": "models/net.py", "content": target},
+                ),
+                AgentProviderStep(
+                    action="tool",
+                    tool_name="save_code_file",
+                    arguments={"path": "models/net.py", "content": target},
+                ),
+            ]
+        )
+        waiting = run_conversation_turn(
+            session,
+            project_id,
+            conversation.conversation_id,
+            AgentTurnRequest(message="Apply the original change"),
+            provider=first_provider,
+        )
+        run_conversation_turn(
+            session,
+            project_id,
+            conversation.conversation_id,
+            AgentTurnRequest(message="This is a newer unrelated question"),
+            provider=StepProvider([AgentProviderStep(action="final", answer="Later answer")]),
+        )
+        continuation = StepProvider(
+            [AgentProviderStep(action="final", answer="Original change completed")]
+        )
+        assert waiting is not None and waiting.confirmation is not None
+        decided = decide_conversation_confirmation(
+            session,
+            project_id,
+            conversation.conversation_id,
+            waiting.confirmation.confirmation_id,
+            "accept",
+            provider=continuation,
+        )
+
+    assert decided is not None and decided.status == "completed"
+    assert continuation.messages == ["Apply the original change"]
+
+
+def test_rejected_confirmation_terminalizes_agent_run(tmp_path: Path) -> None:
+    target = "class Net:\n    value = 1\n"
+    with _session() as session:
+        project = _project(session, tmp_path)
+        project_id = project.id or 0
+        conversation = create_conversation(session, project_id, AgentConversationCreate())
+        waiting = run_conversation_turn(
+            session,
+            project_id,
+            conversation.conversation_id,
+            AgentTurnRequest(message="Prepare the change"),
+            provider=StepProvider(
+                [
+                    AgentProviderStep(
+                        action="tool",
+                        tool_name="propose_code_patch",
+                        arguments={"path": "models/net.py", "content": target},
+                    ),
+                    AgentProviderStep(
+                        action="tool",
+                        tool_name="analyze_change_risk",
+                        arguments={"path": "models/net.py", "content": target},
+                    ),
+                    AgentProviderStep(
+                        action="tool",
+                        tool_name="save_code_file",
+                        arguments={"path": "models/net.py", "content": target},
+                    ),
+                ]
+            ),
+        )
+        assert waiting is not None and waiting.confirmation is not None
+        decided = decide_conversation_confirmation(
+            session,
+            project_id,
+            conversation.conversation_id,
+            waiting.confirmation.confirmation_id,
+            "reject",
+        )
+        repeated = decide_conversation_confirmation(
+            session,
+            project_id,
+            conversation.conversation_id,
+            waiting.confirmation.confirmation_id,
+            "reject",
+        )
+        run = session.get(AgentRun, waiting.run_id)
+        detail = get_conversation_detail(session, project_id, conversation.conversation_id)
+
+    assert decided is not None and decided.status == "rejected"
+    assert repeated is not None and repeated.status == "rejected"
+    assert run is not None and run.status == "completed"
+    assert run.degraded_reason == "confirmation_rejected"
+    assert detail is not None
+    cancellation_messages = [
+        message
+        for message in detail.messages
+        if message.content == "已取消该工具操作，未修改项目环境。"
+    ]
+    assert len(cancellation_messages) == 1

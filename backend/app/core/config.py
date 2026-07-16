@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     tracelab_llm_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     tracelab_llm_max_candidates: int = Field(default=10, ge=1, le=30)
     tracelab_llm_max_context_chars: int = Field(default=12_000, ge=1000, le=100_000)
+    tracelab_agent_max_loop_steps: int = Field(default=18, ge=4, le=64)
+    tracelab_agent_skill_roots: list[str] | str = Field(default_factory=list)
+    tracelab_agent_plugin_roots: list[str] | str = Field(default_factory=list)
+    tracelab_analysis_inline_max_bytes: int = Field(default=512_000, ge=0)
+    tracelab_analysis_workers: int = Field(default=2, ge=1, le=8)
     tracelab_agent_confirmation_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
     github_clone_timeout_seconds: int = Field(default=60, ge=5, le=300)
     backend_cors_origins: list[str] | str = Field(
@@ -39,6 +44,17 @@ class Settings(BaseSettings):
     def parse_origins(cls, value: list[str] | str) -> list[str] | str:
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+    @field_validator(
+        "tracelab_agent_skill_roots",
+        "tracelab_agent_plugin_roots",
+        mode="before",
+    )
+    @classmethod
+    def parse_path_list(cls, value: list[str] | str) -> list[str] | str:
+        if isinstance(value, str):
+            return [path.strip() for path in value.split(",") if path.strip()]
         return value
 
     @property

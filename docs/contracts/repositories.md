@@ -126,6 +126,13 @@
 
 响应通过 `root_symbol`、`root_label` 和 `available_roots` 描述当前层级；节点通过 `component_symbol_id`、`expandable`、`external` 区分可下钻的自定义模块与默认折叠的外部黑盒。两种视图均增加 `x`、`y`、`width`、`height` 和正交边 `points`。前端应使用 `source_path`、`line_start`、`line_end` 跳转源码，不应依赖节点 ID 推断路径。
 
+图分析结果按仓库修订持久化。响应包含 `analysis_status`、`analysis_revision`、`repository_revision` 和 `stale`：
+
+- 小仓库可在上传请求内完成分析；超过 `TRACELAB_ANALYSIS_INLINE_MAX_BYTES` 时先返回文件树并进入后台队列。
+- 保存代码后仓库修订递增，旧图可作为 `stale=true` 缓存继续显示，后台任务完成后原子替换为新修订结果。
+- `GET /workspace/tensor-flow` 不重新解压或分析仓库，只读取缓存并在缺失/过期时尽力触发任务。
+- 服务启动会恢复 `queued/running` 任务，并为旧数据库中缺少新缓存的仓库补算。
+
 ## 5. 文件树、读取与保存
 
 `GET /workspace/code-tree` 返回完整过滤后树。目录节点包含 `child_count`、`descendant_count` 和 `has_children`，可用于后续懒加载或分页；文件节点包含 `size`。

@@ -571,6 +571,21 @@ def execute_read_tool(
         if current is None:
             return {"found": False, "path": validated.path}
         old_content = str(current["content"])
+        repository = session.exec(
+            select(CodeRepository)
+            .where(CodeRepository.project_id == project_id)
+            .order_by(CodeRepository.created_at.desc(), CodeRepository.id.desc())
+        ).first()
+        from app.services.analysis_jobs import analysis_is_current
+
+        if repository is None or not analysis_is_current(repository):
+            return {
+                "found": False,
+                "error": "analysis_pending",
+                "path": validated.path,
+                "base_sha256": content_sha256(old_content),
+                "target_sha256": content_sha256(validated.content),
+            }
         diff_lines = list(
             difflib.unified_diff(
                 old_content.splitlines(),
@@ -579,7 +594,7 @@ def execute_read_tool(
                 tofile=validated.path,
             )
         )
-        analysis = workspace_service.get_code_analysis(session, project_id) or {}
+        analysis = repository.analysis_json
         symbols = [
             symbol for symbol in analysis.get("symbols", []) if symbol.get("path") == validated.path
         ]

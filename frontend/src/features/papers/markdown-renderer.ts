@@ -82,6 +82,9 @@ function mathPlugin(markdown: MarkdownIt): void {
 
 export function renderPaperMarkdown(markdownText: string, resolveAsset: AssetResolver): string {
   const markdown = new MarkdownIt({ html: true, linkify: true, typographer: false })
+  const renderToken = Array.from(crypto.getRandomValues(new Uint32Array(4)))
+    .map((value) => value.toString(16))
+    .join('-')
   mathPlugin(markdown)
 
   let headingIndex = 0
@@ -98,6 +101,7 @@ export function renderPaperMarkdown(markdownText: string, resolveAsset: AssetRes
       const resolvedSource = resolveAsset(source)
       tokens[index].attrSet('src', resolvedSource)
       tokens[index].attrSet('data-paper-asset-url', resolvedSource)
+      tokens[index].attrSet('data-paper-render-token', renderToken)
     }
     tokens[index].attrSet('loading', 'lazy')
     tokens[index].attrSet('decoding', 'async')
@@ -115,10 +119,25 @@ export function renderPaperMarkdown(markdownText: string, resolveAsset: AssetRes
       'rowspan',
       'colspan',
       'data-paper-asset-url',
+      'data-paper-render-token',
     ],
   })
   const template = document.createElement('template')
   template.innerHTML = sanitized
+  for (const image of template.content.querySelectorAll('img')) {
+    if (
+      image.dataset.paperRenderToken !== renderToken ||
+      !image.dataset.paperAssetUrl
+    ) {
+      image.remove()
+      continue
+    }
+    delete image.dataset.paperRenderToken
+  }
+  for (const element of template.content.querySelectorAll<HTMLElement>('[style]')) {
+    const style = element.getAttribute('style') || ''
+    if (/url\s*\(|@import|expression\s*\(/i.test(style)) element.removeAttribute('style')
+  }
   for (const table of template.content.querySelectorAll('table')) {
     const wrapper = document.createElement('div')
     wrapper.className = 'table-scroll'

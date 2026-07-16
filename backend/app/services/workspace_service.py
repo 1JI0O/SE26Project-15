@@ -5,7 +5,6 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
-from app.services.code_analysis.analyzer import analyze_code_archive
 from app.services.code_analysis.editor import FileAccessError, RepositoryFileNotFoundError
 from app.services.code_analyzer import (
     build_hierarchical_tree,
@@ -373,13 +372,23 @@ def save_code_file(
         code.id or 0,
         "code_file_saved",
     )
+    repository_revision = code.revision
+    code.analysis_status = "stale"
+    code.analysis_error = None
+    session.add(code)
     session.commit()
+    from app.services.analysis_jobs import ensure_repository_analysis
+
+    try:
+        ensure_repository_analysis(project_id)
+    except ValueError:
+        pass
     return {
         "project_id": str(project_id),
         "path": file_path,
         "status": "accepted",
         "message": f"Saved edited content with {len(content)} characters.",
-        "repository_revision": code.revision,
+        "repository_revision": repository_revision,
         "stale_trace_count": stale_count,
     }
 
@@ -388,20 +397,28 @@ def build_tensor_flow_payload(
     code: CodeRepository | None,
     project_id: str,
     *,
+    analysis: dict[str, Any] | None = None,
     view: str = "architecture",
     root_symbol: str | None = None,
 ) -> dict[str, Any]:
     if code is None:
-        return layout_tensor_graph(
+        payload = layout_tensor_graph(
             {"nodes": [], "edges": []},
             project_id,
             renderer="architecture-dag-v2",
             view="architecture",
         )
-    analysis = analyze_code_archive(
-        code.storage_path,
-        edits_root=_repository_edits_root(code),
-    )
+        payload.update(
+            analysis_status="missing",
+            analysis_revision=0,
+            repository_revision=0,
+            stale=False,
+        )
+        return payload
+    analysis = analysis or code.analysis_json or {
+        "architecture_graph": {"roots": [], "graphs": {}, "default_root": None},
+        "tensor_graph": code.tensor_graph_json,
+    }
     architecture = analysis.get("architecture_graph", {})
     graphs = architecture.get("graphs", {})
     selected_root = root_symbol if root_symbol in graphs else architecture.get("default_root")
@@ -435,20 +452,28 @@ def build_tensor_flow_payload(
             "root_symbol": selected_root,
             "root_label": selected_graph.get("root_label"),
         }
-        return layout_tensor_graph(
+        payload = layout_tensor_graph(
             debug_graph,
             project_id,
             renderer="semantic-dag-v1",
             view="debug",
             available_roots=roots,
         )
-    return layout_tensor_graph(
-        selected_graph,
-        project_id,
-        renderer="architecture-dag-v2",
-        view="architecture",
-        available_roots=roots,
+    else:
+        payload = layout_tensor_graph(
+            selected_graph,
+            project_id,
+            renderer="architecture-dag-v2",
+            view="architecture",
+            available_roots=roots,
+        )
+    payload.update(
+        analysis_status=code.analysis_status,
+        analysis_revision=code.analysis_revision,
+        repository_revision=code.revision,
+        stale=code.analysis_revision != code.revision,
     )
+    return payload
 
 
 def get_tensor_flow(
@@ -458,9 +483,20 @@ def get_tensor_flow(
     view: str = "architecture",
     root_symbol: str | None = None,
 ) -> dict[str, Any]:
+    code = _latest_code(session, project_id)
+    if code is not None:
+        from app.services.analysis_jobs import analysis_is_current, ensure_repository_analysis
+
+        if not analysis_is_current(code) and code.analysis_status not in {"queued", "running"}:
+            try:
+                ensure_repository_analysis(project_id)
+                session.refresh(code)
+            except ValueError:
+                pass
     return build_tensor_flow_payload(
-        _latest_code(session, project_id),
+        code,
         str(project_id),
+        analysis=code.analysis_json if code else None,
         view=view,
         root_symbol=root_symbol,
     )
@@ -470,10 +506,16 @@ def get_code_analysis(session: Session, project_id: int) -> dict[str, Any] | Non
     code = _latest_code(session, project_id)
     if code is None:
         return None
-    return analyze_code_archive(
-        code.storage_path,
-        edits_root=_repository_edits_root(code),
-    )
+    if not code.analysis_json:
+        from app.services.analysis_jobs import ensure_repository_analysis
+
+        if code.analysis_status not in {"queued", "running"}:
+            try:
+                ensure_repository_analysis(project_id)
+            except ValueError:
+                pass
+        return None
+    return code.analysis_json
 
 
 def get_trace_rows(session: Session, project_id: int) -> list[dict[str, Any]]:

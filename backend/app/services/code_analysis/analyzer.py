@@ -7,6 +7,51 @@ from app.services.code_analysis.constants import MAX_SOURCE_BYTES
 from app.services.code_analysis.languages import is_editor_readable_file, language_for
 from app.services.code_analysis.python_ast import analyze_python
 
+EMPTY_TENSOR_GRAPH: dict[str, Any] = {
+    "nodes": [],
+    "edges": [],
+    "entry_symbols": [],
+    "shape_status": "unavailable",
+    "shape_reason": "analysis_pending",
+}
+
+
+def scan_code_archive(path: str | Path) -> dict[str, Any]:
+    """Build the editor tree quickly without running semantic graph analysis."""
+
+    file_tree: list[dict[str, Any]] = []
+    with zipfile.ZipFile(path) as archive:
+        entries, archive_root, ignored_count = list_archive_entries(archive)
+        for entry in entries:
+            language = language_for(entry.display_path)
+            file_tree.append(
+                {
+                    "path": entry.display_path,
+                    "size": entry.size,
+                    "language": language,
+                    "editable": is_editor_readable_file(entry.display_path)
+                    and entry.size <= MAX_SOURCE_BYTES,
+                }
+            )
+    return {
+        "file_tree": file_tree,
+        "symbols": [],
+        "imports": [],
+        "calls": [],
+        "pytorch_candidates": [],
+        "tensor_graph": dict(EMPTY_TENSOR_GRAPH),
+        "architecture_graph": {"roots": [], "graphs": {}, "default_root": None},
+        "archive_root": archive_root,
+        "summary": {
+            "file_count": len(file_tree),
+            "python_file_count": sum(item["language"] == "python" for item in file_tree),
+            "symbol_count": 0,
+            "call_count": 0,
+            "ignored_count": ignored_count,
+            "total_bytes": sum(int(item["size"]) for item in file_tree),
+        },
+    }
+
 
 def analyze_code_archive(
     path: str | Path,
