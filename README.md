@@ -161,6 +161,8 @@ pnpm desktop:dev
 
 该命令会打包并启动内置 FastAPI 后端，然后启动 Tauri 窗口；不需要另行启动 Uvicorn。首次运行会下载 Rust/Python/Node 依赖，耗时较长。
 
+PyInstaller 可能提示 `tzdata`、`pysqlite2`、`MySQLdb` 或 `psycopg2` 等 hidden import 未找到。这些是 SQLAlchemy 探测的可选时区/数据库驱动；桌面版使用 Python 内置 SQLite，不影响启动和项目功能。构建以 `Prepared Tauri backend runtime` 和后续 Tauri 编译结果为准。
+
 要生成可安装的 Windows 包，请在 Windows 主机上执行：
 
 ```powershell
