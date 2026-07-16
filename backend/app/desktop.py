@@ -16,7 +16,10 @@ def _configure_desktop_environment() -> None:
     os.environ.setdefault("TRACELAB_PAPER_JOB_ROOT", str(data_dir / "paper-jobs"))
     os.environ.setdefault(
         "BACKEND_CORS_ORIGINS",
-        "tauri://localhost,http://tauri.localhost,https://tauri.localhost",
+        (
+            "http://127.0.0.1:5173,http://localhost:5173,tauri://localhost,"
+            "http://tauri.localhost,https://tauri.localhost"
+        ),
     )
 
 
