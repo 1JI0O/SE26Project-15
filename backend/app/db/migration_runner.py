@@ -5,12 +5,123 @@ from typing import Any
 
 from sqlalchemy import Engine, inspect, text
 
+LOCAL_REVISIONS = (
+    "0001_legacy_baseline",
+    "0002_trace_agent",
+    "0003_integration_config",
+    "0004_agent_runtime",
+    "0005_runtime_events_analysis_cache",
+    "0006_cloud_accounts_sync",
+    "0007_cloud_consistency",
+    "0008_local_artifact_versions",
+)
 
-def _alembic_config(database_url: str) -> Any:
+
+def _has_columns(inspector: Any, table: str, required: set[str]) -> bool:
+    if not inspector.has_table(table):
+        return False
+    return required.issubset({column["name"] for column in inspector.get_columns(table)})
+
+
+def _detect_local_revision(engine: Engine, tables: set[str]) -> str:
+    """Identify schemas created by pre-Alembic/early Desktop builds.
+
+    Several released development builds created current ORM tables with
+    ``create_all`` but stamped only the iteration-1 baseline. Detection must be
+    progressive: never skip a migration unless every preceding capability is
+    already present.
+    """
+
+    inspector = inspect(engine)
+    detected = LOCAL_REVISIONS[0]
+    has_0002 = (
+        _has_columns(
+            inspector,
+            "paper_document",
+            {"parser", "parser_version", "parse_status", "content_hash", "pages_json"},
+        )
+        and _has_columns(
+            inspector,
+            "code_repository",
+            {"tensor_graph_json", "revision", "updated_at"},
+        )
+        and _has_columns(
+            inspector,
+            "trace_link",
+            {"trace_id", "fingerprint", "status", "evidence_json", "updated_at"},
+        )
+        and "agent_tool_request" in tables
+    )
+    if not has_0002:
+        return detected
+    detected = LOCAL_REVISIONS[1]
+    if "integration_config" not in tables:
+        return detected
+    detected = LOCAL_REVISIONS[2]
+    has_0004 = {
+        "agent_conversation",
+        "agent_message",
+        "agent_run",
+        "agent_memory",
+    }.issubset(tables) and _has_columns(
+        inspector, "agent_tool_request", {"conversation_id", "run_id"}
+    )
+    if not has_0004:
+        return detected
+    detected = LOCAL_REVISIONS[3]
+    has_0005 = {
+        "agent_run_event",
+        "agent_capability_setting",
+        "repository_analysis_job",
+    }.issubset(tables) and _has_columns(
+        inspector, "agent_run", {"capability_snapshot_json"}
+    )
+    if not has_0005:
+        return detected
+    detected = LOCAL_REVISIONS[4]
+    has_0006 = (
+        _has_columns(
+            inspector,
+            "project",
+            {"public_id", "cloud_workspace_id", "version", "sync_mode"},
+        )
+        and _has_columns(inspector, "paper_document", {"public_id", "version", "blob_id"})
+        and _has_columns(inspector, "code_repository", {"public_id", "version", "blob_id"})
+        and _has_columns(inspector, "trace_link", {"public_id", "version"})
+        and {
+            "local_sync_outbox",
+            "local_sync_state",
+            "local_sync_conflict",
+            "local_sync_inbox",
+        }.issubset(tables)
+    )
+    if not has_0006:
+        return detected
+    detected = LOCAL_REVISIONS[5]
+    agent_tables = (
+        "agent_conversation",
+        "agent_message",
+        "agent_run",
+        "agent_run_event",
+        "agent_memory",
+    )
+    has_0007 = all(
+        _has_columns(inspector, table, {"public_id", "version"}) for table in agent_tables
+    ) and _has_columns(inspector, "local_sync_outbox", {"supersedes_operation_id"})
+    if not has_0007:
+        return detected
+    detected = LOCAL_REVISIONS[6]
+    if "local_artifact_version" in tables:
+        detected = LOCAL_REVISIONS[7]
+    return detected
+
+
+def _alembic_config(database_url: str, *, cloud: bool = False) -> Any:
     from alembic.config import Config
 
     config = Config()
-    config.set_main_option("script_location", str(Path(__file__).with_name("migrations")))
+    directory = "cloud_migrations" if cloud else "migrations"
+    config.set_main_option("script_location", str(Path(__file__).with_name(directory)))
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config
 
@@ -20,9 +131,46 @@ def _run_alembic(engine: Engine) -> None:
 
     config = _alembic_config(str(engine.url))
     tables = set(inspect(engine).get_table_names())
-    if "project" in tables and "alembic_version" not in tables:
-        command.stamp(config, "0001_legacy_baseline")
+    if "project" in tables:
+        detected_revision = _detect_local_revision(engine, tables)
+        current_revision = None
+        if "alembic_version" in tables:
+            with engine.connect() as connection:
+                current_revision = connection.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one_or_none()
+        current_position = (
+            LOCAL_REVISIONS.index(current_revision) if current_revision in LOCAL_REVISIONS else -1
+        )
+        if (
+            current_revision is None
+            or LOCAL_REVISIONS.index(detected_revision) > current_position
+        ):
+            command.stamp(config, detected_revision)
     command.upgrade(config, "head")
+
+
+def upgrade_cloud_database(engine: Engine) -> None:
+    if engine.url.get_backend_name() == "sqlite":
+        raise RuntimeError("Cloud database migrations require PostgreSQL")
+    tables = set(inspect(engine).get_table_names())
+    current_revision = None
+    if "alembic_version" in tables:
+        with engine.connect() as connection:
+            current_revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one_or_none()
+    if (
+        "project" in tables
+        or ("user_account" in tables and "alembic_version" not in tables)
+        or (current_revision is not None and current_revision != "0001_cloud_baseline")
+    ):
+        raise RuntimeError(
+            "Legacy/mixed cloud schema detected; use the explicit cloud rebuild procedure"
+        )
+    from alembic import command
+
+    command.upgrade(_alembic_config(str(engine.url), cloud=True), "head")
 
 
 def _column_names(engine: Engine, table: str) -> set[str]:
@@ -51,8 +199,23 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
 
     _add_missing_columns(
         engine,
+        "project",
+        {
+            "public_id": "VARCHAR(36)",
+            "cloud_workspace_id": "VARCHAR(36)",
+            "version": "INTEGER NOT NULL DEFAULT 1",
+            "sync_mode": "VARCHAR(24) NOT NULL DEFAULT 'local_only'",
+            "agent_history_sync": "BOOLEAN NOT NULL DEFAULT 1",
+            "deleted_at": "DATETIME",
+        },
+    )
+    _add_missing_columns(
+        engine,
         "paper_document",
         {
+            "public_id": "VARCHAR(36)",
+            "version": "INTEGER NOT NULL DEFAULT 1",
+            "blob_id": "VARCHAR(36)",
             "parser": "VARCHAR(64) NOT NULL DEFAULT 'legacy'",
             "parser_version": "VARCHAR(128) NOT NULL DEFAULT ''",
             "parse_status": "VARCHAR(32) NOT NULL DEFAULT 'succeeded'",
@@ -64,7 +227,10 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
         engine,
         "code_repository",
         {
-            "tensor_graph_json": "JSON NOT NULL DEFAULT '{\"nodes\":[],\"edges\":[]}'",
+            "public_id": "VARCHAR(36)",
+            "version": "INTEGER NOT NULL DEFAULT 1",
+            "blob_id": "VARCHAR(36)",
+            "tensor_graph_json": 'JSON NOT NULL DEFAULT \'{"nodes":[],"edges":[]}\'',
             "analysis_json": "JSON NOT NULL DEFAULT '{}'",
             "analysis_revision": "INTEGER NOT NULL DEFAULT 0",
             "analysis_version": "VARCHAR(64) NOT NULL DEFAULT ''",
@@ -94,6 +260,8 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
         engine,
         "trace_link",
         {
+            "public_id": "VARCHAR(36)",
+            "version": "INTEGER NOT NULL DEFAULT 1",
             "trace_id": "VARCHAR(64)",
             "paper_document_id": "INTEGER",
             "code_repository_id": "INTEGER",
@@ -102,7 +270,7 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
             "llm_confidence": "FLOAT",
             "source": "VARCHAR(32) NOT NULL DEFAULT 'legacy'",
             "evidence_json": "JSON NOT NULL DEFAULT '[]'",
-            "uncertainty_json": "JSON NOT NULL DEFAULT '{\"level\":\"high\",\"reasons\":[]}'",
+            "uncertainty_json": 'JSON NOT NULL DEFAULT \'{"level":"high","reasons":[]}\'',
             "model_info_json": "JSON",
             "fingerprint": "VARCHAR(64)",
             "status": "VARCHAR(32) NOT NULL DEFAULT 'stale'",
@@ -112,12 +280,26 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
         },
     )
     with engine.begin() as connection:
-        connection.execute(
-            text(
-                "UPDATE code_repository SET updated_at = created_at "
-                "WHERE updated_at IS NULL"
+        for table in ("project", "paper_document", "code_repository", "trace_link"):
+            connection.execute(
+                text(
+                    f'UPDATE "{table}" SET public_id = '
+                    "lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || "
+                    "substr(lower(hex(randomblob(2))),2) || '-a' || "
+                    "substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))) "
+                    "WHERE public_id IS NULL"
+                )
             )
+        connection.execute(
+            text("UPDATE code_repository SET updated_at = created_at WHERE updated_at IS NULL")
         )
+        for table in ("project", "paper_document", "code_repository", "trace_link"):
+            connection.execute(
+                text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{table}_public_id "
+                    f'ON "{table}"(public_id)'
+                )
+            )
         connection.execute(
             text(
                 "UPDATE trace_link SET "

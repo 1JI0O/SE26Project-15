@@ -182,9 +182,7 @@ def normalize_mineru_payload(
             bbox=_normalized_bbox(entry.get("bbox")),
             section_path=list(current_section),
             metadata={
-                key: entry[key]
-                for key in ("sub_type", "text_format", "img_path")
-                if key in entry
+                key: entry[key] for key in ("sub_type", "text_format", "img_path") if key in entry
             },
         )
         blocks_by_page.setdefault(page_number, []).append(block)
@@ -212,11 +210,7 @@ def normalize_mineru_payload(
         PaperPage(
             page_number=page_number,
             title=next(
-                (
-                    section["title"]
-                    for section in sections
-                    if section["page"] == page_number
-                ),
+                (section["title"] for section in sections if section["page"] == page_number),
                 title if page_number == 1 else f"Page {page_number}",
             ),
             blocks=blocks_by_page[page_number],
@@ -234,9 +228,7 @@ def normalize_mineru_payload(
     )
 
 
-def _extract_abstract(
-    paragraphs: list[dict[str, Any]], sections: Iterable[dict[str, Any]]
-) -> str:
+def _extract_abstract(paragraphs: list[dict[str, Any]], sections: Iterable[dict[str, Any]]) -> str:
     abstract_pages = {
         int(section["page"])
         for section in sections

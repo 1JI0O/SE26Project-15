@@ -218,9 +218,7 @@ def suggest_and_persist(
             candidate.code_symbol_id,
             values["relation_type"],
         )
-        link = session.exec(
-            select(TraceLink).where(TraceLink.fingerprint == fingerprint)
-        ).first()
+        link = session.exec(select(TraceLink).where(TraceLink.fingerprint == fingerprint)).first()
         if link is None:
             link = TraceLink(
                 project_id=project_id,

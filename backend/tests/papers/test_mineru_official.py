@@ -29,9 +29,7 @@ def _archive() -> bytes:
             {
                 "type": "paragraph",
                 "content": {
-                    "paragraph_content": [
-                        {"type": "text", "content": "Parsed by MinerU API."}
-                    ]
+                    "paragraph_content": [{"type": "text", "content": "Parsed by MinerU API."}]
                 },
                 "bbox": [100, 150, 900, 230],
             },
@@ -118,7 +116,9 @@ def test_official_api_upload_poll_download_and_normalize(tmp_path: Path) -> None
     assert outcome.external_task_id == "batch-1"
     assert outcome.document.title == "Official API Paper"
     assert outcome.document.parser_version == "official-v4"
-    upload = next(request for request in transport.requests if request[1].startswith("https://upload"))
+    upload = next(
+        request for request in transport.requests if request[1].startswith("https://upload")
+    )
     assert upload[3] == {}
     assert "Authorization" not in upload[3]
 

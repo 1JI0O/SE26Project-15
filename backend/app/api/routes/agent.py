@@ -218,8 +218,7 @@ async def stream_agent_run_events(
                 idle_ticks += 1
             current = session.get(AgentRun, run_id)
             if current is None or (
-                current.status in {"completed", "failed", "waiting_confirmation"}
-                and not batch
+                current.status in {"completed", "failed", "waiting_confirmation"} and not batch
             ):
                 break
             if idle_ticks and idle_ticks % 40 == 0:

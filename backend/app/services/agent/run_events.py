@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlmodel import Session, func, select
 
-from app.models.entities import AgentRun, AgentRunEvent
+from app.models.entities import AgentConversation, AgentRun, AgentRunEvent, Project
 from app.schemas.agent import AgentRunEventRead
 
 
@@ -41,6 +41,30 @@ class RunEventEmitter:
             payload_json=payload or {},
         )
         self.session.add(event)
+        project = self.session.get(Project, self.run.project_id)
+        if project is not None and project.agent_history_sync:
+            from app.services.local_sync import agent_event_payload, record_local_operation
+
+            record_local_operation(
+                self.session,
+                project,
+                "agent_run_event",
+                event.public_id,
+                {
+                    "project_public_id": project.public_id,
+                    "run_public_id": self.run.public_id,
+                    "conversation_public_id": self.session.exec(
+                        select(AgentConversation.public_id).where(
+                            AgentConversation.conversation_id == event.conversation_id
+                        )
+                    ).first(),
+                    "sequence": event.sequence,
+                    "event_type": event.event_type,
+                    "payload": agent_event_payload(event.payload_json),
+                    "created_at": event.created_at.isoformat(),
+                },
+                base_version=0,
+            )
         self.session.commit()
         self.session.refresh(event)
         return event

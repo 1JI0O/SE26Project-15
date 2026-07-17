@@ -28,9 +28,7 @@ def test_read_and_save_are_limited_to_allowed_repository_paths(tmp_path: Path) -
 
     assert read_repository_file(archive_path, "model.py") == "VALUE = 1\n"
     save_repository_file(archive_path, edits_root, "model.py", "VALUE = 2\n")
-    assert read_repository_file(
-        archive_path, "model.py", edits_root=edits_root
-    ) == "VALUE = 2\n"
+    assert read_repository_file(archive_path, "model.py", edits_root=edits_root) == "VALUE = 2\n"
 
     with pytest.raises(InvalidRepositoryPathError):
         save_repository_file(archive_path, edits_root, "../outside.py", "bad\n")

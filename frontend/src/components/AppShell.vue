@@ -6,9 +6,33 @@
         <strong>TraceLab</strong>
       </router-link>
       <div class="topbar-actions">
-        <el-tooltip content="集成设置" placement="bottom">
+        <router-link
+          v-if="localCloudSyncAvailable && auth.authenticated && auth.verified"
+          class="account-link"
+          to="/cloud-projects"
+        >云端项目</router-link>
+        <el-button
+          v-if="localCloudSyncAvailable && auth.authenticated && auth.verified"
+          text
+          :loading="sync.syncing"
+          @click="runSync"
+        >
+          云同步<span v-if="sync.conflictCount">（{{ sync.conflictCount }} 个冲突）</span>
+        </el-button>
+        <router-link
+          v-if="localCloudSyncAvailable && sync.conflictCount"
+          class="account-link conflict-link"
+          to="/conflicts"
+        >冲突中心</router-link>
+        <el-tooltip v-if="runtimeMode !== 'cloud'" content="集成设置" placement="bottom">
           <el-button text :icon="Setting" aria-label="集成设置" @click="settingsOpen = true" />
         </el-tooltip>
+        <router-link v-if="auth.authenticated" to="/account" class="account-link">
+          {{ auth.user?.display_name || auth.user?.email }}
+        </router-link>
+        <router-link v-if="auth.user?.is_platform_admin" to="/admin" class="account-link">管理</router-link>
+        <el-button v-if="auth.authenticated" text @click="logout">退出</el-button>
+        <router-link v-else-if="cloudConfigured" to="/login" class="account-link">登录云端</router-link>
       </div>
     </header>
     <main class="workspace">
@@ -20,14 +44,38 @@
 
 <script setup lang="ts">
 import { Setting } from '@element-plus/icons-vue'
-import { computed, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
+import { cloudConfigured, localCloudSyncAvailable, runtimeMode } from '@/api/http'
 import IntegrationSettingsDialog from '@/features/settings/IntegrationSettingsDialog.vue'
+import { useAuthStore } from '@/stores/auth'
+import { useSyncStore } from '@/stores/sync'
 
 const settingsOpen = ref(false)
 const route = useRoute()
 const isWorkspace = computed(() => route.name === 'workspace')
+const auth = useAuthStore()
+const sync = useSyncStore()
+
+onMounted(() => {
+  if (localCloudSyncAvailable && auth.authenticated) void sync.refreshConflicts()
+})
+
+async function runSync() {
+  try {
+    await sync.sync()
+    ElMessage.success('云同步完成')
+  } catch {
+    ElMessage.error('云同步失败，本地工作不受影响')
+  }
+}
+
+async function logout() {
+  await auth.logout()
+  window.location.assign('/login')
+}
 </script>
 
 <style scoped>
@@ -78,6 +126,16 @@ const isWorkspace = computed(() => route.name === 'workspace')
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.account-link {
+  color: #425466;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.conflict-link {
+  color: #b45309;
 }
 
 .workspace {

@@ -34,6 +34,11 @@ def isolate_application_state(
     monkeypatch.setattr(conversations, "engine", test_engine)
     monkeypatch.setattr(factory, "engine", test_engine)
     monkeypatch.setattr(settings, "upload_root", str(tmp_path / "uploads"))
+    # The developer's root .env may intentionally enable a real LLM. Tests must
+    # never call it or vary with workstation secrets.
+    monkeypatch.setattr(settings, "tracelab_llm_enabled", False)
+    monkeypatch.setattr(settings, "tracelab_llm_base_url", "")
+    monkeypatch.setattr(settings, "tracelab_llm_model", "")
     monkeypatch.setenv("TRACELAB_PAPER_JOB_ROOT", str(tmp_path / "paper-jobs"))
     yield
     app.dependency_overrides.pop(get_session, None)

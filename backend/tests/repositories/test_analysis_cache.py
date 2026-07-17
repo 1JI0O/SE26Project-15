@@ -46,9 +46,7 @@ def test_large_repository_analysis_runs_in_background_and_persists(monkeypatch) 
         )
         assert upload.status_code == 201
         payload = _wait_for_ready(client, project_id)
-        cached = client.get(
-            f"/api/v1/projects/{project_id}/workspace/tensor-flow"
-        ).json()
+        cached = client.get(f"/api/v1/projects/{project_id}/workspace/tensor-flow").json()
 
     assert payload["nodes"]
     assert payload["analysis_revision"] == payload["repository_revision"] == 1

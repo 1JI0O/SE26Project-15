@@ -17,6 +17,7 @@ from app.schemas.traces import (
     WorkspaceTraceRow,
 )
 from app.services import workspace_service
+from app.services.local_sync import record_local_operation, trace_payload
 from app.services.tracing.service import suggest_and_persist, trace_to_read
 from app.services.workspace_placeholder import workspace_payload
 
@@ -63,7 +64,7 @@ def create_trace_link(
     payload: TraceLinkCreate,
     session: Session = Depends(get_session),
 ) -> TraceLinkRead:
-    get_project_or_404(project_id, session)
+    project = get_project_or_404(project_id, session)
     sides = {evidence.side for evidence in payload.evidence}
     if sides != {"paper", "code"}:
         raise HTTPException(status_code=422, detail="Manual traces require paper and code evidence")
@@ -78,9 +79,7 @@ def create_trace_link(
         f"manual\x00{paper.id}\x00{code.id}\x00{code.revision}\x00{payload.paper_ref}\x00"
         f"{payload.code_ref}\x00{payload.relation_type.value}".encode()
     ).hexdigest()
-    existing = session.exec(
-        select(TraceLink).where(TraceLink.fingerprint == fingerprint)
-    ).first()
+    existing = session.exec(select(TraceLink).where(TraceLink.fingerprint == fingerprint)).first()
     if existing is not None:
         raise HTTPException(status_code=409, detail="Trace relation already exists")
     link = TraceLink(
@@ -100,6 +99,15 @@ def create_trace_link(
         fingerprint=fingerprint,
     )
     session.add(link)
+    session.flush()
+    record_local_operation(
+        session,
+        project,
+        "trace_link",
+        link.public_id,
+        trace_payload(project, link),
+        base_version=0,
+    )
     session.commit()
     session.refresh(link)
     return trace_to_read(link)
@@ -155,7 +163,7 @@ def update_trace_status(
     payload: TraceStatusUpdate,
     session: Session = Depends(get_session),
 ) -> TraceLinkRead:
-    get_project_or_404(project_id, session)
+    project = get_project_or_404(project_id, session)
     link = session.exec(
         select(TraceLink).where(
             TraceLink.project_id == project_id,
@@ -174,7 +182,16 @@ def update_trace_status(
     link.status = payload.status.value
     link.decided_at = utc_now()
     link.updated_at = link.decided_at
+    link.version += 1
     session.add(link)
+    record_local_operation(
+        session,
+        project,
+        "trace_link",
+        link.public_id,
+        trace_payload(project, link),
+        base_version=link.version - 1,
+    )
     session.commit()
     session.refresh(link)
     return trace_to_read(link)

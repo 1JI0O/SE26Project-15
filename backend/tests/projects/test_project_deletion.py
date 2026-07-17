@@ -22,9 +22,7 @@ from app.models.entities import (
 )
 
 
-def test_batch_delete_removes_related_rows_and_project_files(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_batch_delete_removes_related_rows_and_project_files(tmp_path: Path, monkeypatch) -> None:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -89,9 +87,7 @@ def test_batch_delete_removes_related_rows_and_project_files(
     (project_upload / "paper.pdf").write_bytes(b"pdf")
     jobs_root = tmp_path / "paper-jobs" / "jobs"
     jobs_root.mkdir(parents=True)
-    (jobs_root / "job.json").write_text(
-        json.dumps({"project_id": project_id}), encoding="utf-8"
-    )
+    (jobs_root / "job.json").write_text(json.dumps({"project_id": project_id}), encoding="utf-8")
 
     def session_override() -> Iterator[Session]:
         with Session(engine) as session:

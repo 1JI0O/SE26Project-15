@@ -26,9 +26,7 @@ def build_hierarchical_tree(
                     "path": "/".join(parts[: index + 1]),
                     "kind": "file" if is_file else "folder",
                     "meta": (
-                        _meta_for_language(str(item.get("language", "file")))
-                        if is_file
-                        else ""
+                        _meta_for_language(str(item.get("language", "file"))) if is_file else ""
                     ),
                     "size": int(item.get("size", 0)) if is_file else None,
                     "children": {},
@@ -41,9 +39,7 @@ def build_hierarchical_tree(
         for name in sorted(node_map, key=lambda key: (node_map[key]["kind"] != "folder", key)):
             current = node_map[name]
             children = serialize(current["children"])
-            descendant_count = sum(
-                1 + int(child.get("descendant_count", 0)) for child in children
-            )
+            descendant_count = sum(1 + int(child.get("descendant_count", 0)) for child in children)
             if current["kind"] == "folder":
                 current["meta"] = f"{descendant_count} entries"
             result.append(

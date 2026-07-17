@@ -18,6 +18,7 @@ from app.models.entities import (
     AgentMessage,
     AgentRun,
     AgentToolRequest,
+    Project,
     utc_now,
 )
 from app.schemas.agent import (
@@ -162,6 +163,24 @@ def create_conversation(
         title=payload.title.strip() or "新对话",
     )
     session.add(conversation)
+    project = session.get(Project, project_id)
+    if project is not None and project.agent_history_sync:
+        from app.services.local_sync import record_local_operation
+
+        record_local_operation(
+            session,
+            project,
+            "agent_conversation",
+            conversation.public_id,
+            {
+                "project_public_id": project.public_id,
+                "title": conversation.title,
+                "status": conversation.status,
+                "summary": conversation.summary,
+                "created_at": conversation.created_at.isoformat(),
+            },
+            base_version=0,
+        )
     session.commit()
     session.refresh(conversation)
     return conversation
@@ -207,8 +226,27 @@ def update_conversation(
         conversation.title = payload.title.strip()
     if payload.status is not None:
         conversation.status = payload.status
+    previous_version = conversation.version
+    conversation.version += 1
     conversation.updated_at = utc_now()
     session.add(conversation)
+    project = session.get(Project, project_id)
+    if project is not None and project.agent_history_sync:
+        from app.services.local_sync import record_local_operation
+
+        record_local_operation(
+            session,
+            project,
+            "agent_conversation",
+            conversation.public_id,
+            {
+                "project_public_id": project.public_id,
+                "title": conversation.title,
+                "status": conversation.status,
+                "summary": conversation.summary,
+            },
+            base_version=previous_version,
+        )
     session.commit()
     session.refresh(conversation)
     return conversation
@@ -234,6 +272,30 @@ def _add_message(
     conversation.updated_at = utc_now()
     session.add(message)
     session.add(conversation)
+    project = session.get(Project, conversation.project_id)
+    if project is not None and project.agent_history_sync:
+        from app.services.local_sync import record_local_operation
+
+        record_local_operation(
+            session,
+            project,
+            "agent_message",
+            message.public_id,
+            {
+                "project_public_id": project.public_id,
+                "conversation_public_id": conversation.public_id,
+                "role": message.role,
+                "content": (
+                    message.content if len(message.content.encode("utf-8")) <= 32 * 1024 else ""
+                ),
+                "citations": message.citations_json,
+                "metadata": message.metadata_json,
+                "requires_blob": len(message.content.encode("utf-8")) > 32 * 1024,
+                "filename": f"{message.public_id}.txt",
+                "created_at": message.created_at.isoformat(),
+            },
+            base_version=0,
+        )
     session.commit()
     session.refresh(message)
     return message
@@ -844,13 +906,40 @@ def _run_loop(
     )
 
 
+def _record_run_operation(session: Session, run: AgentRun, base_version: int) -> None:
+    project = session.get(Project, run.project_id)
+    conversation = session.get(AgentConversation, run.conversation_id)
+    if project is not None and conversation is not None and project.agent_history_sync:
+        from app.services.local_sync import record_local_operation
+
+        record_local_operation(
+            session,
+            project,
+            "agent_run",
+            run.public_id,
+            {
+                "project_public_id": project.public_id,
+                "conversation_public_id": conversation.public_id,
+                "status": run.status,
+                "provider_name": run.provider_name,
+                "model_name": run.model_name,
+                "step_count": run.step_count,
+                "degraded_reason": run.degraded_reason,
+            },
+            base_version=base_version,
+        )
+
+
 def _finish_run(session: Session, run: AgentRun, result: LoopResult) -> None:
+    previous_version = run.version
     run.status = result.status
     run.degraded_reason = result.degraded_reason
     run.updated_at = utc_now()
     if result.status != "waiting_confirmation":
         run.completed_at = run.updated_at
+    run.version += 1
     session.add(run)
+    _record_run_operation(session, run, previous_version)
     session.commit()
 
 
@@ -885,9 +974,7 @@ def _context_for_turn(
     registry = build_registry(session)
     selected_skills = select_skills(registry, message, snapshot)
     preferred_tools = {
-        tool_name
-        for skill in selected_skills
-        for tool_name in skill.preferred_tools
+        tool_name for skill in selected_skills for tool_name in skill.preferred_tools
     }
     skills = [
         {
@@ -958,6 +1045,7 @@ def run_conversation_turn(
         capability_snapshot_json=context["capability_snapshot"],
     )
     session.add(run)
+    _record_run_operation(session, run, 0)
     session.commit()
     session.refresh(run)
     if actual_provider is None:
@@ -1034,6 +1122,7 @@ def submit_conversation_turn(
         ],
     )
     session.add(run)
+    _record_run_operation(session, run, 0)
     session.commit()
     session.refresh(run)
     RunEventEmitter(session, run).emit("run.queued", {"status": "queued"})
@@ -1058,11 +1147,7 @@ def _execute_submitted_run(run_id: str) -> None:
             )
         ).all()
         existing = next(
-            (
-                item
-                for item in existing_messages
-                if item.metadata_json.get("run_id") == run.run_id
-            ),
+            (item for item in existing_messages if item.metadata_json.get("run_id") == run.run_id),
             None,
         )
         if existing is not None:
@@ -1156,9 +1241,7 @@ def _execute_submitted_run(run_id: str) -> None:
             provider, degraded_reason = _provider_from_settings(session)
             if provider is None:
                 result = LoopResult(
-                    answer=(
-                        "LLM 当前不可用。会话和上下文已经保存，配置 Agent API 后可继续对话。"
-                    ),
+                    answer=("LLM 当前不可用。会话和上下文已经保存，配置 Agent API 后可继续对话。"),
                     status="failed",
                     degraded=True,
                     degraded_reason=degraded_reason,

@@ -56,6 +56,7 @@
         >
           <span>生成追溯</span>
         </el-button>
+        <el-button size="small" @click="openArtifactVersions">版本历史</el-button>
       </div>
     </header>
 
@@ -478,6 +479,15 @@
       @confirm="onEvidenceConfirm"
       @reject="onEvidenceReject"
     />
+    <el-dialog v-model="artifactVersionsVisible" title="本机保留的云端文件版本" width="760px">
+      <el-table :data="artifactVersions">
+        <el-table-column prop="entity_type" label="类型" width="150" />
+        <el-table-column prop="filename" label="文件" />
+        <el-table-column prop="version_number" label="版本" width="80" />
+        <el-table-column label="状态" width="90"><template #default="scope">{{ scope.row.is_current ? '当前' : '保留' }}</template></el-table-column>
+        <el-table-column label="操作" width="100"><template #default="scope"><el-button v-if="!scope.row.is_current" text @click="selectArtifactVersion(scope.row)">设为当前</el-button></template></el-table-column>
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -503,6 +513,8 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+
+import { localHttp } from '@/api/http'
 
 import { isEditableFile, fileIcon, useCode } from '@/composables/useCode'
 import { useDesktop } from '@/composables/useDesktop'
@@ -530,6 +542,14 @@ import type { AgentUiAction } from '@/types/agent'
 type BottomPanelKey = 'trace' | 'flow' | 'conflict' | 'report'
 type PaneKey = 'paper' | 'code'
 type ResizeMode = 'explorer' | 'editor' | 'bottom' | 'agent'
+interface LocalArtifactVersionRow {
+  local_version_id: number
+  entity_type: 'paper_document' | 'code_repository'
+  entity_public_id: string
+  version_number: number
+  filename: string
+  is_current: boolean
+}
 
 const workspace = useWorkspace()
 const paper = usePaper(() => workspace.projectId.value)
@@ -587,6 +607,27 @@ const codeInputRef = ref<HTMLInputElement | null>(null)
 const ideBodyRef = ref<HTMLElement | null>(null)
 const editorGridRef = ref<HTMLElement | null>(null)
 const workAreaRef = ref<HTMLElement | null>(null)
+const artifactVersionsVisible = ref(false)
+const artifactVersions = ref<LocalArtifactVersionRow[]>([])
+
+async function openArtifactVersions() {
+  artifactVersions.value = (
+    await localHttp.get<LocalArtifactVersionRow[]>(
+      `/local-sync/projects/${workspace.projectId.value}/artifact-versions`,
+    )
+  ).data
+  artifactVersionsVisible.value = true
+}
+
+async function selectArtifactVersion(row: LocalArtifactVersionRow) {
+  await localHttp.post(
+    `/local-sync/projects/${workspace.projectId.value}/artifacts/`
+      + `${row.entity_type}/${row.entity_public_id}/select`,
+    { local_version_id: row.local_version_id },
+  )
+  await openArtifactVersions()
+  await Promise.allSettled([paper.loadPaperPages(), code.loadCodeTree()])
+}
 
 onMounted(async () => {
   window.addEventListener('resize', clampAgentWidth)

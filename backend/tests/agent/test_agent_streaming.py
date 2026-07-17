@@ -48,9 +48,7 @@ def test_submitted_run_persists_events_and_final_message(monkeypatch) -> None:
         assert submission.status_code == 202
         run_id = submission.json()["run_id"]
         stream = client.get(f"/api/v1/projects/{project_id}/agent/runs/{run_id}/events")
-        detail = client.get(
-            f"/api/v1/projects/{project_id}/agent/conversations/{conversation_id}"
-        )
+        detail = client.get(f"/api/v1/projects/{project_id}/agent/conversations/{conversation_id}")
 
     assert stream.status_code == 200
     assert "event: run.started" in stream.text

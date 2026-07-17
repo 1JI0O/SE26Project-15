@@ -7,8 +7,22 @@ from typing import Any
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*|[\u4e00-\u9fff]{2,}")
 CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 STOPWORDS = {
-    "the", "and", "for", "with", "from", "this", "that", "into", "using",
-    "class", "function", "method", "model", "module", "paper", "code",
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "this",
+    "that",
+    "into",
+    "using",
+    "class",
+    "function",
+    "method",
+    "model",
+    "module",
+    "paper",
+    "code",
 }
 
 
@@ -78,14 +92,11 @@ def _symbol_text(symbol: dict[str, Any]) -> tuple[str, str, str, str]:
     qualified = str(symbol.get("qualified_name") or symbol.get("name", ""))
     signature = str(symbol.get("signature", ""))
     comments = " ".join(
-        str(value)
-        for value in (symbol.get("docstring", ""), symbol.get("comments", ""))
-        if value
+        str(value) for value in (symbol.get("docstring", ""), symbol.get("comments", "")) if value
     )
     calls_value = symbol.get("calls", [])
     calls = " ".join(
-        str(call.get("name", "")) if isinstance(call, dict) else str(call)
-        for call in calls_value
+        str(call.get("name", "")) if isinstance(call, dict) else str(call) for call in calls_value
     )
     display = " ".join(part for part in (qualified, signature, comments, calls, path) if part)
     line_start = int(symbol.get("line_start") or symbol.get("line") or 1)
@@ -132,9 +143,7 @@ def generate_static_candidates(
             call_support = _overlap(paper_text, calls)
             tensor_support = 1.0 if symbol_id in tensor_symbols else 0.0
             path_prior = _overlap(f"{paper_text} {section_text}", str(symbol.get("path", "")))
-            is_pytorch = (
-                str(symbol.get("path", "")), str(symbol.get("name", ""))
-            ) in pytorch_keys
+            is_pytorch = (str(symbol.get("path", "")), str(symbol.get("name", ""))) in pytorch_keys
             if is_pytorch:
                 path_prior = max(path_prior, 0.6)
             score = (

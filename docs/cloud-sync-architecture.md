@@ -1,7 +1,7 @@
 # TraceLab 云端服务器、账号与同步设计
 
-> 状态：设计稿，基于当前代码整理，尚未实现。目标设备：4 vCPU、16 GB RAM、50 GB 本地存储。推荐先以单节点 Docker Compose 交付 MVP，再根据用户量把数据库、对象存储和任务队列外置。  
-> 实施计划与模块拆分见 [plan.md 第 13 节](plan.md#13-账号登录项目云端同步与分布式架构计划)。
+> 状态：C0–C5 代码已落地；生产同步 feature flag 默认关闭，必须完成目标服务器 staging、SMTP 与外部备份恢复验收后再开放。目标设备：4 vCPU、16 GB RAM、50 GB 本地存储。
+> 实施边界、运行方式和验收矩阵见 [云端同步实施说明](cloud-sync-implementation-plan.md)。
 
 ## 1. 设计目标与边界
 
@@ -134,7 +134,7 @@ CPU/RAM 建议：
 
 ### 4.3 内容寻址与去重
 
-上传文件先写入 quarantine，完成扩展名、MIME、大小、ZIP 安全检查和 SHA-256 计算后，原子移动到 `sha256/<prefix>/<hash>`。相同内容只保存一份，业务引用通过 `project_blob` 或各领域表关联。删除项目先删除引用，后台垃圾回收任务在宽限期后删除无引用 blob。
+上传文件先写入 quarantine，完成扩展名、MIME、大小、ZIP 安全检查和 SHA-256 计算后，原子移动到 `sha256/<prefix>/<hash>`。`blob_content` 负责全局物理去重；客户端只看到 Workspace 范围的 `blob_object` UUID，并通过 `blob_reference` / `artifact_version` 授权，不能跨租户推断或复用句柄。只有所有 Workspace 句柄和引用均消失且宽限期结束后，GC 才能删除物理内容。
 
 ## 5. 账号与权限模型
 
@@ -160,8 +160,10 @@ CPU/RAM 建议：
 |---|---|
 | `local_only` | 默认；不上云 |
 | `cloud_enabled` | 用户已启用同步 |
-| `cloud_paused` | 保留云端副本，暂停上传或仅 pull |
-| `cloud_detached` | 已解除绑定，本地回到 local_only，云端副本进入宽限期清理 |
+| `cloud_paused` | 当前 Desktop 设备保留云端绑定、停止 push，仅 pull；不影响 Web 或其他设备 |
+| `cloud_detached` | 仅表示当前设备解除绑定并回到 `local_only`；不会删除云端项目 |
+
+云端项目删除是 owner 的独立操作，会影响 Web 与所有设备并生成至少保留 30 天的 tombstone。
 
 权限关系：
 
@@ -401,7 +403,7 @@ backend/app/
 
 ## 10. 实施顺序
 
-与 [plan.md](plan.md) Cloud Phase C0–C5 对齐：
+与 [云端同步实施说明](cloud-sync-implementation-plan.md) Cloud Phase C0–C5 对齐：
 
 1. **C0 ADR / 容量**：按项目 `sync_mode`、管理员边界、4 核资源表与契约草案。
 2. **C1 云端基础运行**：PostgreSQL、BlobStore、Cloud API、Worker、HTTPS、健康检查和备份脚本。

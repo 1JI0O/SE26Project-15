@@ -75,9 +75,7 @@ def test_normalize_real_content_list_v2_page_arrays() -> None:
             {
                 "type": "paragraph",
                 "content": {
-                    "paragraph_content": [
-                        {"type": "text", "content": "First page paragraph."}
-                    ]
+                    "paragraph_content": [{"type": "text", "content": "First page paragraph."}]
                 },
                 "bbox": [100, 160, 900, 240],
             },

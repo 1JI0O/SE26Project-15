@@ -35,6 +35,7 @@ from app.services.code_analysis.editor import (
     RepositoryFileNotFoundError,
 )
 from app.services.code_analyzer import analyze_code_archive, is_editor_readable_file
+from app.services.local_sync import record_local_operation, repository_payload
 from app.services.workspace_placeholder import (
     code_file_payload,
     tensor_flow_payload,
@@ -49,21 +50,25 @@ def _code_read(
     repository: CodeRepository,
     analysis: dict | None = None,
 ) -> CodeRepositoryRead:
-    analysis = analysis or repository.analysis_json or {
-        "symbols": repository.symbols_json,
-        "imports": repository.imports_json,
-        "calls": [],
-        "pytorch_candidates": repository.pytorch_candidates_json,
-        "tensor_graph": repository.tensor_graph_json,
-        "summary": {
-            "file_count": len(repository.file_tree_json),
-            "python_file_count": 0,
-            "symbol_count": len(repository.symbols_json),
-            "call_count": 0,
-            "ignored_count": 0,
-            "total_bytes": sum(int(item.get("size", 0)) for item in repository.file_tree_json),
-        },
-    }
+    analysis = (
+        analysis
+        or repository.analysis_json
+        or {
+            "symbols": repository.symbols_json,
+            "imports": repository.imports_json,
+            "calls": [],
+            "pytorch_candidates": repository.pytorch_candidates_json,
+            "tensor_graph": repository.tensor_graph_json,
+            "summary": {
+                "file_count": len(repository.file_tree_json),
+                "python_file_count": 0,
+                "symbol_count": len(repository.symbols_json),
+                "call_count": 0,
+                "ignored_count": 0,
+                "total_bytes": sum(int(item.get("size", 0)) for item in repository.file_tree_json),
+            },
+        }
+    )
     return CodeRepositoryRead(
         id=repository.id or 0,
         project_id=repository.project_id,
@@ -105,6 +110,16 @@ def _store_repository(
         persist_analysis(repository, analysis)
         repository.analysis_version = ANALYZER_VERSION
     session.add(repository)
+    session.flush()
+    project = get_project_or_404(project_id, session)
+    record_local_operation(
+        session,
+        project,
+        "code_repository",
+        repository.public_id,
+        repository_payload(project, repository),
+        base_version=0,
+    )
     session.commit()
     session.refresh(repository)
     return repository

@@ -92,6 +92,30 @@ pnpm dev
 
 打开 `http://127.0.0.1:5173`。Vite 会把 `/api` 代理到 `http://127.0.0.1:8000`；OpenAPI 文档位于 `http://127.0.0.1:8000/docs`。
 
+如需让本地 Web 工作台登录云端账号，并同步用户明确启用的本地项目，再复制 Web 云端配置：
+
+```bash
+cd frontend
+cp .env.web.example .env.local
+# 将 VITE_CLOUD_PROXY_TARGET 改为实际云端站点，例如 https://cloud.example.com
+pnpm dev
+```
+
+浏览器仍通过 `/api/v1` 使用本地 FastAPI；账号、Workspace、Blob 和同步请求通过同源的 `/cloud-api` 转发至 Cloud API。登录后，项目列表会显示“启用同步”，顶部会显示“云端项目”“云同步”和冲突中心入口。项目在用户确认上云范围之前始终为 `local_only`，不会产生上传操作。`.env.local` 仅用于本机开发且已被 Git 忽略。
+
+## 部署云端版
+
+云端版与本地 Web/Desktop 分离运行，使用 PostgreSQL、数据库 Worker 和内容寻址 Blob。完整约束与部署检查见 [云端同步实施说明](docs/cloud-sync-implementation-plan.md)。最小部署流程：
+
+```bash
+cp .env.cloud.example .env.cloud
+# 填写域名、随机密钥、SMTP、数据库密码和外部备份目标
+docker compose --env-file .env.cloud up -d --build
+docker compose --env-file .env.cloud exec api python -m app.cli create-admin --email admin@example.com
+```
+
+云端服务器只开放 80/443；`postgres` 没有宿主端口。Desktop 仍使用本地 SQLite，只有用户明确为项目启用云同步后才会生成上传操作。
+
 ### Windows（PowerShell）启动 Web 版
 
 在 Windows 10/11 上安装 Python 3.11+、[uv](https://docs.astral.sh/uv/)、Node.js 20+ 和 pnpm 9+ 后，在仓库根目录分别打开两个 PowerShell 窗口。首次启动可先复制默认配置：
@@ -133,6 +157,8 @@ pnpm desktop:dev
 ```bash
 cd frontend
 pnpm install
+cp .env.desktop.example .env.desktop.local
+# 将 VITE_CLOUD_API_BASE_URL 改为实际云端域名
 pnpm desktop:build
 ```
 

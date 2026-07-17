@@ -47,14 +47,10 @@ class OfficialMinerUSettings:
             model=os.getenv("TRACELAB_MINERU_API_MODEL", defaults.model),
             language=os.getenv("TRACELAB_MINERU_LANGUAGE", defaults.language),
             ocr=_env_bool("TRACELAB_MINERU_API_OCR", defaults.ocr),
-            formula_enable=_env_bool(
-                "TRACELAB_MINERU_FORMULA_ENABLE", defaults.formula_enable
-            ),
+            formula_enable=_env_bool("TRACELAB_MINERU_FORMULA_ENABLE", defaults.formula_enable),
             table_enable=_env_bool("TRACELAB_MINERU_TABLE_ENABLE", defaults.table_enable),
             request_timeout_seconds=float(
-                os.getenv(
-                    "TRACELAB_MINERU_REQUEST_TIMEOUT", defaults.request_timeout_seconds
-                )
+                os.getenv("TRACELAB_MINERU_REQUEST_TIMEOUT", defaults.request_timeout_seconds)
             ),
             request_retries=int(
                 os.getenv("TRACELAB_MINERU_REQUEST_RETRIES", defaults.request_retries)

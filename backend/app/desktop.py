@@ -7,9 +7,7 @@ from pathlib import Path
 
 
 def _configure_desktop_environment() -> None:
-    data_dir = Path(
-        os.getenv("TRACELAB_APP_DATA_DIR", Path.home() / ".tracelab")
-    ).expanduser()
+    data_dir = Path(os.getenv("TRACELAB_APP_DATA_DIR", Path.home() / ".tracelab")).expanduser()
     data_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("DATABASE_URL", f"sqlite:///{data_dir / 'workbench.db'}")
     os.environ.setdefault("UPLOAD_ROOT", str(data_dir / "uploads"))

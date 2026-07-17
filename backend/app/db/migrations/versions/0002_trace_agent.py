@@ -120,10 +120,21 @@ def downgrade() -> None:
     op.drop_table("agent_tool_request")
     with op.batch_alter_table("trace_link") as batch:
         for name in [
-            "updated_at", "decided_at", "stale_reason", "status", "fingerprint",
-            "model_info_json", "uncertainty_json", "evidence_json", "source",
-            "llm_confidence", "static_confidence", "code_revision",
-            "code_repository_id", "paper_document_id", "trace_id",
+            "updated_at",
+            "decided_at",
+            "stale_reason",
+            "status",
+            "fingerprint",
+            "model_info_json",
+            "uncertainty_json",
+            "evidence_json",
+            "source",
+            "llm_confidence",
+            "static_confidence",
+            "code_revision",
+            "code_repository_id",
+            "paper_document_id",
+            "trace_id",
         ]:
             batch.drop_column(name)
     with op.batch_alter_table("code_repository") as batch:
