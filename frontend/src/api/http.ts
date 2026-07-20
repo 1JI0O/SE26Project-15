@@ -10,11 +10,19 @@ export const localApiBaseUrl =
   import.meta.env.VITE_API_BASE_URL ??
   (isDesktop ? 'http://127.0.0.1:8765/api/v1' : '/api/v1')
 
+// Desktop is bound to the single TraceLab cloud deployment. End users never
+// pick a remote server; build-time env can override for staging forks.
+const DEFAULT_DESKTOP_CLOUD_API = 'https://10.119.5.94/api/v1'
+
 export const cloudApiBaseUrl =
-  import.meta.env.VITE_CLOUD_API_BASE_URL ?? '/api/v1'
+  import.meta.env.VITE_CLOUD_API_BASE_URL ||
+  (runtimeMode === 'desktop' || isDesktop ? DEFAULT_DESKTOP_CLOUD_API : '/api/v1')
 
 export const cloudConfigured =
-  runtimeMode === 'cloud' || Boolean(import.meta.env.VITE_CLOUD_API_BASE_URL)
+  runtimeMode === 'cloud' ||
+  runtimeMode === 'desktop' ||
+  isDesktop ||
+  Boolean(import.meta.env.VITE_CLOUD_API_BASE_URL)
 
 // Desktop and the locally hosted Web app both own a Local API workspace. They
 // may opt individual projects into cloud sync. Cloud Web operates directly on

@@ -157,9 +157,16 @@ pnpm desktop:dev
 ```bash
 cd frontend
 pnpm install
-cp .env.desktop.example .env.desktop.local
-# 将 VITE_CLOUD_API_BASE_URL 改为实际云端域名
 pnpm desktop:build
+```
+
+桌面端默认连接统一云端 `https://10.119.5.94`。不登录时可完全离线使用本地项目；登录后可在项目列表中按项目启用云同步。平台管理员账号登录后，顶栏会出现「管理」入口。
+
+如需覆盖云端地址（仅开发/临时 staging），可创建 `frontend/.env.desktop.local`：
+
+```bash
+cp .env.desktop.example .env.desktop.local
+# 仅在必要时修改 VITE_CLOUD_API_BASE_URL
 ```
 
 构建完成后可直接运行：

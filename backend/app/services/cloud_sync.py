@@ -279,7 +279,7 @@ def apply_operation(
     *,
     require_project_binding: bool = True,
 ) -> SyncOperationResult:
-    if identity.user.email_verified_at is None:
+    if settings.cloud_require_email_verification and identity.user.email_verified_at is None:
         raise HTTPException(status_code=403, detail="Email verification required")
     require_workspace_access(session, identity, operation.workspace_id, "editor")
     if operation.entity_type == "project" and operation.operation == "delete":

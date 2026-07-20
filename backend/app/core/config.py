@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     cloud_blob_gc_grace_days: int = Field(default=7, ge=1, le=90)
     cloud_run_migrations_on_start: bool = False
     cloud_sync_feature_enabled: bool = False
+    cloud_require_email_verification: bool = False
+    cloud_require_ops_gates: bool = False
     smtp_host: str = ""
     smtp_port: int = Field(default=587, ge=1, le=65535)
     smtp_username: str = ""
@@ -117,6 +119,8 @@ class Settings(BaseSettings):
             raise RuntimeError("Cloud production requires secure cookies")
         if not self.cloud_public_origin.startswith("https://"):
             raise RuntimeError("Cloud production requires an HTTPS public origin")
+        if not self.cloud_require_ops_gates:
+            return
         if self.cloud_sync_feature_enabled and (not self.smtp_host or not self.smtp_from):
             raise RuntimeError("Production cloud sync requires SMTP configuration")
         if self.cloud_sync_feature_enabled and not self.backup_remote:

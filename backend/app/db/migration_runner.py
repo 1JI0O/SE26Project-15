@@ -5,6 +5,12 @@ from typing import Any
 
 from sqlalchemy import Engine, inspect, text
 
+
+def _database_url(engine: Engine) -> str:
+    # str(engine.url) redacts the password as "***", which breaks PostgreSQL auth.
+    return engine.url.render_as_string(hide_password=False)
+
+
 LOCAL_REVISIONS = (
     "0001_legacy_baseline",
     "0002_trace_agent",
@@ -129,7 +135,7 @@ def _alembic_config(database_url: str, *, cloud: bool = False) -> Any:
 def _run_alembic(engine: Engine) -> None:
     from alembic import command
 
-    config = _alembic_config(str(engine.url))
+    config = _alembic_config(_database_url(engine))
     tables = set(inspect(engine).get_table_names())
     if "project" in tables:
         detected_revision = _detect_local_revision(engine, tables)
@@ -170,7 +176,7 @@ def upgrade_cloud_database(engine: Engine) -> None:
         )
     from alembic import command
 
-    command.upgrade(_alembic_config(str(engine.url), cloud=True), "head")
+    command.upgrade(_alembic_config(_database_url(engine), cloud=True), "head")
 
 
 def _column_names(engine: Engine, table: str) -> set[str]:

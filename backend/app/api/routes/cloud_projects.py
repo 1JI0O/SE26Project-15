@@ -38,6 +38,41 @@ def _read(item: CloudProject) -> CloudProjectRead:
     )
 
 
+def _upsert_device_binding(
+    session: Session,
+    identity: CurrentIdentity,
+    project: CloudProject,
+    sync_mode: str,
+) -> DeviceProjectSyncRead:
+    binding = session.exec(
+        select(DeviceProjectBinding).where(
+            DeviceProjectBinding.device_id == identity.device_id,
+            DeviceProjectBinding.project_public_id == project.public_id,
+        )
+    ).first()
+    if binding is None:
+        binding = DeviceProjectBinding(
+            device_id=identity.device_id,
+            workspace_id=project.workspace_id,
+            project_public_id=project.public_id,
+        )
+    binding.sync_mode = sync_mode
+    session.add(binding)
+    session.commit()
+    return DeviceProjectSyncRead(
+        project_public_id=project.public_id,
+        device_id=identity.device_id,
+        sync_mode=sync_mode,
+    )
+
+
+def _project_or_404(session: Session, project_id: str) -> CloudProject:
+    item = session.get(CloudProject, project_id)
+    if item is None or item.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return item
+
+
 @router.get("", response_model=list[CloudProjectRead])
 def list_projects(
     workspace_id: str | None = None,
@@ -114,9 +149,7 @@ def read_device_sync(
     identity: CurrentIdentity = Depends(require_verified),
     session: Session = Depends(get_session),
 ) -> DeviceProjectSyncRead:
-    item = session.get(CloudProject, project_id)
-    if item is None or item.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    item = _project_or_404(session, project_id)
     require_workspace_access(session, identity, item.workspace_id)
     binding = session.exec(
         select(DeviceProjectBinding).where(
@@ -138,30 +171,42 @@ def patch_device_sync(
     identity: CurrentIdentity = Depends(require_verified),
     session: Session = Depends(get_session),
 ) -> DeviceProjectSyncRead:
-    item = session.get(CloudProject, project_id)
-    if item is None or item.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    item = _project_or_404(session, project_id)
     require_workspace_access(session, identity, item.workspace_id, "viewer")
-    binding = session.exec(
-        select(DeviceProjectBinding).where(
-            DeviceProjectBinding.device_id == identity.device_id,
-            DeviceProjectBinding.project_public_id == project_id,
-        )
-    ).first()
-    if binding is None:
-        binding = DeviceProjectBinding(
-            device_id=identity.device_id,
-            workspace_id=item.workspace_id,
-            project_public_id=project_id,
-        )
-    binding.sync_mode = payload.sync_mode
-    session.add(binding)
-    session.commit()
-    return DeviceProjectSyncRead(
-        project_public_id=project_id,
-        device_id=identity.device_id,
-        sync_mode=payload.sync_mode,
-    )
+    return _upsert_device_binding(session, identity, item, payload.sync_mode)
+
+
+@router.post("/{project_id}/sync/enable", response_model=DeviceProjectSyncRead)
+def enable_project_sync(
+    project_id: str,
+    identity: CurrentIdentity = Depends(require_verified),
+    session: Session = Depends(get_session),
+) -> DeviceProjectSyncRead:
+    item = _project_or_404(session, project_id)
+    require_workspace_access(session, identity, item.workspace_id, "editor")
+    return _upsert_device_binding(session, identity, item, "cloud_enabled")
+
+
+@router.post("/{project_id}/sync/pause", response_model=DeviceProjectSyncRead)
+def pause_project_sync(
+    project_id: str,
+    identity: CurrentIdentity = Depends(require_verified),
+    session: Session = Depends(get_session),
+) -> DeviceProjectSyncRead:
+    item = _project_or_404(session, project_id)
+    require_workspace_access(session, identity, item.workspace_id, "viewer")
+    return _upsert_device_binding(session, identity, item, "cloud_paused")
+
+
+@router.post("/{project_id}/sync/detach", response_model=DeviceProjectSyncRead)
+def detach_project_sync(
+    project_id: str,
+    identity: CurrentIdentity = Depends(require_verified),
+    session: Session = Depends(get_session),
+) -> DeviceProjectSyncRead:
+    item = _project_or_404(session, project_id)
+    require_workspace_access(session, identity, item.workspace_id, "viewer")
+    return _upsert_device_binding(session, identity, item, "cloud_detached")
 
 
 @router.patch("/{project_id}", response_model=CloudProjectRead)

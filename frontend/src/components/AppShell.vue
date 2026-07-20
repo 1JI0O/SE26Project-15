@@ -32,7 +32,7 @@
         </router-link>
         <router-link v-if="auth.user?.is_platform_admin" to="/admin" class="account-link">管理</router-link>
         <el-button v-if="auth.authenticated" text @click="logout">退出</el-button>
-        <router-link v-else-if="cloudConfigured" to="/login" class="account-link">登录云端</router-link>
+        <router-link v-else-if="cloudConfigured" to="/login" class="account-link">登录</router-link>
       </div>
     </header>
     <main class="workspace">

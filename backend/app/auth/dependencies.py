@@ -5,6 +5,7 @@ from fastapi import Depends, Header, HTTPException, status
 from sqlmodel import Session
 
 from app.auth.tokens import InvalidTokenError, as_utc, decode_access_token
+from app.core.config import settings
 from app.db.session import get_session
 from app.models.cloud_entities import AuthSession, UserAccount
 
@@ -54,7 +55,7 @@ def get_current_identity(
 
 
 def require_verified(identity: CurrentIdentity = Depends(get_current_identity)) -> CurrentIdentity:
-    if identity.user.email_verified_at is None:
+    if settings.cloud_require_email_verification and identity.user.email_verified_at is None:
         raise HTTPException(status_code=403, detail="Email verification required")
     return identity
 

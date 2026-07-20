@@ -33,6 +33,33 @@ def list_users(
     ]
 
 
+@router.get("/workspaces")
+def list_workspaces(
+    _: CurrentIdentity = Depends(require_platform_admin),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Account/quota overview for platform operators. No project body content."""
+    rows = session.exec(select(Workspace).order_by(Workspace.updated_at.desc())).all()
+    owners = {
+        user.user_id: user.email_normalized
+        for user in session.exec(select(UserAccount)).all()
+    }
+    return [
+        {
+            "workspace_id": item.workspace_id,
+            "name": item.name,
+            "plan": item.plan,
+            "storage_limit_bytes": item.storage_limit_bytes,
+            "workspace_seq": item.workspace_seq,
+            "created_by": item.created_by,
+            "owner_email": owners.get(item.created_by, ""),
+            "created_at": item.created_at,
+            "updated_at": item.updated_at,
+        }
+        for item in rows
+    ]
+
+
 @router.patch("/users/{user_id}", response_model=UserRead)
 def patch_user(
     user_id: str,
