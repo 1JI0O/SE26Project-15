@@ -33,6 +33,7 @@ import 'katex/dist/katex.min.css'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { getPaperAssetBlob, resolvePaperAssetUrl } from '@/api/paper-api'
 import { renderPaperMarkdown } from './markdown-renderer'
+import type { WorkspacePaperBlock } from '@/types/papers'
 
 const props = defineProps<{
   markdown: string
@@ -42,6 +43,7 @@ const props = defineProps<{
   loading: boolean
   error: string | null
   source: string
+  blocks: WorkspacePaperBlock[]
 }>()
 
 const emit = defineEmits<{
@@ -56,6 +58,7 @@ const desktopRuntime = '__TAURI_INTERNALS__' in window
 const imageObjectUrls = new Set<string>()
 let scrollFrame = 0
 let suppressScrollTrackingUntil = 0
+let highlightedElement: HTMLElement | null = null
 
 const renderedMarkdown = computed(() =>
   renderPaperMarkdown(props.markdown, (path) => resolvePaperAssetUrl(props.assetBaseUrl, path)),
@@ -102,6 +105,36 @@ function scrollToSection(sectionId: string): void {
   root.scrollTo({ top, behavior: 'auto' })
 }
 
+function scrollToBlock(blockId: string, quote = ''): boolean {
+  const root = scrollRef.value
+  if (!root) return false
+  const block = props.blocks.find((item) => item.id === blockId)
+  let target = block?.anchor_resolved
+    ? root.querySelector<HTMLElement>(`#${CSS.escape(block.render_anchor)}`)
+    : null
+  if (!target && quote) {
+    const needle = quote.replace(/\s+/g, ' ').trim().slice(0, 120)
+    target = [...root.querySelectorAll<HTMLElement>('p, li, pre, blockquote, td')].find((item) =>
+      item.textContent?.replace(/\s+/g, ' ').includes(needle),
+    ) ?? null
+  }
+  if (!target) return false
+  highlightedElement?.classList.remove('paper-block-highlight')
+  const visualTarget = target.matches('span')
+    ? target.closest<HTMLElement>('h1, h2, h3, h4, h5, h6, p, li, pre, blockquote, td')
+      || target.nextElementSibling as HTMLElement | null
+    : target
+  highlightedElement = visualTarget || target
+  highlightedElement.classList.add('paper-block-highlight')
+  const top = target.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
+  root.scrollTo({ top: Math.max(0, top - root.clientHeight * 0.2), behavior: 'smooth' })
+  window.setTimeout(() => {
+    highlightedElement?.classList.remove('paper-block-highlight')
+    highlightedElement = null
+  }, 1500)
+  return true
+}
+
 function updateActiveSection(): void {
   if (Date.now() < suppressScrollTrackingUntil) return
   window.cancelAnimationFrame(scrollFrame)
@@ -137,7 +170,7 @@ watch(
 
 onBeforeUnmount(revokeImageObjectUrls)
 
-defineExpose({ scrollToSection })
+defineExpose({ scrollToSection, scrollToBlock })
 </script>
 
 <style scoped>
@@ -258,6 +291,13 @@ defineExpose({ scrollToSection })
   max-width: 100%;
   margin: 18px 0;
   overflow-x: auto;
+}
+
+.markdown-body :deep(.paper-block-highlight) {
+  background: #fff2b8;
+  outline: 2px solid #e6b94f;
+  outline-offset: 3px;
+  transition: background 180ms ease;
 }
 
 .markdown-body :deep(table) {

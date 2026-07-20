@@ -4,7 +4,13 @@ from typing import Literal
 
 from sqlmodel import Session, select
 
-from app.models.entities import CodeRepository, TraceLink, utc_now
+from app.models.entities import (
+    AgentAnalysisArtifact,
+    AgentAnalysisJob,
+    CodeRepository,
+    TraceLink,
+    utc_now,
+)
 
 
 def _stale_links(links: list[TraceLink], reason: str) -> int:
@@ -62,4 +68,29 @@ def record_artifact_revision_change(
             TraceLink.paper_document_id != artifact_id,
         )
     links = list(session.exec(statement).all())
+    artifacts = session.exec(
+        select(AgentAnalysisArtifact).where(
+            AgentAnalysisArtifact.project_id == project_id,
+            AgentAnalysisArtifact.is_current == True,  # noqa: E712
+        )
+    ).all()
+    for analysis_artifact in artifacts:
+        stale = (
+            artifact == "code"
+            and analysis_artifact.code_repository_id == artifact_id
+            and analysis_artifact.code_revision < repository.revision
+        ) or (
+            artifact == "paper"
+            and analysis_artifact.paper_document_id is not None
+            and analysis_artifact.paper_document_id != artifact_id
+        )
+        if not stale:
+            continue
+        analysis_artifact.is_current = False
+        session.add(analysis_artifact)
+        job = session.get(AgentAnalysisJob, analysis_artifact.job_id)
+        if job is not None and job.status == "succeeded":
+            job.status = "stale"
+            job.updated_at = utc_now()
+            session.add(job)
     return _stale_links(links, reason)

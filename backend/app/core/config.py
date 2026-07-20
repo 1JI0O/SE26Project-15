@@ -91,9 +91,16 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        if isinstance(self.backend_cors_origins, str):
-            return [self.backend_cors_origins]
-        return self.backend_cors_origins
+        configured = (
+            [self.backend_cors_origins]
+            if isinstance(self.backend_cors_origins, str)
+            else list(self.backend_cors_origins)
+        )
+        if self.runtime_mode == "local":
+            configured.extend(
+                ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]
+            )
+        return list(dict.fromkeys(configured))
 
     @property
     def is_cloud(self) -> bool:

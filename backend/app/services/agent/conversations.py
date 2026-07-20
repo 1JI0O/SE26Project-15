@@ -189,7 +189,10 @@ def create_conversation(
 def list_conversations(
     session: Session, project_id: int, *, include_archived: bool = False
 ) -> list[AgentConversationRead]:
-    statement = select(AgentConversation).where(AgentConversation.project_id == project_id)
+    statement = select(AgentConversation).where(
+        AgentConversation.project_id == project_id,
+        AgentConversation.kind == "interactive",
+    )
     if not include_archived:
         statement = statement.where(AgentConversation.status == "active")
     conversations = session.exec(statement.order_by(AgentConversation.updated_at.desc())).all()
@@ -1140,6 +1143,13 @@ def _execute_submitted_run(run_id: str) -> None:
         run = session.get(AgentRun, run_id)
         if run is None or run.status not in {"queued", "running"}:
             return
+        conversation_kind = session.exec(
+            select(AgentConversation.kind).where(
+                AgentConversation.conversation_id == run.conversation_id
+            )
+        ).first()
+        if conversation_kind == "analysis":
+            return
         existing_messages = session.exec(
             select(AgentMessage).where(
                 AgentMessage.conversation_id == run.conversation_id,
@@ -1331,7 +1341,15 @@ def recover_agent_runs() -> int:
     with Session(engine) as session:
         run_ids = list(
             session.exec(
-                select(AgentRun.run_id).where(AgentRun.status.in_(["queued", "running"]))
+                select(AgentRun.run_id)
+                .join(
+                    AgentConversation,
+                    AgentConversation.conversation_id == AgentRun.conversation_id,
+                )
+                .where(
+                    AgentRun.status.in_(["queued", "running"]),
+                    AgentConversation.kind == "interactive",
+                )
             ).all()
         )
     for run_id in run_ids:

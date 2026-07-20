@@ -59,4 +59,17 @@ export interface WorkspacePaperDocument {
   parser: string
   parser_version: string
   source: 'mineru-markdown' | 'normalized-fallback'
+  blocks: WorkspacePaperBlock[]
+}
+
+export interface WorkspacePaperBlock {
+  id: string
+  kind: string
+  text: string
+  page: number
+  page_number?: number
+  bbox: number[] | null
+  section_path: string[]
+  render_anchor: string
+  anchor_resolved: boolean
 }

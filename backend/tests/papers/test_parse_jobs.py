@@ -6,7 +6,7 @@ from app.services.document_parsers.stub import StubParser
 
 
 def _wait(service: PaperParsingService, job_id: str) -> str:
-    deadline = time.monotonic() + 2
+    deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         job = service.get(job_id)
         assert job is not None

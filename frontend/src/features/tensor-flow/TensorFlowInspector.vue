@@ -32,9 +32,6 @@
 
     <el-empty v-else description="点击图中节点查看代码定位" />
 
-    <p class="api-note">
-      当前接口由静态分析生成节点、边、代码定位和可推断的张量形状；后续 Agent 继续复用同一结构。
-    </p>
   </article>
 </template>
 

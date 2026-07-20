@@ -13,6 +13,18 @@ All endpoints use the `/api/v1/projects/{project_id}/trace-links` prefix.
 
 ## Generate suggestions
 
+新工作台不再调用本地静态候选流水线。它先创建 `architecture` Agent analysis job，再创建 `trace` job；完成后通过 list endpoint 读取 `source=agent` 的 proposed links。
+
+```text
+POST /api/v1/projects/{project_id}/agent/analysis-jobs
+GET  /api/v1/projects/{project_id}/agent/analysis-jobs/{job_id}/events
+GET  /api/v1/projects/{project_id}/trace-links
+```
+
+分析失败时不生成静态或规则降级候选。旧 revision 结果保留为 stale 供审计。Agent 新结果使用 `source: "agent"`、`static_confidence: 0`，代码 evidence 还包含 `path/line_start/line_end`；所有 quote 在持久化前与当前 artifact 原文精确校验。
+
+### Legacy endpoint
+
 `POST /api/v1/projects/{project_id}/trace-links/suggest`
 
 Request body is optional:

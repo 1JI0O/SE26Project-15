@@ -28,6 +28,7 @@ READ_TOOLS = {
     "propose_code_patch",
     "analyze_change_risk",
     "open_code_location",
+    "open_paper_location",
     "focus_architecture",
 }
 WRITE_TOOLS = {
@@ -107,6 +108,11 @@ class OpenCodeLocationArguments(StrictArguments):
     line: int = Field(default=1, ge=1)
 
 
+class OpenPaperLocationArguments(StrictArguments):
+    block_id: str = Field(min_length=1, max_length=255)
+    quote: str = Field(default="", max_length=1000)
+
+
 class FocusArchitectureArguments(StrictArguments):
     root_symbol: str | None = Field(default=None, max_length=500)
     view: Literal["architecture", "debug"] = "architecture"
@@ -148,6 +154,7 @@ ARGUMENT_MODELS = {
     "propose_code_patch": PatchArguments,
     "analyze_change_risk": RiskAnalysisArguments,
     "open_code_location": OpenCodeLocationArguments,
+    "open_paper_location": OpenPaperLocationArguments,
     "focus_architecture": FocusArchitectureArguments,
     "save_code_file": SaveCodeArguments,
     "rerun_analysis": RerunAnalysisArguments,
@@ -178,6 +185,7 @@ TOOL_DESCRIPTIONS = {
     "open_code_location": (
         "Ask the IDE to open a repository file at a line; this is a safe UI action."
     ),
+    "open_paper_location": "Ask the IDE to scroll to an exact structured paper block.",
     "focus_architecture": "Ask the IDE to open a model architecture root or debug graph.",
     "save_code_file": (
         "Save complete file content after patch and risk analysis; requires confirmation."
@@ -667,6 +675,20 @@ def execute_read_tool(
             "found": True,
             "ref": f"{validated.path}:{validated.line}",
             "ui_action": {"type": "open_code", "path": validated.path, "line": validated.line},
+        }
+    if isinstance(validated, OpenPaperLocationArguments):
+        if paper is None or not any(
+            str(item.get("id")) == validated.block_id for item in paper.paragraphs_json
+        ):
+            return {"found": False, "ref": validated.block_id}
+        return {
+            "found": True,
+            "ref": validated.block_id,
+            "ui_action": {
+                "type": "open_paper",
+                "block_id": validated.block_id,
+                "quote": validated.quote,
+            },
         }
     if isinstance(validated, FocusArchitectureArguments):
         graph = workspace_service.get_tensor_flow(

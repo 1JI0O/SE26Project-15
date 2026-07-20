@@ -27,19 +27,21 @@
       <!-- Paper side evidence -->
       <section class="evidence-section">
         <h4>论文侧证据</h4>
-        <div class="evidence-card paper-side">
+        <button class="evidence-card paper-side" @click="$emit('openPaper', row)">
           <div class="evidence-label">论文位置</div>
           <div class="evidence-value">{{ row.paper }}</div>
-        </div>
+          <blockquote v-if="paperEvidence?.quote">{{ paperEvidence.quote }}</blockquote>
+        </button>
       </section>
 
       <!-- Code side evidence -->
       <section class="evidence-section">
         <h4>代码侧证据</h4>
-        <div class="evidence-card code-side">
+        <button class="evidence-card code-side" @click="$emit('openCode', row)">
           <div class="evidence-label">代码位置</div>
           <div class="evidence-value">{{ row.code }}</div>
-        </div>
+          <blockquote v-if="codeEvidence?.quote">{{ codeEvidence.quote }}</blockquote>
+        </button>
       </section>
 
       <!-- Relation -->
@@ -81,7 +83,12 @@ defineEmits<{
   close: []
   confirm: [row: TraceRowView]
   reject: [row: TraceRowView]
+  openPaper: [row: TraceRowView]
+  openCode: [row: TraceRowView]
 }>()
+
+const paperEvidence = computed(() => props.row?.evidence.find((item) => item.side === 'paper'))
+const codeEvidence = computed(() => props.row?.evidence.find((item) => item.side === 'code'))
 
 const confidenceColor = computed(() => {
   if (!props.row) return '#9aa7b4'
@@ -115,10 +122,21 @@ const confidenceColor = computed(() => {
 }
 
 .evidence-card {
+  display: block;
+  width: 100%;
   padding: 12px 14px;
   border-radius: 8px;
   background: #f8fafc;
   border: 1px solid #edf1f4;
+  cursor: pointer;
+  text-align: left;
+}
+
+.evidence-card blockquote {
+  margin: 8px 0 0;
+  color: #44515d;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .evidence-card.paper-side {

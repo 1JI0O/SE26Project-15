@@ -1,3 +1,4 @@
+import hashlib
 import html
 import re
 from typing import Any
@@ -69,3 +70,53 @@ def extract_markdown_sections(
             }
         )
     return sections
+
+
+def inject_block_anchors(
+    markdown: str,
+    pages: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Inject stable anchors before exact MinerU block text without changing the text itself."""
+
+    blocks = [
+        dict(block)
+        for page in pages
+        for block in page.get("blocks", [])
+        if isinstance(block, dict) and block.get("id") and block.get("text")
+    ]
+    if not blocks:
+        return markdown, []
+    insertions: list[tuple[int, str]] = []
+    cursor = 0
+    enriched: list[dict[str, Any]] = []
+    used_anchors: set[str] = set()
+    for block in blocks:
+        block_id = str(block["id"])
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "-", block_id).strip("-")
+        anchor = f"paper-block-{safe or hashlib.sha256(block_id.encode()).hexdigest()[:12]}"
+        if anchor in used_anchors:
+            anchor = f"{anchor}-{hashlib.sha256(block_id.encode()).hexdigest()[:8]}"
+        used_anchors.add(anchor)
+        text = str(block.get("text", "")).strip()
+        position = markdown.find(text, cursor) if text else -1
+        if position < 0 and len(text) >= 40:
+            position = markdown.find(text[: min(120, len(text))], cursor)
+        resolved = position >= 0
+        if resolved:
+            anchor_position = position + len(text) if block.get("kind") == "title" else position
+            insertions.append(
+                (
+                    anchor_position,
+                    f'<span id="{anchor}" data-paper-block-id="{html.escape(block_id)}"></span>\n',
+                )
+            )
+            cursor = position + max(len(text), 1)
+        block.update(
+            render_anchor=anchor,
+            anchor_resolved=resolved,
+            page=block.get("page_number", block.get("page", 1)),
+        )
+        enriched.append(block)
+    for position, value in reversed(insertions):
+        markdown = f"{markdown[:position]}{value}{markdown[position:]}"
+    return markdown, enriched

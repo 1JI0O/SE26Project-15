@@ -259,6 +259,7 @@
               <span class="pane-meta">只读 · {{ paper.parserName.value || '等待解析' }}</span>
             </div>
             <PaperReader
+              ref="paperReaderRef"
               :markdown="paper.paperDocument.value?.markdown || ''"
               :asset-base-url="paper.paperDocument.value?.asset_base_url || ''"
               :active-section-id="paper.activeSectionId.value"
@@ -266,6 +267,7 @@
               :loading="paper.loading.value"
               :error="paper.error.value"
               :source="paper.paperDocument.value?.source || ''"
+              :blocks="paper.paperDocument.value?.blocks || []"
               @select-section="paper.selectSection"
               @retry="paper.loadPaperPages"
             />
@@ -359,20 +361,23 @@
                 :error="trace.error.value"
                 :mode="trace.mode.value"
                 :degraded="trace.degraded.value"
-                @suggest="trace.generateSuggestions(true)"
+                @suggest="generateAgentAnalysis"
                 @review="trace.reviewTrace"
                 @select-row="onTraceRowSelect"
+                @open-paper="jumpToTracePaper"
+                @open-code="jumpToTraceCode"
               />
               <aside class="trace-summary">
-                <strong>候选生成</strong>
+                <strong>Agent 分析</strong>
                 <span v-if="trace.mode.value">{{ trace.mode.value }}</span>
-                <span v-else>静态分析 + 可选 LLM 增强</span>
+                <span v-else>Agent 自主读取论文与代码证据</span>
+                <p v-if="trace.analysisProgress.value">{{ trace.analysisProgress.value }}</p>
                 <p v-if="trace.degradedReason.value">{{ trace.degradedReason.value }}</p>
                 <el-button
                   size="small"
                   type="primary"
                   :loading="trace.generating.value"
-                  @click="trace.generateSuggestions(true)"
+                  @click="generateAgentAnalysis"
                 >
                   重新生成
                 </el-button>
@@ -478,6 +483,8 @@
       @close="evidenceDrawerVisible = false"
       @confirm="onEvidenceConfirm"
       @reject="onEvidenceReject"
+      @open-paper="jumpToTracePaper"
+      @open-code="jumpToTraceCode"
     />
     <el-dialog v-model="artifactVersionsVisible" title="本机保留的云端文件版本" width="760px">
       <el-table :data="artifactVersions">
@@ -567,6 +574,7 @@ const repositoryStatusLabel = computed(() => {
   if (!code.hasCode.value) return '等待代码'
   if (tensorFlow.analysisStatus.value === 'ready') return '仓库已分析'
   if (tensorFlow.analysisStatus.value === 'failed') return '仓库分析失败'
+  if (tensorFlow.analysisStatus.value === 'missing') return '等待 Agent 分析'
   return '仓库分析中'
 })
 
@@ -602,6 +610,7 @@ const bottomTabs: Array<{ key: BottomPanelKey; label: string }> = [
 const evidenceDrawerVisible = ref(false)
 const selectedTraceRow = ref<TraceRowView | null>(null)
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null)
+const paperReaderRef = ref<InstanceType<typeof PaperReader> | null>(null)
 const paperInputRef = ref<HTMLInputElement | null>(null)
 const codeInputRef = ref<HTMLInputElement | null>(null)
 const ideBodyRef = ref<HTMLElement | null>(null)
@@ -757,7 +766,12 @@ function openBottomPanel(tab: BottomPanelKey): void {
 
 function openTraceAndGenerate(): void {
   openBottomPanel('trace')
-  void trace.generateSuggestions(true)
+  void generateAgentAnalysis()
+}
+
+async function generateAgentAnalysis(): Promise<void> {
+  await trace.generateSuggestions()
+  await tensorFlow.loadTensorFlow({ force: true })
 }
 
 async function handleImportAction(stepIndex: string): Promise<void> {
@@ -824,6 +838,20 @@ function onTraceRowSelect(row: TraceRowView): void {
   evidenceDrawerVisible.value = true
 }
 
+async function jumpToTracePaper(row: TraceRowView): Promise<void> {
+  const evidence = row.evidence.find((item) => item.side === 'paper')
+  await nextTick()
+  const found = paperReaderRef.value?.scrollToBlock(row.paper, evidence?.quote || '')
+  if (!found) ElMessage.warning('论文精确锚点不可用，已保留当前阅读位置')
+}
+
+async function jumpToTraceCode(row: TraceRowView): Promise<void> {
+  const evidence = row.evidence.find((item) => item.side === 'code')
+  const path = evidence?.path || row.code.split('::', 1)[0]
+  if (!path) return
+  await jumpToCode(path, evidence?.line_start || 1)
+}
+
 async function onEvidenceConfirm(row: TraceRowView): Promise<void> {
   if (!row.id) {
     ElMessage.info('当前为预览数据，生成追溯候选后才能审阅')
@@ -872,6 +900,12 @@ async function reloadAfterAgentAction(): Promise<void> {
 async function handleAgentUiAction(action: AgentUiAction): Promise<void> {
   if (action.type === 'open_code' && action.path) {
     await jumpToCode(action.path, action.line || 1)
+    return
+  }
+  if (action.type === 'open_paper' && action.block_id) {
+    await nextTick()
+    const found = paperReaderRef.value?.scrollToBlock(action.block_id, action.quote || '')
+    if (!found) ElMessage.warning('论文精确锚点不可用')
     return
   }
   if (action.type === 'focus_architecture') {

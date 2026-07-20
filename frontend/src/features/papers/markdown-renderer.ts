@@ -120,6 +120,7 @@ export function renderPaperMarkdown(markdownText: string, resolveAsset: AssetRes
       'colspan',
       'data-paper-asset-url',
       'data-paper-render-token',
+      'data-paper-block-id',
     ],
   })
   const template = document.createElement('template')

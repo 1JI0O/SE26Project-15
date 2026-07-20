@@ -6,8 +6,9 @@ version: "1"
 metadata:
   tracelab:
     triggers: ["流程图", "架构", "张量", "transformer", "cnn", "graph", "architecture"]
-    preferred_tools: ["get_architecture", "get_graph_node", "read_code_file", "focus_architecture"]
+    preferred_tools: ["search_code", "read_code_file", "get_code_symbol", "focus_architecture"]
 ---
-Prefer the module-level architecture view. Use the debug graph only for low-level diagnosis.
-Treat classic or external components as black boxes unless the user explicitly asks to expand
-them. Verify important dimensions and model functions against source code.
+Read the actual entry source and follow project calls before making architectural claims. Expand
+project calls one level further to identify the torch/nn/external operations they invoke. Treat
+external components as black boxes unless the user explicitly asks to expand them. Every claim
+must cite an exact source location; record dynamic dispatch as unresolved instead of guessing.

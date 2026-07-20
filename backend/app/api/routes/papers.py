@@ -21,7 +21,11 @@ from app.services.document_parsers.jobs import (
     get_paper_parsing_service,
 )
 from app.services.local_sync import paper_payload, record_local_operation
-from app.services.paper_markdown import build_fallback_markdown, extract_markdown_sections
+from app.services.paper_markdown import (
+    build_fallback_markdown,
+    extract_markdown_sections,
+    inject_block_anchors,
+)
 from app.services.paper_parser import parse_pdf
 from app.services.workspace_placeholder import workspace_payload
 from app.storage.file_store import save_upload
@@ -249,6 +253,8 @@ def read_workspace_paper_document(
 
     mineru_markdown = service.markdown_for_cache(document.content_hash)
     markdown = mineru_markdown or build_fallback_markdown(document)
+    anchor_pages = document.pages_json or [{"blocks": document.paragraphs_json}]
+    markdown, blocks = inject_block_anchors(markdown, anchor_pages)
     return WorkspacePaperDocument(
         document_id=document.id or 0,
         filename=document.filename,
@@ -259,6 +265,7 @@ def read_workspace_paper_document(
         parser=document.parser,
         parser_version=document.parser_version,
         source="mineru-markdown" if mineru_markdown else "normalized-fallback",
+        blocks=blocks,
     )
 
 

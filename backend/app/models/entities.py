@@ -220,6 +220,7 @@ class AgentConversation(SQLModel, table=True):
     )
     version: int = Field(default=1, ge=1)
     project_id: int = Field(foreign_key="project.id", index=True)
+    kind: str = Field(default="interactive", max_length=24, index=True)
     title: str = Field(default="新对话", max_length=160)
     status: str = Field(default="active", max_length=24, index=True)
     summary: str = Field(default="", sa_column=Column(Text, nullable=False))
@@ -396,6 +397,72 @@ class RepositoryAnalysisJob(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = Field(default=None)
     completed_at: datetime | None = Field(default=None)
+
+
+class AgentAnalysisJob(SQLModel, table=True):
+    __tablename__ = "agent_analysis_job"
+
+    job_id: str = Field(
+        default_factory=lambda: f"agent-analysis-{uuid4().hex}",
+        primary_key=True,
+        max_length=72,
+    )
+    project_id: int = Field(foreign_key="project.id", index=True)
+    kind: str = Field(max_length=24, index=True)
+    status: str = Field(default="queued", max_length=24, index=True)
+    paper_document_id: int | None = Field(
+        default=None, foreign_key="paper_document.id", index=True
+    )
+    code_repository_id: int = Field(foreign_key="code_repository.id", index=True)
+    code_revision: int = Field(ge=1, index=True)
+    root_symbol: str | None = Field(default=None, max_length=500)
+    requested_depth: int = Field(default=2, ge=1, le=3)
+    agent_run_id: str | None = Field(
+        default=None, foreign_key="agent_run.run_id", index=True, max_length=72
+    )
+    artifact_id: str | None = Field(default=None, index=True, max_length=72)
+    fingerprint: str = Field(index=True, unique=True, max_length=64)
+    progress_json: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    error_code: str | None = Field(default=None, max_length=128)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = Field(default=None)
+
+
+class AgentAnalysisArtifact(SQLModel, table=True):
+    __tablename__ = "agent_analysis_artifact"
+    __table_args__ = (UniqueConstraint("fingerprint", name="uq_agent_analysis_artifact_fp"),)
+
+    artifact_id: str = Field(
+        default_factory=lambda: f"artifact-{uuid4().hex}",
+        primary_key=True,
+        max_length=72,
+    )
+    job_id: str = Field(foreign_key="agent_analysis_job.job_id", index=True, max_length=72)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    kind: str = Field(max_length=24, index=True)
+    schema_version: str = Field(max_length=64)
+    payload_json: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+    paper_document_id: int | None = Field(
+        default=None, foreign_key="paper_document.id", index=True
+    )
+    code_repository_id: int = Field(foreign_key="code_repository.id", index=True)
+    code_revision: int = Field(ge=1, index=True)
+    agent_run_id: str = Field(foreign_key="agent_run.run_id", index=True, max_length=72)
+    model_info_json: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False),
+    )
+    capability_snapshot_json: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False),
+    )
+    fingerprint: str = Field(max_length=64, index=True)
+    is_current: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class IntegrationConfig(SQLModel, table=True):

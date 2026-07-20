@@ -3,10 +3,14 @@ import { ElMessage } from 'element-plus'
 import {
   getWorkspaceTraceMatrix,
   listTraceLinks,
-  suggestTraceLinks,
   updateTraceStatus,
 } from '@/api/trace-api'
-import type { TraceLink, TraceStatus, WorkspaceTraceRow } from '@/types/tracing'
+import {
+  createAgentAnalysisJob,
+  getAgentAnalysisJob,
+  streamAgentAnalysisJob,
+} from '@/api/agent-api'
+import type { TraceEvidence, TraceLink, TraceStatus, WorkspaceTraceRow } from '@/types/tracing'
 
 export interface TraceRowView {
   id?: string
@@ -19,6 +23,7 @@ export interface TraceRowView {
   status: TraceStatus | 'preview'
   evidenceCount: number
   uncertainty: string
+  evidence: TraceEvidence[]
 }
 
 function fromTraceLink(link: TraceLink): TraceRowView {
@@ -33,6 +38,7 @@ function fromTraceLink(link: TraceLink): TraceRowView {
     status: link.status,
     evidenceCount: link.evidence.length,
     uncertainty: link.uncertainty.level,
+    evidence: link.evidence,
   }
 }
 
@@ -47,6 +53,7 @@ function fromWorkspaceRow(row: WorkspaceTraceRow): TraceRowView {
     status: 'preview',
     evidenceCount: 0,
     uncertainty: 'unknown',
+    evidence: [],
   }
 }
 
@@ -58,6 +65,7 @@ export function useTrace(projectId: () => number) {
   const mode = ref('')
   const degraded = ref(false)
   const degradedReason = ref<string | null>(null)
+  const analysisProgress = ref('')
 
   async function loadTraceRows(): Promise<void> {
     loading.value = true
@@ -79,21 +87,40 @@ export function useTrace(projectId: () => number) {
     }
   }
 
-  async function generateSuggestions(useLlm = true): Promise<void> {
+  async function runAnalysis(kind: 'architecture' | 'trace'): Promise<void> {
+    const submitted = await createAgentAnalysisJob(projectId(), { kind, depth: 2 })
+    analysisProgress.value = String(submitted.progress.message || '等待 Agent 分析')
+    if (!['succeeded', 'failed'].includes(submitted.status)) {
+      await streamAgentAnalysisJob(projectId(), submitted.job_id, (event) => {
+        const message = event.payload.message
+        if (typeof message === 'string') analysisProgress.value = message
+      })
+    }
+    const completed = await getAgentAnalysisJob(projectId(), submitted.job_id)
+    if (completed.status !== 'succeeded') {
+      throw new Error(completed.error_code || `${kind}_analysis_failed`)
+    }
+  }
+
+  async function generateSuggestions(): Promise<void> {
     generating.value = true
     error.value = null
     try {
-      const response = await suggestTraceLinks(projectId(), useLlm)
-      mode.value = response.mode
-      degraded.value = response.degraded
-      degradedReason.value = response.degraded_reason
-      traceRows.value = response.items.map(fromTraceLink)
-      ElMessage.success(`已生成 ${response.items.length} 条追溯候选`)
+      await runAnalysis('architecture')
+      await runAnalysis('trace')
+      mode.value = 'agent'
+      degraded.value = false
+      degradedReason.value = null
+      await loadTraceRows()
+      ElMessage.success(`Agent 已生成 ${traceRows.value.length} 条追溯候选`)
     } catch (cause) {
-      ElMessage.error('生成追溯候选失败，请确认论文和代码均已导入')
+      degraded.value = true
+      degradedReason.value = cause instanceof Error ? cause.message : 'agent_analysis_failed'
+      ElMessage.error('Agent 分析失败，已保留现有追溯结果')
       console.error(cause)
     } finally {
       generating.value = false
+      analysisProgress.value = ''
     }
   }
 
@@ -120,6 +147,7 @@ export function useTrace(projectId: () => number) {
     mode,
     degraded,
     degradedReason,
+    analysisProgress,
     loadTraceRows,
     generateSuggestions,
     reviewTrace,
