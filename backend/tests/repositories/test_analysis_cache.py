@@ -26,10 +26,9 @@ class Model(nn.Module):
 def _wait_for_ready(client: TestClient, project_id: int) -> dict:
     payload: dict = {}
     for _ in range(80):
-        response = client.get(f"/api/v1/projects/{project_id}/workspace/tensor-flow")
-        assert response.status_code == 200
-        payload = response.json()
-        if payload["analysis_status"] == "ready":
+        response = client.get(f"/api/v1/projects/{project_id}/code/analysis")
+        if response.status_code == 200 and response.json().get("tensor_graph", {}).get("nodes"):
+            payload = response.json()
             return payload
         time.sleep(0.025)
     raise AssertionError(f"analysis did not complete: {payload}")
@@ -46,9 +45,9 @@ def test_large_repository_analysis_runs_in_background_and_persists(monkeypatch) 
         )
         assert upload.status_code == 201
         payload = _wait_for_ready(client, project_id)
-        cached = client.get(f"/api/v1/projects/{project_id}/workspace/tensor-flow").json()
+        graph = client.get(f"/api/v1/projects/{project_id}/workspace/tensor-flow").json()
 
-    assert payload["nodes"]
-    assert payload["analysis_revision"] == payload["repository_revision"] == 1
-    assert cached["analysis_status"] == "ready"
-    assert cached["nodes"] == payload["nodes"]
+    assert payload["tensor_graph"]["nodes"]
+    assert graph["analysis_status"] == "missing"
+    assert graph["renderer"] == "agent-dag-v1"
+    assert graph["nodes"] == []

@@ -2,6 +2,22 @@
 
 Agent 路由注册在 `/api/v1/projects/{project_id}/agent`。运行时由会话、消息、run trace、记忆、技能路由、环境工具和人工确认组成；旧的 `/query` 单轮接口保留用于兼容。
 
+## 自动分析任务
+
+追溯和模型流程图的语义分析由 Agent 独占，本地 AST/关键词结果只作为可选导航索引，不再作为工作台展示结果或 LLM 失败时的语义降级。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/analysis-jobs` | 创建 `architecture` 或 `trace` Agent 分析任务 |
+| GET | `/analysis-jobs/{job_id}` | 查询 queued/running/validating/succeeded/failed/stale |
+| GET | `/analysis-jobs/{job_id}/events` | SSE 读取可审计进度和工具事件 |
+| GET | `/analysis-jobs/{job_id}/artifact` | 读取通过证据校验的结构化结果 |
+| POST | `/analysis-jobs/{job_id}/retry` | 基于相同 artifact revision 强制重试 |
+
+`architecture` 默认深度为 2：入口函数、直接项目调用、项目调用内部的 `torch/nn/外部` 算子；硬上限为 3。`trace` 必须发布论文 block 与代码行范围的精确双侧 quote。LLM 不可用、预算耗尽、schema 无效或证据无法在当前 revision 精确匹配时，任务失败且不产生 artifact。
+
+分析任务复用现有 Agent provider、Run、Run Event、重试和能力快照，但使用 `kind=analysis` 的隐藏会话，不出现在普通聊天历史。`publish_architecture_graph` 与 `publish_trace_candidates` 只在对应分析任务中可见；它们只能保存可重算 artifact 和 proposed trace，不能修改代码或代替用户接受追溯。
+
 ## 会话
 
 | 方法 | 路径 | 说明 |
@@ -57,7 +73,7 @@ SSE 事件包括 `run.queued`、`run.started`、`reasoning.summary`、`message.d
 - 架构：`get_architecture`、`get_graph_node`、`focus_architecture`
 - 追溯：`list_trace_links`、`get_trace_detail`
 - 记忆与修改准备：`recall_memory`、`propose_code_patch`、`analyze_change_risk`
-- UI 交互：`open_code_location`
+- UI 交互：`open_code_location`、`open_paper_location`
 
 写工具必须确认：
 

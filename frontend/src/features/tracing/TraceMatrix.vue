@@ -14,7 +14,7 @@
       v-if="mode"
       :type="degraded ? 'warning' : 'success'"
       :closable="false"
-      :title="degraded ? `${mode} · LLM 降级，已保留静态分析结果` : `${mode} · 候选生成完成`"
+      :title="degraded ? `${mode} · Agent 分析失败，已保留现有结果` : `${mode} · 分析完成`"
     />
 
     <!-- Loading state -->
@@ -44,8 +44,12 @@
         class="trace-row clickable"
         @click="$emit('selectRow', row, index)"
       >
-        <span :title="row.rationale">{{ row.paper }}</span>
-        <span :title="row.rationale">{{ row.code }}</span>
+        <button class="location-link" :title="row.rationale" @click.stop="$emit('openPaper', row)">
+          {{ row.paper }}
+        </button>
+        <button class="location-link" :title="row.rationale" @click.stop="$emit('openCode', row)">
+          {{ row.code }}
+        </button>
         <span>{{ row.type }} · {{ row.evidenceCount }} 证据</span>
         <el-progress :percentage="row.confidence" />
         <span class="trace-status">
@@ -88,6 +92,8 @@ defineEmits<{
   suggest: []
   review: [traceId: string, status: Extract<TraceStatus, 'accepted' | 'rejected'>]
   selectRow: [row: TraceRowView, index: number]
+  openPaper: [row: TraceRowView]
+  openCode: [row: TraceRowView]
 }>()
 
 function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'info' | 'danger' {
@@ -114,6 +120,23 @@ function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'in
   margin: 6px 0 0;
   color: #667789;
   line-height: 1.6;
+}
+
+.location-link {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: #176b87;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.location-link:hover {
+  text-decoration: underline;
 }
 
 .trace-matrix header {

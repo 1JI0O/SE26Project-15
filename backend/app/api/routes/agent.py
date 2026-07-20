@@ -3,12 +3,15 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.api.routes.projects import get_project_or_404
 from app.db.session import get_session
-from app.models.entities import AgentRun
+from app.models.entities import AgentAnalysisArtifact, AgentAnalysisJob, AgentRun
 from app.schemas.agent import (
+    AgentAnalysisArtifactRead,
+    AgentAnalysisJobCreate,
+    AgentAnalysisJobRead,
     AgentCapabilityRead,
     AgentCapabilityUpdate,
     AgentConfirmationRead,
@@ -27,6 +30,7 @@ from app.schemas.agent import (
     AgentTurnRequest,
     AgentTurnResponse,
 )
+from app.services.agent.analysis_jobs import create_analysis_job, job_to_read
 from app.services.agent.capabilities import list_capabilities, update_capability
 from app.services.agent.conversations import (
     create_conversation,
@@ -52,6 +56,140 @@ from app.services.agent.service import (
 )
 
 router = APIRouter(prefix="/projects/{project_id}/agent", tags=["agent"])
+
+
+@router.post(
+    "/analysis-jobs",
+    response_model=AgentAnalysisJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def submit_analysis_job(
+    project_id: int,
+    payload: AgentAnalysisJobCreate,
+    session: Session = Depends(get_session),
+) -> AgentAnalysisJobRead:
+    get_project_or_404(project_id, session)
+    try:
+        return job_to_read(create_analysis_job(session, project_id, payload))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/analysis-jobs/{job_id}", response_model=AgentAnalysisJobRead)
+def get_analysis_job(
+    project_id: int,
+    job_id: str,
+    session: Session = Depends(get_session),
+) -> AgentAnalysisJobRead:
+    get_project_or_404(project_id, session)
+    job = session.get(AgentAnalysisJob, job_id)
+    if job is None or job.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    return job_to_read(job)
+
+
+@router.post(
+    "/analysis-jobs/{job_id}/retry",
+    response_model=AgentAnalysisJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def retry_analysis_job(
+    project_id: int,
+    job_id: str,
+    session: Session = Depends(get_session),
+) -> AgentAnalysisJobRead:
+    get_project_or_404(project_id, session)
+    job = session.get(AgentAnalysisJob, job_id)
+    if job is None or job.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    payload = AgentAnalysisJobCreate(
+        kind=job.kind,
+        paper_document_id=job.paper_document_id,
+        code_repository_id=job.code_repository_id,
+        root_symbol=job.root_symbol,
+        depth=job.requested_depth,
+        force=True,
+    )
+    return job_to_read(create_analysis_job(session, project_id, payload))
+
+
+@router.get(
+    "/analysis-jobs/{job_id}/artifact",
+    response_model=AgentAnalysisArtifactRead,
+)
+def get_analysis_artifact(
+    project_id: int,
+    job_id: str,
+    session: Session = Depends(get_session),
+) -> AgentAnalysisArtifactRead:
+    get_project_or_404(project_id, session)
+    artifact = session.exec(
+        select(AgentAnalysisArtifact).where(
+            AgentAnalysisArtifact.project_id == project_id,
+            AgentAnalysisArtifact.job_id == job_id,
+        )
+    ).first()
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Analysis artifact not found")
+    return AgentAnalysisArtifactRead(
+        artifact_id=artifact.artifact_id,
+        job_id=artifact.job_id,
+        project_id=artifact.project_id,
+        kind=artifact.kind,
+        schema_version=artifact.schema_version,
+        payload=artifact.payload_json,
+        paper_document_id=artifact.paper_document_id,
+        code_repository_id=artifact.code_repository_id,
+        code_revision=artifact.code_revision,
+        run_id=artifact.agent_run_id,
+        model=artifact.model_info_json,
+        is_current=artifact.is_current,
+        created_at=artifact.created_at,
+    )
+
+
+@router.get("/analysis-jobs/{job_id}/events")
+async def stream_analysis_job_events(
+    project_id: int,
+    job_id: str,
+    request: Request,
+    after: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    get_project_or_404(project_id, session)
+    job = session.get(AgentAnalysisJob, job_id)
+    if job is None or job.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+
+    async def events():
+        cursor = after
+        while True:
+            if await request.is_disconnected():
+                break
+            session.expire_all()
+            current = session.get(AgentAnalysisJob, job_id)
+            if current is None:
+                break
+            batch = (
+                list_run_events(session, project_id, current.agent_run_id, after=cursor)
+                if current.agent_run_id
+                else []
+            )
+            for item in batch:
+                cursor = item.sequence
+                data = json.dumps(item.model_dump(mode="json"), ensure_ascii=False)
+                yield f"id: {cursor}\nevent: {item.event_type}\ndata: {data}\n\n"
+            if current.status in {"succeeded", "failed", "stale"} and not batch:
+                break
+            if not batch:
+                yield ": keep-alive\n\n"
+            await asyncio.sleep(0.4)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/capabilities", response_model=list[AgentCapabilityRead])

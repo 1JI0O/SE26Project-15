@@ -141,6 +141,50 @@ class AgentRunEventRead(BaseModel):
     created_at: datetime
 
 
+class AgentAnalysisJobCreate(BaseModel):
+    kind: str = Field(pattern="^(architecture|trace)$")
+    paper_document_id: int | None = None
+    code_repository_id: int | None = None
+    root_symbol: str | None = Field(default=None, max_length=500)
+    depth: int = Field(default=2, ge=1, le=3)
+    force: bool = False
+
+
+class AgentAnalysisJobRead(BaseModel):
+    job_id: str
+    project_id: int
+    kind: str
+    status: str
+    paper_document_id: int | None
+    code_repository_id: int
+    code_revision: int
+    root_symbol: str | None
+    requested_depth: int
+    run_id: str | None
+    artifact_id: str | None
+    progress: dict[str, object] = Field(default_factory=dict)
+    error_code: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
+class AgentAnalysisArtifactRead(BaseModel):
+    artifact_id: str
+    job_id: str
+    project_id: int
+    kind: str
+    schema_version: str
+    payload: dict[str, object]
+    paper_document_id: int | None
+    code_repository_id: int
+    code_revision: int
+    run_id: str
+    model: dict[str, object]
+    is_current: bool
+    created_at: datetime
+
+
 class AgentCapabilityRead(BaseModel):
     capability_id: str
     name: str

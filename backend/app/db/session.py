@@ -32,6 +32,8 @@ from app.models.cloud_entities import (
     WorkspaceMember,
 )
 from app.models.entities import (
+    AgentAnalysisArtifact,
+    AgentAnalysisJob,
     AgentCapabilitySetting,
     AgentConversation,
     AgentMemory,
@@ -60,6 +62,8 @@ _ = (
     AgentMemory,
     AgentCapabilitySetting,
     AgentToolRequest,
+    AgentAnalysisJob,
+    AgentAnalysisArtifact,
     RepositoryAnalysisJob,
     IntegrationConfig,
     LocalArtifactVersion,

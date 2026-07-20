@@ -74,8 +74,12 @@
 | --- | --- | --- | --- |
 | GET | `/projects/{project_id}/trace-links` | 已实现 | 按状态/来源读取追溯关系 |
 | POST | `/projects/{project_id}/trace-links` | 已实现 | 创建带论文和代码证据的人工关系 |
-| POST | `/projects/{project_id}/trace-links/suggest` | 已实现 | 静态基线与可选 LLM 增强，返回降级信息 |
+| POST | `/projects/{project_id}/trace-links/suggest` | 兼容 | 旧静态建议接口；新工作台不再调用 |
 | PATCH | `/projects/{project_id}/trace-links/{trace_id}/status` | 已实现 | 人工接受或拒绝 proposed 关系 |
+| POST | `/projects/{project_id}/agent/analysis-jobs` | 已实现 | 启动 Agent architecture/trace 结构化分析 |
+| GET | `/projects/{project_id}/agent/analysis-jobs/{job_id}` | 已实现 | 查询分析状态、revision 和 artifact |
+| GET | `/projects/{project_id}/agent/analysis-jobs/{job_id}/events` | 已实现 | SSE 分析进度与工具事件 |
+| POST | `/projects/{project_id}/agent/analysis-jobs/{job_id}/retry` | 已实现 | 强制重试相同输入 revision |
 | GET | `/projects/{project_id}/workspace/trace-matrix` | 已实现 | 工作台兼容矩阵视图 |
 
 候选接口返回信封而非数组：

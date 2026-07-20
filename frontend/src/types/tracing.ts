@@ -12,6 +12,9 @@ export interface TraceEvidence {
   side: 'paper' | 'code'
   ref: string
   quote: string
+  path?: string
+  line_start?: number
+  line_end?: number
 }
 
 export interface TraceLink {
@@ -47,7 +50,7 @@ export interface TraceLinkCreate {
 }
 
 export interface TraceSuggestionResponse {
-  mode: 'static' | 'static+llm'
+  mode: 'static' | 'static+llm' | 'agent'
   degraded: boolean
   degraded_reason: string | null
   items: TraceLink[]

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PaperDocumentRead(BaseModel):
@@ -43,6 +43,7 @@ class WorkspacePaperDocument(BaseModel):
     parser: str
     parser_version: str
     source: str
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PaperParseJobRead(BaseModel):

@@ -8,6 +8,27 @@ export interface AgentContext {
   graph_root_symbol?: string
 }
 
+export type AgentAnalysisKind = 'architecture' | 'trace'
+
+export interface AgentAnalysisJob {
+  job_id: string
+  project_id: number
+  kind: AgentAnalysisKind
+  status: 'queued' | 'running' | 'validating' | 'succeeded' | 'failed' | 'stale'
+  paper_document_id: number | null
+  code_repository_id: number
+  code_revision: number
+  root_symbol: string | null
+  requested_depth: number
+  run_id: string | null
+  artifact_id: string | null
+  progress: Record<string, unknown>
+  error_code: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
 export interface AgentCitation {
   side: 'paper' | 'code' | 'trace' | 'graph' | 'memory' | 'project'
   ref: string
@@ -59,9 +80,11 @@ export interface AgentConversation {
 }
 
 export interface AgentUiAction {
-  type: 'open_code' | 'focus_architecture'
+  type: 'open_code' | 'open_paper' | 'focus_architecture'
   path?: string
   line?: number
+  block_id?: string
+  quote?: string
   root_symbol?: string
   view?: 'architecture' | 'debug'
 }

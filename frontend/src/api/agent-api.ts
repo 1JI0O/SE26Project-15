@@ -1,6 +1,8 @@
 import { apiBaseUrl, http } from '@/api/http'
 import type {
   AgentCapability,
+  AgentAnalysisJob,
+  AgentAnalysisKind,
   AgentConfirmation,
   AgentContext,
   AgentConversation,
@@ -12,6 +14,58 @@ import type {
   AgentRunSubmission,
   AgentTurnResponse,
 } from '@/types/agent'
+
+export async function createAgentAnalysisJob(
+  projectId: number,
+  payload: {
+    kind: AgentAnalysisKind
+    root_symbol?: string | null
+    depth?: number
+    force?: boolean
+  },
+): Promise<AgentAnalysisJob> {
+  const { data } = await http.post<AgentAnalysisJob>(
+    `/projects/${projectId}/agent/analysis-jobs`,
+    payload,
+  )
+  return data
+}
+
+export async function getAgentAnalysisJob(
+  projectId: number,
+  jobId: string,
+): Promise<AgentAnalysisJob> {
+  const { data } = await http.get<AgentAnalysisJob>(
+    `/projects/${projectId}/agent/analysis-jobs/${jobId}`,
+  )
+  return data
+}
+
+export async function streamAgentAnalysisJob(
+  projectId: number,
+  jobId: string,
+  onEvent: (event: AgentRunEvent) => void,
+): Promise<void> {
+  const response = await fetch(
+    `${apiBaseUrl}/projects/${projectId}/agent/analysis-jobs/${encodeURIComponent(jobId)}/events`,
+    { headers: { Accept: 'text/event-stream' } },
+  )
+  if (!response.ok || !response.body) throw new Error(`analysis_stream_${response.status}`)
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const frames = buffer.split('\n\n')
+    buffer = frames.pop() || ''
+    for (const frame of frames) {
+      const line = frame.split('\n').find((item) => item.startsWith('data:'))
+      if (line) onEvent(JSON.parse(line.slice(5).trim()) as AgentRunEvent)
+    }
+    if (done) break
+  }
+}
 
 export async function queryAgent(
   projectId: number,

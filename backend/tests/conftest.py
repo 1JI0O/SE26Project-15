@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.db.session import get_session
 from app.main import app
 from app.services import analysis_jobs
+from app.services.agent import analysis_jobs as agent_analysis_jobs
 from app.services.agent import conversations
 from app.services.document_parsers import factory
 
@@ -32,6 +33,7 @@ def isolate_application_state(
     app.dependency_overrides[get_session] = session_override
     monkeypatch.setattr(analysis_jobs, "engine", test_engine)
     monkeypatch.setattr(conversations, "engine", test_engine)
+    monkeypatch.setattr(agent_analysis_jobs, "engine", test_engine)
     monkeypatch.setattr(factory, "engine", test_engine)
     monkeypatch.setattr(settings, "upload_root", str(tmp_path / "uploads"))
     # The developer's root .env may intentionally enable a real LLM. Tests must

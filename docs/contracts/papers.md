@@ -60,7 +60,10 @@ export TRACELAB_MINERU_API_TOKEN='<从 MinerU 控制台获取>'
 
 `GET /api/v1/projects/{project_id}/workspace/paper-document`
 
-响应包含 `markdown`、带层级和页码的 `sections`、`asset_base_url` 及解析来源。
+响应包含 `markdown`、带层级和页码的 `sections`、`asset_base_url`、解析来源，以及带
+`render_anchor`/`anchor_resolved` 的稳定 `blocks`。阅读器使用 `p{page}-b{order}` 精确
+滚动并高亮追溯证据；原始 Markdown 无法精确对齐时显式回退到 quote/section，不静默
+跳到错误位置。
 Markdown 中的图片通过 `GET /api/v1/projects/{project_id}/paper/assets/{asset_path}`
 按需读取；表格、行内/块级公式由前端 Markdown 阅读器渲染。旧的分页接口继续保留给
 追溯兼容逻辑，但不再作为论文阅读器的数据源。

@@ -1,5 +1,10 @@
 import { computed, onScopeDispose, ref } from 'vue'
 import { getWorkspaceTensorFlow } from '@/api/repository-api'
+import {
+  createAgentAnalysisJob,
+  getAgentAnalysisJob,
+  streamAgentAnalysisJob,
+} from '@/api/agent-api'
 import type { WorkspaceTensorFlow } from '@/types/repositories'
 
 export type TensorFlowNodeKind =
@@ -140,7 +145,7 @@ export function useTensorFlow(projectId: () => number) {
       label: root.label,
       sourcePath: root.source_path,
     }))
-    degraded.value = !['architecture-dag-v2', 'semantic-dag-v1'].includes(payload.renderer)
+    degraded.value = !['architecture-dag-v2', 'semantic-dag-v1', 'agent-dag-v1'].includes(payload.renderer)
     nodes.value = payload.nodes.map((node) => {
       const kind = normalizeKind(node.kind)
       return {
@@ -256,14 +261,42 @@ export function useTensorFlow(projectId: () => number) {
 
   async function expandNode(node: TensorFlowNode): Promise<void> {
     if (!node.expandable || !node.componentSymbolId) return
+    loading.value = true
+    error.value = null
+    let parentPushed = false
     if (rootSymbol.value) {
       navigationStack.value.push({
         symbolId: rootSymbol.value,
         label: rootLabel.value,
         sourcePath: node.sourcePath,
       })
+      parentPushed = true
     }
-    await loadTensorFlow({ view: 'architecture', rootSymbol: node.componentSymbolId })
+    try {
+      const job = await createAgentAnalysisJob(projectId(), {
+        kind: 'architecture',
+        root_symbol: node.componentSymbolId,
+        depth: 2,
+      })
+      if (!['succeeded', 'failed'].includes(job.status)) {
+        await streamAgentAnalysisJob(projectId(), job.job_id, () => undefined)
+      }
+      const completed = await getAgentAnalysisJob(projectId(), job.job_id)
+      if (completed.status !== 'succeeded') {
+        throw new Error(completed.error_code || 'architecture_analysis_failed')
+      }
+      await loadTensorFlow({
+        view: 'architecture',
+        rootSymbol: node.componentSymbolId,
+        force: true,
+      })
+    } catch (cause) {
+      if (parentPushed) navigationStack.value.pop()
+      error.value = 'Agent 无法展开该节点'
+      console.error(cause)
+    } finally {
+      loading.value = false
+    }
   }
 
   async function navigateBack(): Promise<void> {

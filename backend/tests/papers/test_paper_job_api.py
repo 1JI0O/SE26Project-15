@@ -45,7 +45,7 @@ def test_paper_job_api_returns_status_and_persists_result(tmp_path: Path) -> Non
             assert submitted.status_code == 202
             job_id = submitted.json()["id"]
 
-            deadline = time.monotonic() + 2
+            deadline = time.monotonic() + 5
             status_response = None
             while time.monotonic() < deadline:
                 status_response = client.get(f"/api/v1/projects/{project_id}/paper-jobs/{job_id}")

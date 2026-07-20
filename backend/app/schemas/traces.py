@@ -23,6 +23,9 @@ class TraceEvidence(BaseModel):
     side: str = Field(pattern="^(paper|code)$")
     ref: str = Field(min_length=1, max_length=500)
     quote: str = Field(min_length=1, max_length=2000)
+    path: str | None = Field(default=None, max_length=1000)
+    line_start: int | None = Field(default=None, ge=1)
+    line_end: int | None = Field(default=None, ge=1)
 
 
 class TraceUncertainty(BaseModel):

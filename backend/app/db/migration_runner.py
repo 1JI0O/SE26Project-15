@@ -20,6 +20,7 @@ LOCAL_REVISIONS = (
     "0006_cloud_accounts_sync",
     "0007_cloud_consistency",
     "0008_local_artifact_versions",
+    "0009_agent_analysis",
 )
 
 
@@ -119,6 +120,12 @@ def _detect_local_revision(engine: Engine, tables: set[str]) -> str:
     detected = LOCAL_REVISIONS[6]
     if "local_artifact_version" in tables:
         detected = LOCAL_REVISIONS[7]
+    if (
+        "agent_analysis_job" in tables
+        and "agent_analysis_artifact" in tables
+        and _has_columns(inspector, "agent_conversation", {"kind"})
+    ):
+        detected = LOCAL_REVISIONS[8]
     return detected
 
 

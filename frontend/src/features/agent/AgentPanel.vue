@@ -219,13 +219,15 @@
               </div>
 
               <div v-if="item.citations.length" class="citation-list">
-                <span
+                <button
                   v-for="citation in item.citations"
                   :key="`${item.message_id}-${citation.side}-${citation.ref}`"
                   :title="citation.quote"
+                  type="button"
+                  @click="openCitation(citation)"
                 >
                   {{ citation.side }} · {{ shortRef(citation.ref) }}
-                </span>
+                </button>
               </div>
 
               <div v-if="item.degraded" class="degraded-note">
@@ -349,6 +351,7 @@ import {
 } from '@/api/agent-api'
 import { renderPaperMarkdown } from '@/features/papers/markdown-renderer'
 import type {
+  AgentCitation,
   AgentCapability,
   AgentConfirmation,
   AgentConversation,
@@ -713,6 +716,17 @@ function emitUiAction(action: AgentUiAction): void {
   emit('uiAction', action)
 }
 
+function openCitation(citation: AgentCitation): void {
+  if (citation.side === 'paper') {
+    emitUiAction({ type: 'open_paper', block_id: citation.ref, quote: citation.quote })
+    return
+  }
+  if (citation.side === 'code') {
+    const path = citation.ref.split('::', 1)[0].split(':', 1)[0]
+    emitUiAction({ type: 'open_code', path, line: 1 })
+  }
+}
+
 async function openMemories(): Promise<void> {
   mode.value = 'memory'
   memoryLoading.value = true
@@ -930,13 +944,18 @@ function toolLabel(toolName: string): string {
 }
 
 .context-strip span,
-.citation-list span,
+.citation-list button,
 .scope-tag {
   padding: 2px 5px;
   border-radius: 3px;
   background: #edf3f2;
   color: #526b68;
   font-size: 9px;
+}
+
+.citation-list button {
+  border: 0;
+  cursor: pointer;
 }
 
 .message-viewport {
