@@ -13,8 +13,12 @@
 
 Cloud API 不装配本地集成设置或整数项目路由；Local API 不暴露云端账号表和管理员接口。两种 API 共享 Pydantic 同步契约和纯分析逻辑，不传输 SQLite 文件。
 
-Desktop 构建时必须从 `frontend/.env.desktop.example` 创建 `.env.desktop.local` 并填写实际
-`VITE_CLOUD_API_BASE_URL`；未配置时本地工作台仍可用，但云端登录和同步入口保持隐藏。
+Desktop 构建时默认绑定统一云端 `https://10.119.5.94/api/v1`（见
+`frontend/.env.desktop`）。终端用户无需自行配置远程服务器；本地工作台可不登录离线使用，
+登录后按项目启用同步。平台管理员登录后可通过顶栏「管理」进入账号/配额/运维界面。
+
+若需临时指向其他 staging，可覆盖为 `.env.desktop.local` 中的
+`VITE_CLOUD_API_BASE_URL`；未覆盖时始终使用上述统一服务器。
 
 ## 已实现的领域边界
 

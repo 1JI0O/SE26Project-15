@@ -194,7 +194,7 @@ function syncLabel(mode: string) {
 
 function openSyncDialog(projectId: number) {
   if (!auth.authenticated || !auth.verified) {
-    ElMessage.warning('请先登录云端账号并完成邮箱验证')
+    ElMessage.warning('请先登录后再启用项目云同步')
     void router.push('/login')
     return
   }
