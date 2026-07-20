@@ -1,6 +1,8 @@
 # TraceLab 当前软件架构
 
-> 本文基于仓库当前源码整理，最后核对日期：2026-07-16。描述对象是 `backend/`、`frontend/`、`database/` 和 `docker-compose.yml` 中已经存在的实现；`UIPrototype/` 与 `workspace_placeholder.py` 的内容属于原型/兼容层。
+> 本文基于仓库当前源码整理，最后核对日期：2026-07-20。描述对象是本地应用
+> `backend/`、`frontend/`，以及独立账号/同步产品 `server/`；`UIPrototype/` 与
+> `workspace_placeholder.py` 属于原型/兼容层。
 
 ## 1. 架构结论
 
@@ -9,7 +11,7 @@ TraceLab 是一个本地优先、单体后端、双运行壳的论文—代码�
 - Web 模式由 Vite 承载 Vue 3 页面，Vite 把 `/api` 代理到 FastAPI。
 - Desktop 模式由 Tauri 2 承载同一套 Vue 前端；Tauri 启动随应用打包的 FastAPI/PyInstaller sidecar，前端访问 `127.0.0.1:8765`。
 - FastAPI 以 `/api/v1` 统一暴露项目、论文、代码、张量流、追溯、Agent、工作台和集成设置接口。
-- 默认数据库是 SQLite；SQLModel/SQLAlchemy 负责实体和会话，Alembic 迁移是当前权威演进路径。`docker-compose.yml` 中的 PostgreSQL 是可选开发基础设施，不是默认运行时数据库。
+- Local API 默认且只使用 SQLite；远程 PostgreSQL 由独立 `server/compose.yaml` 拥有，不进入 Desktop sidecar。
 - PDF、代码 ZIP、代码编辑覆盖物、论文解析任务与 MinerU 缓存存放在本地文件系统；数据库存放项目元数据、结构化文档、代码分析、追溯关系、Agent 运行审计和配置。
 - 论文解析可接本地 MinerU 或官方 MinerU API；追溯增强和 Agent 可接任意 OpenAI-compatible Chat Completions 服务；Agent 还可以发现外部 HTTP MCP 工具。
 - 代码分析、张量流和静态追溯不依赖 LLM。LLM 不可用时，追溯降级为静态候选，Agent 不执行写操作。
@@ -136,7 +138,7 @@ TraceLab/
 ├── README.md                         # 配置、启动、演示闭环、测试
 ├── Makefile                          # 根目录命令
 ├── .env.example                      # 环境变量模板
-├── docker-compose.yml                # 可选 PostgreSQL 16
+├── server/                           # 独立账号、同步、Blob、管理员与部署
 ├── database/
 │   ├── schema.sql                    # 早期/兼容基础表快照
 │   └── seed.sql                      # 种子脚本
@@ -528,8 +530,8 @@ erDiagram
 迁移链为：
 
 ```text
-0001_legacy_baseline -> 0002_trace_agent -> 0003_integration_config
-  -> 0004_agent_runtime -> 0005_runtime_events_analysis_cache (head)
+0001_legacy_baseline -> ... -> 0007_cloud_consistency
+  -> 0008_local_artifact_versions -> 0009_agent_analysis (head)
 ```
 
 `backend/app/models/entities.py` 是当前实体来源，`db/session.py` 创建 engine 并注册 metadata，`migration_runner.py` 优先运行 Alembic；没有 Alembic 时只对 SQLite 使用兼容升级。`database/schema.sql` 只覆盖早期基础表，不能代表当前完整 schema。
@@ -558,7 +560,7 @@ erDiagram
 | OpenAI-compatible LLM | 默认关闭 | `POST {base_url}/chat/completions` | `IntegrationConfig` 或 `TRACELAB_LLM_*` | 追溯静态降级；Agent degraded 且不写入 |
 | GitHub | 用户主动触发 | 下载公开仓库 archive | `POST /code/github`、clone timeout | 返回导入/归档校验错误 |
 | 外部 MCP | 默认不启用/不可信 | HTTP JSON-RPC `initialize`、`tools/list` | Agent plugin roots + capability setting | 能力不可用或工具失败 |
-| PostgreSQL | 非默认 | SQLAlchemy `DATABASE_URL` | `docker-compose.yml` | 需要 Alembic 和部署侧连接管理 |
+| 远程账号/同步服务器 | 用户显式启用 | HTTPS `/api/v1` | `server/.env` | 不可用时本地工作台继续运行 |
 
 应用设置优先于环境默认值：`integration_settings.py` 先读取数据库 `IntegrationConfig`，尚未保存时才构造环境默认值。读取接口只返回密钥是否已配置，不返回密钥正文。
 
@@ -589,29 +591,31 @@ flowchart TD
   S --> N
 ```
 
-## 13. 云端服务器、账号与同步设计
+## 13. 独立账号与同步服务器
 
-当前代码仍是本地优先实现，尚未包含用户认证、workspace 成员权限或云端同步。下一阶段建议在一台 4 vCPU、16 GB RAM、50 GB 磁盘的 Linux 服务器上，以 Docker Compose 部署 Caddy/Nginx、FastAPI Cloud API、一个后台 Worker 和 PostgreSQL；PDF/代码等大文件放到本地 content-addressed blob 目录，数据库和 blob 每晚备份到外部对象存储。
+账号、Workspace、基础同步和 Blob 已从 Local API 移入独立 `server/`。完整应用前端和本地计算仍
+只在用户设备运行；服务器不构建 `frontend/`，不执行 MinerU、代码分析、LLM 或 Agent。
 
 ```mermaid
 flowchart LR
-  Client[Browser / Tauri Desktop] --> Proxy[HTTPS Reverse Proxy]
-  Proxy --> Web[Vue 静态产物]
-  Proxy --> CloudAPI[Cloud FastAPI\nAuth + Workspace + Sync]
+  Client["本地 Web / Tauri Desktop"] --> Proxy["HTTPS Reverse Proxy"]
+  Proxy --> CloudAPI["Server FastAPI\nAuth + Workspace + Sync"]
+  Proxy --> Admin["最小管理员控制台"]
   CloudAPI --> PG[(PostgreSQL)]
   CloudAPI --> Blob[(Blob volume)]
-  Worker[Worker\n论文解析 / 代码分析 / GC] --> PG
+  Worker["Maintenance Worker\n邮件 / GC / 事件压缩"] --> PG
   Worker --> Blob
-  CloudAPI --> Worker
   DesktopLocal[Desktop 本地 FastAPI\nSQLite + 文件] --> Sync[Sync Coordinator\noutbox/inbox + cursor]
   Sync -->|HTTPS bearer| CloudAPI
-  CloudAPI -.可选.-> MinerU[外部 MinerU]
-  CloudAPI -.可选.-> LLM[OpenAI-compatible LLM]
 ```
 
-账号采用 `user_account + auth_session + device + workspace_member` 模型：密码使用 Argon2id；access token 短期有效，refresh token 旋转且只保存哈希；浏览器使用 HttpOnly Secure cookie，Desktop 使用系统钥匙串；所有项目接口通过 workspace 成员角色授权。现有 `project`、论文、代码和追溯实体需要增加 `workspace_id`、`public_id`、`version`、`deleted_at` 等云端字段。
+账号采用 `user_account + auth_session + device + workspace_member`：密码使用 Argon2id；access
+token 短期有效，refresh token 旋转且只保存哈希；Browser 使用 HttpOnly Secure Cookie，Desktop
+使用系统凭据库；所有项目/Blob/同步接口通过 Workspace 成员角色授权。
 
-同步不传输 SQLite 文件，而是通过 `sync_event`、`sync_receipt`、设备 cursor 和删除 tombstone 实现版本化 push/pull：项目元数据和用户决策使用乐观并发控制，消息采用追加合并，文件使用不可变 SHA-256 blob 版本，分析结果作为可重建派生数据。详细的资源配额、账号接口、冲突策略、文件上传时序、备份策略和实施顺序见 [云端服务器、账号与同步设计](cloud-sync-architecture.md)。
+同步不传输 SQLite 文件，通过 `sync_event`、`sync_receipt`、设备 cursor 和 tombstone 实现版本化
+push/pull；只有 `cloud_enabled` 项目进入 outbox。项目/TraceLink 使用乐观锁，消息追加，文件使用
+不可变 SHA-256 Blob 版本。详细约束见[账号与同步架构](cloud-sync-architecture.md)。
 
 ## 14. 当前实现边界
 

@@ -5,7 +5,21 @@ on:
   pull_request:
 
 jobs:
-  test:
+  local-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Local backend checks
+        working-directory: backend
+        run: |
+          uv sync --frozen --extra dev
+          uv run ruff check app tests
+          uv run pytest -q
+
+  sync-server:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -23,18 +37,28 @@ jobs:
           --health-retries 12
     env:
       TEST_POSTGRES_URL: postgresql+psycopg://tracelab:tracelab-test@127.0.0.1:5432/tracelab_test
+      APP_ENV: test
+      DATABASE_URL: sqlite:////tmp/tracelab-server-ci.db
+      CLOUD_BLOB_ROOT: /tmp/tracelab-server/blobs
+      CLOUD_TMP_ROOT: /tmp/tracelab-server/tmp
+      CLOUD_JWT_SECRET: ci-only-secret-with-at-least-thirty-two-bytes
       CLOUD_SYNC_FEATURE_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - name: Backend checks
-        working-directory: backend
+      - name: Sync server checks
+        working-directory: server
         run: |
-          uv sync --frozen
-          uv run ruff check app tests
+          uv sync --frozen --extra dev
+          uv run ruff check tracelab_server tests
           uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

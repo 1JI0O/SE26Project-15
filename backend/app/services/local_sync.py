@@ -5,8 +5,8 @@ from typing import Any
 
 from sqlmodel import Session
 
-from app.models.cloud_entities import LocalSyncOutbox, LocalSyncState
 from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
+from app.models.sync import LocalSyncOutbox, LocalSyncState
 
 
 def _state(session: Session, project: Project) -> LocalSyncState | None:

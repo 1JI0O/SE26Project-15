@@ -129,12 +129,11 @@ def _detect_local_revision(engine: Engine, tables: set[str]) -> str:
     return detected
 
 
-def _alembic_config(database_url: str, *, cloud: bool = False) -> Any:
+def _alembic_config(database_url: str) -> Any:
     from alembic.config import Config
 
     config = Config()
-    directory = "cloud_migrations" if cloud else "migrations"
-    config.set_main_option("script_location", str(Path(__file__).with_name(directory)))
+    config.set_main_option("script_location", str(Path(__file__).with_name("migrations")))
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config
 
@@ -161,29 +160,6 @@ def _run_alembic(engine: Engine) -> None:
         ):
             command.stamp(config, detected_revision)
     command.upgrade(config, "head")
-
-
-def upgrade_cloud_database(engine: Engine) -> None:
-    if engine.url.get_backend_name() == "sqlite":
-        raise RuntimeError("Cloud database migrations require PostgreSQL")
-    tables = set(inspect(engine).get_table_names())
-    current_revision = None
-    if "alembic_version" in tables:
-        with engine.connect() as connection:
-            current_revision = connection.execute(
-                text("SELECT version_num FROM alembic_version")
-            ).scalar_one_or_none()
-    if (
-        "project" in tables
-        or ("user_account" in tables and "alembic_version" not in tables)
-        or (current_revision is not None and current_revision != "0001_cloud_baseline")
-    ):
-        raise RuntimeError(
-            "Legacy/mixed cloud schema detected; use the explicit cloud rebuild procedure"
-        )
-    from alembic import command
-
-    command.upgrade(_alembic_config(_database_url(engine), cloud=True), "head")
 
 
 def _column_names(engine: Engine, table: str) -> set[str]:

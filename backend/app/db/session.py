@@ -3,34 +3,7 @@ from pathlib import Path
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.config import settings
-from app.db.migration_runner import upgrade_cloud_database, upgrade_database
-from app.models.cloud_entities import (
-    ArtifactVersion,
-    AuditLog,
-    AuthRateLimit,
-    AuthSession,
-    BackgroundJob,
-    BlobContent,
-    BlobObject,
-    BlobReference,
-    CloudEntity,
-    CloudProject,
-    Device,
-    DeviceProjectBinding,
-    EmailToken,
-    EntityTombstone,
-    LocalSyncConflict,
-    LocalSyncInbox,
-    LocalSyncOutbox,
-    LocalSyncState,
-    SyncDeviceCursor,
-    SyncEvent,
-    SyncReceipt,
-    UploadSession,
-    UserAccount,
-    Workspace,
-    WorkspaceMember,
-)
+from app.db.migration_runner import upgrade_database
 from app.models.entities import (
     AgentAnalysisArtifact,
     AgentAnalysisJob,
@@ -48,6 +21,12 @@ from app.models.entities import (
     Project,
     RepositoryAnalysisJob,
     TraceLink,
+)
+from app.models.sync import (
+    LocalSyncConflict,
+    LocalSyncInbox,
+    LocalSyncOutbox,
+    LocalSyncState,
 )
 
 _ = (
@@ -67,27 +46,6 @@ _ = (
     RepositoryAnalysisJob,
     IntegrationConfig,
     LocalArtifactVersion,
-    UserAccount,
-    AuthSession,
-    Device,
-    Workspace,
-    WorkspaceMember,
-    EmailToken,
-    AuditLog,
-    AuthRateLimit,
-    CloudProject,
-    CloudEntity,
-    SyncEvent,
-    SyncReceipt,
-    SyncDeviceCursor,
-    EntityTombstone,
-    BlobObject,
-    BlobContent,
-    BlobReference,
-    ArtifactVersion,
-    UploadSession,
-    DeviceProjectBinding,
-    BackgroundJob,
     LocalSyncOutbox,
     LocalSyncState,
     LocalSyncConflict,
@@ -113,10 +71,7 @@ engine = create_engine(settings.database_url, connect_args=_connect_args(), echo
 
 
 def init_db() -> None:
-    if settings.runtime_mode in {"cloud", "worker"}:
-        upgrade_cloud_database(engine)
-    else:
-        upgrade_database(engine, SQLModel.metadata)
+    upgrade_database(engine, SQLModel.metadata)
 
 
 def get_session() -> Session:
