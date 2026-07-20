@@ -66,17 +66,11 @@ class CapabilityRegistry:
 
     def enabled_skills(self) -> list[SkillCapability]:
         return [
-            skill
-            for skill in self.skills.values()
-            if self.records[skill.capability_id].eligible
+            skill for skill in self.skills.values() if self.records[skill.capability_id].eligible
         ]
 
     def enabled_tools(self) -> list[ToolCapability]:
-        return [
-            tool
-            for tool in self.tools.values()
-            if self.records[tool.capability_id].eligible
-        ]
+        return [tool for tool in self.tools.values() if self.records[tool.capability_id].eligible]
 
     def tool(self, name: str) -> ToolCapability | None:
         tool = self.tools.get(name)
@@ -422,9 +416,9 @@ def _register_mcp_server(
             "_",
             f"mcp__{plugin_id}__{server_id}__{remote_name}",
         ).strip("_")
-        digest = hashlib.sha256(
-            f"{plugin_id}\0{server_id}\0{remote_name}".encode()
-        ).hexdigest()[:10]
+        digest = hashlib.sha256(f"{plugin_id}\0{server_id}\0{remote_name}".encode()).hexdigest()[
+            :10
+        ]
         local_name = f"{raw_name[:53]}_{digest}"
 
         def execute(
@@ -508,9 +502,7 @@ def select_skills(
 
 
 def skill_prompt(skills: list[SkillCapability]) -> str:
-    skill_text = "\n\n".join(
-        f"## Skill: {skill.name}\n{skill.instructions}" for skill in skills
-    )
+    skill_text = "\n\n".join(f"## Skill: {skill.name}\n{skill.instructions}" for skill in skills)
     return (
         "You are TraceLab Agent, an evidence-driven coding and paper-research agent "
         "embedded in an IDE. Operate through eligible tools only. Read before editing. "

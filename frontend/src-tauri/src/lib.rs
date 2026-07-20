@@ -13,6 +13,38 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 struct BackendProcess(Mutex<Option<Child>>);
 
+const CLOUD_CREDENTIAL_SERVICE: &str = "com.se26project.tracelab.cloud";
+const CLOUD_CREDENTIAL_USER: &str = "refresh-token";
+
+fn cloud_credential() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(CLOUD_CREDENTIAL_SERVICE, CLOUD_CREDENTIAL_USER)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn store_cloud_refresh_token(token: String) -> Result<(), String> {
+    cloud_credential()?
+        .set_password(&token)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn load_cloud_refresh_token() -> Result<Option<String>, String> {
+    match cloud_credential()?.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn delete_cloud_refresh_token() -> Result<(), String> {
+    match cloud_credential()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn report_startup_error<R: tauri::Runtime>(
     app: &tauri::App<R>,
     data_dir: &Path,
@@ -50,6 +82,11 @@ fn stop_backend<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            store_cloud_refresh_token,
+            load_cloud_refresh_token,
+            delete_cloud_refresh_token
+        ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
@@ -87,14 +124,20 @@ pub fn run() {
             let child_stderr = child.stderr.take();
             app.manage(BackendProcess(Mutex::new(Some(child))));
 
-            let backend_error = Arc::new(Mutex::new(None::<String>));
+            let backend_error = Arc::new(Mutex::new(String::new()));
             let error_reader = child_stderr.map(|stderr| {
                 let event_backend_error = Arc::clone(&backend_error);
                 thread::spawn(move || {
                     for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                         log::error!("backend: {line}");
                         if let Ok(mut error) = event_backend_error.lock() {
-                            *error = Some(line);
+                            // Keep the beginning of the traceback (where the
+                            // actual exception lives) but cap the diagnostic so
+                            // a noisy child cannot fill the application volume.
+                            if error.len() < 128 * 1024 {
+                                error.push_str(&line);
+                                error.push('\n');
+                            }
                         }
                     }
                 })
@@ -129,7 +172,8 @@ pub fn run() {
                 let detail = backend_error
                     .lock()
                     .ok()
-                    .and_then(|error| error.clone())
+                    .map(|error| error.trim().to_string())
+                    .filter(|error| !error.is_empty())
                     .unwrap_or_else(|| "内置后端未能在 60 秒内启动。".to_string());
                 report_startup_error(app, &data_dir, detail)?;
                 return Ok(());

@@ -81,27 +81,36 @@
                 <el-icon class="project-icon"><Folder /></el-icon>
                 <div>
                   <strong :title="project.name">{{ project.name }}</strong>
-                  <small>#{{ project.id }}</small>
+                  <small>#{{ project.id }} · {{ syncLabel(project.sync_mode) }}</small>
                 </div>
               </div>
               <p :title="project.description || '未填写项目说明'">
                 {{ project.description || '未填写项目说明' }}
               </p>
               <time :datetime="project.updated_at">{{ formatDate(project.updated_at) }}</time>
-              <el-button
-                class="open-button"
-                size="small"
-                text
-                type="primary"
-                :icon="ArrowRight"
-                aria-label="打开项目"
-                @click="openProject(project.id)"
-              />
+              <div class="row-actions">
+                <template v-if="localCloudSyncAvailable">
+                  <el-button v-if="project.sync_mode === 'local_only'" size="small" text @click.stop="openSyncDialog(project.id)">启用同步</el-button>
+                  <el-button v-else-if="project.sync_mode === 'cloud_enabled'" size="small" text @click.stop="setSyncMode(project.id, 'cloud_paused')">暂停</el-button>
+                  <el-button v-else-if="project.sync_mode === 'cloud_paused'" size="small" text @click.stop="setSyncMode(project.id, 'cloud_enabled')">继续</el-button>
+                  <el-button v-if="['cloud_enabled', 'cloud_paused'].includes(project.sync_mode)" size="small" text type="danger" @click.stop="detach(project.id)">解除绑定</el-button>
+                  <el-button v-else-if="project.sync_mode === 'cloud_detached'" size="small" text @click.stop="setSyncMode(project.id, 'local_only')">转为仅本地</el-button>
+                </template>
+                <el-button class="open-button" size="small" text type="primary" :icon="ArrowRight" aria-label="打开项目" @click="openProject(project.id)" />
+              </div>
             </article>
           </div>
         </template>
       </div>
     </section>
+    <el-dialog v-model="syncDialogOpen" title="启用项目云同步" width="480px">
+      <p>将同步项目元数据、原始 PDF、代码版本、追溯关系和人工审阅结果。分析缓存、界面布局以及 MinerU/LLM 密钥不会上传。</p>
+      <el-checkbox v-model="agentHistorySync">同步 Agent 对话、消息与记忆</el-checkbox>
+      <template #footer>
+        <el-button @click="syncDialogOpen = false">取消</el-button>
+        <el-button type="primary" :loading="sync.syncing" @click="enableSync">确认启用</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -111,16 +120,24 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import { localCloudSyncAvailable } from '@/api/http'
 import { useProjectStore } from '@/stores/project'
+import { useAuthStore } from '@/stores/auth'
+import { useSyncStore } from '@/stores/sync'
 
 const router = useRouter()
 const store = useProjectStore()
+const auth = useAuthStore()
+const sync = useSyncStore()
 const managing = ref(false)
 const selectedIds = ref<number[]>([])
 const form = reactive({
   name: '',
   description: '',
 })
+const syncDialogOpen = ref(false)
+const syncProjectId = ref<number | null>(null)
+const agentHistorySync = ref(true)
 
 const allSelected = computed({
   get: () =>
@@ -164,6 +181,63 @@ async function submit() {
 
 function openProject(projectId: number) {
   void router.push({ name: 'workspace', params: { id: projectId } })
+}
+
+function syncLabel(mode: string) {
+  return {
+    local_only: '仅本地',
+    cloud_enabled: '云同步',
+    cloud_paused: '同步已暂停',
+    cloud_detached: '已解除云端绑定',
+  }[mode] ?? mode
+}
+
+function openSyncDialog(projectId: number) {
+  if (!auth.authenticated || !auth.verified) {
+    ElMessage.warning('请先登录云端账号并完成邮箱验证')
+    void router.push('/login')
+    return
+  }
+  syncProjectId.value = projectId
+  agentHistorySync.value = true
+  syncDialogOpen.value = true
+}
+
+async function enableSync() {
+  if (syncProjectId.value === null) return
+  try {
+    await sync.enable(syncProjectId.value, agentHistorySync.value)
+    syncDialogOpen.value = false
+    await store.fetchProjects()
+    ElMessage.success('项目云同步已启用')
+  } catch {
+    ElMessage.error('启用同步失败，本地项目未被删除或覆盖')
+  }
+}
+
+async function setSyncMode(
+  projectId: number,
+  mode: 'cloud_enabled' | 'cloud_paused' | 'cloud_detached' | 'local_only',
+) {
+  try {
+    await sync.setMode(projectId, mode)
+    await store.fetchProjects()
+  } catch {
+    ElMessage.error('同步状态更新失败')
+  }
+}
+
+async function detach(projectId: number) {
+  try {
+    await ElMessageBox.confirm(
+      '仅解除当前设备与云端项目的绑定，本机项目将回到“仅本地”。云端项目和其他设备不受影响。',
+      '解除云端绑定',
+      { type: 'warning', confirmButtonText: '解除绑定', cancelButtonText: '取消' },
+    )
+    await setSyncMode(projectId, 'local_only')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error('解除绑定失败')
+  }
 }
 
 function formatDate(value: string) {
@@ -293,6 +367,12 @@ async function confirmDelete() {
 
 .project-content {
   min-height: 334px;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .project-loading {

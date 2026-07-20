@@ -218,9 +218,7 @@ def query_agent(
         capability = registry.tool(step.tool_name or "")
         if capability is not None and capability.read_only:
             try:
-                result = registry.execute(
-                    session, project_id, step.tool_name or "", step.arguments
-                )
+                result = registry.execute(session, project_id, step.tool_name or "", step.arguments)
             except (ValueError, ValidationError):
                 return AgentQueryResponse(
                     answer="Agent 提出的只读工具参数无效。",

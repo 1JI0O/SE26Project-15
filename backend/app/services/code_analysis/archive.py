@@ -42,9 +42,7 @@ def _is_zip_symlink(member: zipfile.ZipInfo) -> bool:
 
 def safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     if len(archive.infolist()) > MAX_ARCHIVE_FILES:
-        raise InvalidCodeArchiveError(
-            f"Archive contains more than {MAX_ARCHIVE_FILES} entries"
-        )
+        raise InvalidCodeArchiveError(f"Archive contains more than {MAX_ARCHIVE_FILES} entries")
     members: list[zipfile.ZipInfo] = []
     total_size = 0
     for member in archive.infolist():
@@ -57,9 +55,7 @@ def safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
         members.append(member)
         total_size += member.file_size
         if len(members) > MAX_ARCHIVE_FILES:
-            raise InvalidCodeArchiveError(
-                f"Archive contains more than {MAX_ARCHIVE_FILES} files"
-            )
+            raise InvalidCodeArchiveError(f"Archive contains more than {MAX_ARCHIVE_FILES} files")
         if total_size > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
             raise InvalidCodeArchiveError("Archive uncompressed size exceeds the safety limit")
     return members
@@ -79,9 +75,7 @@ def list_archive_entries(archive: zipfile.ZipFile) -> tuple[list[ArchiveEntry], 
     members = safe_members(archive)
     specs = build_ignore_specs(archive, members)
     included = [
-        member
-        for member in members
-        if not is_ignored(PurePosixPath(member.filename), specs)
+        member for member in members if not is_ignored(PurePosixPath(member.filename), specs)
     ]
     root = common_top_folder([member.filename for member in included])
     prefix = f"{root}/" if root else ""

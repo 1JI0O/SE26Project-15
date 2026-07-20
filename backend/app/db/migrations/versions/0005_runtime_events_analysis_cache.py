@@ -10,6 +10,24 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Alembic creates version_num as VARCHAR(32), while this revision id is 34
+    # characters. Widen it before Alembic records the completed revision.
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("alembic_version") as batch:
+            batch.alter_column(
+                "version_num",
+                existing_type=sa.String(32),
+                type_=sa.String(64),
+                nullable=False,
+            )
+    else:
+        op.alter_column(
+            "alembic_version",
+            "version_num",
+            existing_type=sa.String(32),
+            type_=sa.String(64),
+            nullable=False,
+        )
     op.add_column(
         "agent_run",
         sa.Column("capability_snapshot_json", sa.JSON(), nullable=False, server_default="[]"),

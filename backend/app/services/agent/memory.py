@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import or_
 from sqlmodel import Session, select
 
-from app.models.entities import AgentMemory, utc_now
+from app.models.entities import AgentConversation, AgentMemory, Project, utc_now
 from app.schemas.agent import AgentMemoryCreate, AgentMemoryRead
 
 
@@ -55,11 +55,32 @@ def create_memory(
     ).first()
     now = utc_now()
     if existing is not None:
+        previous_version = existing.version
         existing.importance = max(existing.importance, payload.importance)
         existing.updated_at = now
         if source:
             existing.source_json = {**existing.source_json, **source}
+        existing.version += 1
         session.add(existing)
+        project = session.get(Project, project_id)
+        if project is not None and project.agent_history_sync:
+            from app.services.local_sync import record_local_operation
+
+            record_local_operation(
+                session,
+                project,
+                "agent_memory",
+                existing.public_id,
+                {
+                    "project_public_id": project.public_id,
+                    "scope": existing.scope,
+                    "kind": existing.kind,
+                    "content": existing.content,
+                    "importance": existing.importance,
+                    "source": existing.source_json,
+                },
+                base_version=previous_version,
+            )
         session.commit()
         session.refresh(existing)
         return existing
@@ -74,6 +95,31 @@ def create_memory(
         source_json=source or {},
     )
     session.add(memory)
+    project = session.get(Project, project_id)
+    if project is not None and project.agent_history_sync:
+        from app.services.local_sync import record_local_operation
+
+        conversation = (
+            session.get(AgentConversation, memory.conversation_id)
+            if memory.conversation_id
+            else None
+        )
+        record_local_operation(
+            session,
+            project,
+            "agent_memory",
+            memory.public_id,
+            {
+                "project_public_id": project.public_id,
+                "conversation_public_id": conversation.public_id if conversation else None,
+                "scope": memory.scope,
+                "kind": memory.kind,
+                "content": memory.content,
+                "importance": memory.importance,
+                "source": memory.source_json,
+            },
+            base_version=0,
+        )
     session.commit()
     session.refresh(memory)
     return memory
@@ -133,6 +179,19 @@ def delete_memory(session: Session, project_id: int, memory_id: str) -> bool:
     memory = session.get(AgentMemory, memory_id)
     if memory is None or memory.project_id not in {None, project_id}:
         return False
+    project = session.get(Project, project_id)
+    if project is not None and project.agent_history_sync:
+        from app.services.local_sync import record_local_operation
+
+        record_local_operation(
+            session,
+            project,
+            "agent_memory",
+            memory.public_id,
+            {"project_public_id": project.public_id},
+            operation="delete",
+            base_version=memory.version,
+        )
     session.delete(memory)
     session.commit()
     return True

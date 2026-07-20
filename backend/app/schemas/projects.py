@@ -10,8 +10,12 @@ class ProjectCreate(BaseModel):
 
 class ProjectRead(BaseModel):
     id: int
+    public_id: str
     name: str
     description: str
+    version: int
+    sync_mode: str
+    agent_history_sync: bool
     created_at: datetime
     updated_at: datetime
 

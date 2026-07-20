@@ -3,7 +3,34 @@ from pathlib import Path
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.config import settings
-from app.db.migration_runner import upgrade_database
+from app.db.migration_runner import upgrade_cloud_database, upgrade_database
+from app.models.cloud_entities import (
+    ArtifactVersion,
+    AuditLog,
+    AuthRateLimit,
+    AuthSession,
+    BackgroundJob,
+    BlobContent,
+    BlobObject,
+    BlobReference,
+    CloudEntity,
+    CloudProject,
+    Device,
+    DeviceProjectBinding,
+    EmailToken,
+    EntityTombstone,
+    LocalSyncConflict,
+    LocalSyncInbox,
+    LocalSyncOutbox,
+    LocalSyncState,
+    SyncDeviceCursor,
+    SyncEvent,
+    SyncReceipt,
+    UploadSession,
+    UserAccount,
+    Workspace,
+    WorkspaceMember,
+)
 from app.models.entities import (
     AgentCapabilitySetting,
     AgentConversation,
@@ -14,6 +41,7 @@ from app.models.entities import (
     AgentToolRequest,
     CodeRepository,
     IntegrationConfig,
+    LocalArtifactVersion,
     PaperDocument,
     Project,
     RepositoryAnalysisJob,
@@ -34,6 +62,32 @@ _ = (
     AgentToolRequest,
     RepositoryAnalysisJob,
     IntegrationConfig,
+    LocalArtifactVersion,
+    UserAccount,
+    AuthSession,
+    Device,
+    Workspace,
+    WorkspaceMember,
+    EmailToken,
+    AuditLog,
+    AuthRateLimit,
+    CloudProject,
+    CloudEntity,
+    SyncEvent,
+    SyncReceipt,
+    SyncDeviceCursor,
+    EntityTombstone,
+    BlobObject,
+    BlobContent,
+    BlobReference,
+    ArtifactVersion,
+    UploadSession,
+    DeviceProjectBinding,
+    BackgroundJob,
+    LocalSyncOutbox,
+    LocalSyncState,
+    LocalSyncConflict,
+    LocalSyncInbox,
 )
 
 
@@ -55,7 +109,10 @@ engine = create_engine(settings.database_url, connect_args=_connect_args(), echo
 
 
 def init_db() -> None:
-    upgrade_database(engine, SQLModel.metadata)
+    if settings.runtime_mode in {"cloud", "worker"}:
+        upgrade_cloud_database(engine)
+    else:
+        upgrade_database(engine, SQLModel.metadata)
 
 
 def get_session() -> Session:

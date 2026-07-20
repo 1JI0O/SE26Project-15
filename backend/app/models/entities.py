@@ -14,16 +14,29 @@ class Project(SQLModel, table=True):
     __tablename__ = "project"
 
     id: int | None = Field(default=None, primary_key=True)
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    cloud_workspace_id: str | None = Field(default=None, index=True, max_length=36)
     name: str = Field(index=True, max_length=160)
     description: str = Field(default="")
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+    version: int = Field(default=1, ge=1)
+    sync_mode: str = Field(default="local_only", max_length=24, index=True)
+    agent_history_sync: bool = Field(default=True)
+    deleted_at: datetime | None = Field(default=None)
 
 
 class PaperDocument(SQLModel, table=True):
     __tablename__ = "paper_document"
 
     id: int | None = Field(default=None, primary_key=True)
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
+    blob_id: str | None = Field(default=None, max_length=36)
     project_id: int = Field(foreign_key="project.id", index=True)
     filename: str = Field(max_length=255)
     storage_path: str
@@ -46,6 +59,11 @@ class CodeRepository(SQLModel, table=True):
     __tablename__ = "code_repository"
 
     id: int | None = Field(default=None, primary_key=True)
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
+    blob_id: str | None = Field(default=None, max_length=36)
     project_id: int = Field(foreign_key="project.id", index=True)
     filename: str = Field(max_length=255)
     storage_path: str
@@ -71,6 +89,30 @@ class CodeRepository(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class LocalArtifactVersion(SQLModel, table=True):
+    __tablename__ = "local_artifact_version"
+    __table_args__ = (
+        UniqueConstraint(
+            "entity_type",
+            "entity_public_id",
+            "version_number",
+            name="uq_local_artifact_version",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    entity_type: str = Field(index=True, max_length=64)
+    entity_public_id: str = Field(index=True, max_length=36)
+    version_number: int = Field(ge=1)
+    blob_id: str | None = Field(default=None, max_length=36)
+    cloud_version_id: str | None = Field(default=None, max_length=36)
+    filename: str = Field(max_length=255)
+    storage_path: str
+    is_current: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class TraceLink(SQLModel, table=True):
     __tablename__ = "trace_link"
     __table_args__ = (
@@ -79,6 +121,10 @@ class TraceLink(SQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
     trace_id: str = Field(
         default_factory=lambda: f"trace-{uuid4().hex}",
         index=True,
@@ -169,6 +215,10 @@ class AgentConversation(SQLModel, table=True):
         primary_key=True,
         max_length=72,
     )
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
     project_id: int = Field(foreign_key="project.id", index=True)
     title: str = Field(default="新对话", max_length=160)
     status: str = Field(default="active", max_length=24, index=True)
@@ -182,6 +232,10 @@ class AgentMessage(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("message_id", name="uq_agent_message_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
     message_id: str = Field(
         default_factory=lambda: f"msg-{uuid4().hex}",
         index=True,
@@ -214,6 +268,10 @@ class AgentRun(SQLModel, table=True):
         primary_key=True,
         max_length=72,
     )
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
     conversation_id: str = Field(
         foreign_key="agent_conversation.conversation_id",
         index=True,
@@ -246,6 +304,10 @@ class AgentRunEvent(SQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
     event_id: str = Field(
         default_factory=lambda: f"event-{uuid4().hex}",
         index=True,
@@ -276,6 +338,10 @@ class AgentMemory(SQLModel, table=True):
         primary_key=True,
         max_length=72,
     )
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
     project_id: int | None = Field(default=None, foreign_key="project.id", index=True)
     conversation_id: str | None = Field(
         default=None,

@@ -15,4 +15,3 @@ def test_create_and_list_project() -> None:
     assert created.json()["name"] == "接口契约验证项目"
     assert listed.status_code == 200
     assert any(project["id"] == created.json()["id"] for project in listed.json())
-

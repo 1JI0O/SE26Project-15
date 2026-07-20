@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:desktop": "vite --mode desktop --host 127.0.0.1",
     "build": "vue-tsc --noEmit && vite build",
     "build:sidecar": "node scripts/build-backend-sidecar.mjs",
-    "build:desktop": "pnpm build:sidecar && pnpm build",
+    "build:desktop": "pnpm build:sidecar && vue-tsc --noEmit && vite build --mode desktop",
     "desktop:dev": "pnpm build:sidecar && tauri dev",
     "desktop:build": "tauri build --bundles app,dmg",
     "preview": "vite preview --host 127.0.0.1",

@@ -61,9 +61,7 @@ def test_paper_job_api_returns_status_and_persists_result(tmp_path: Path) -> Non
             assert pages.status_code == 200
             assert pages.json()[0]["anchors"][0]["id"] == "p1-b1"
 
-            paper_document = client.get(
-                f"/api/v1/projects/{project_id}/workspace/paper-document"
-            )
+            paper_document = client.get(f"/api/v1/projects/{project_id}/workspace/paper-document")
             assert paper_document.status_code == 200
             assert paper_document.json()["source"] == "normalized-fallback"
             assert paper_document.json()["markdown"].startswith("# TraceLab Stub Paper")
@@ -119,17 +117,13 @@ def test_paper_document_serves_mineru_markdown_and_assets(tmp_path: Path) -> Non
                     break
                 time.sleep(0.01)
 
-            document = client.get(
-                f"/api/v1/projects/{project_id}/workspace/paper-document"
-            )
+            document = client.get(f"/api/v1/projects/{project_id}/workspace/paper-document")
             assert document.status_code == 200
             assert document.json()["source"] == "mineru-markdown"
             assert document.json()["sections"][1]["level"] == 2
 
             image_name = f"{'a' * 64}.jpg"
-            asset = client.get(
-                f"/api/v1/projects/{project_id}/paper/assets/images/{image_name}"
-            )
+            asset = client.get(f"/api/v1/projects/{project_id}/paper/assets/images/{image_name}")
             assert asset.status_code == 200
             assert asset.content == b"jpeg-test"
             assert asset.headers["content-type"] == "image/jpeg"

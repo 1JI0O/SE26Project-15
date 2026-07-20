@@ -20,6 +20,7 @@ from app.services.document_parsers.jobs import (
     PaperParsingService,
     get_paper_parsing_service,
 )
+from app.services.local_sync import paper_payload, record_local_operation
 from app.services.paper_markdown import build_fallback_markdown, extract_markdown_sections
 from app.services.paper_parser import parse_pdf
 from app.services.workspace_placeholder import workspace_payload
@@ -73,6 +74,16 @@ def _document_for_job(
         pages_json=list(result.get("pages", [])),
     )
     session.add(document)
+    project = get_project_or_404(job.project_id, session)
+    session.flush()
+    record_local_operation(
+        session,
+        project,
+        "paper_document",
+        document.public_id,
+        paper_payload(project, document),
+        base_version=0,
+    )
     session.commit()
     session.refresh(document)
     return document
@@ -91,7 +102,7 @@ async def upload_paper(
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
 ) -> PaperDocumentRead:
-    get_project_or_404(project_id, session)
+    project = get_project_or_404(project_id, session)
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
@@ -110,6 +121,15 @@ async def upload_paper(
         paragraphs_json=parsed["paragraphs"],
     )
     session.add(document)
+    session.flush()
+    record_local_operation(
+        session,
+        project,
+        "paper_document",
+        document.public_id,
+        paper_payload(project, document),
+        base_version=0,
+    )
     session.commit()
     session.refresh(document)
     return _paper_read(document)

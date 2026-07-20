@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -376,6 +377,31 @@ def save_code_file(
     code.analysis_status = "stale"
     code.analysis_error = None
     session.add(code)
+    project = session.get(Project, project_id)
+    if project is not None:
+        from app.services.local_sync import record_local_operation
+
+        edit_id = hashlib.sha256(
+            f"{code.public_id}:{code.revision}:{file_path}".encode()
+        ).hexdigest()
+        record_local_operation(
+            session,
+            project,
+            "code_edit",
+            edit_id,
+            {
+                "project_public_id": project.public_id,
+                "repository_public_id": code.public_id,
+                "repository_revision": code.revision,
+                "path": file_path,
+                "filename": Path(file_path).name,
+                "requires_blob": True,
+                # Kept only in the Desktop SQLite outbox. The sync client
+                # removes it before push and sends a blob reference instead.
+                "_upload_content": content,
+            },
+            base_version=0,
+        )
     session.commit()
     from app.services.analysis_jobs import ensure_repository_analysis
 
@@ -415,10 +441,14 @@ def build_tensor_flow_payload(
             stale=False,
         )
         return payload
-    analysis = analysis or code.analysis_json or {
-        "architecture_graph": {"roots": [], "graphs": {}, "default_root": None},
-        "tensor_graph": code.tensor_graph_json,
-    }
+    analysis = (
+        analysis
+        or code.analysis_json
+        or {
+            "architecture_graph": {"roots": [], "graphs": {}, "default_root": None},
+            "tensor_graph": code.tensor_graph_json,
+        }
+    )
     architecture = analysis.get("architecture_graph", {})
     graphs = architecture.get("graphs", {})
     selected_root = root_symbol if root_symbol in graphs else architecture.get("default_root")

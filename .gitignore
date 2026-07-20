@@ -3,6 +3,10 @@
 __MACOSX/
 .AppleDouble/
 .env
+.env.local
+.env.cloud
+*.env.desktop.local
+.env.desktop.local
 .venv/
 __pycache__/
 *.pyc

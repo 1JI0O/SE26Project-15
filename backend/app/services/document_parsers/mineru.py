@@ -45,9 +45,7 @@ class MinerUSettings:
             language=os.getenv("TRACELAB_MINERU_LANGUAGE", defaults.language),
             parse_method=os.getenv("TRACELAB_MINERU_PARSE_METHOD", defaults.parse_method),
             request_timeout_seconds=float(
-                os.getenv(
-                    "TRACELAB_MINERU_REQUEST_TIMEOUT", defaults.request_timeout_seconds
-                )
+                os.getenv("TRACELAB_MINERU_REQUEST_TIMEOUT", defaults.request_timeout_seconds)
             ),
             task_timeout_seconds=float(
                 os.getenv("TRACELAB_MINERU_TASK_TIMEOUT", defaults.task_timeout_seconds)
@@ -217,9 +215,7 @@ class MinerUClient:
         chunks.extend(
             [
                 f"--{boundary}".encode(),
-                (
-                    f'Content-Disposition: form-data; name="files"; filename="{path.name}"'
-                ).encode(),
+                (f'Content-Disposition: form-data; name="files"; filename="{path.name}"').encode(),
                 b"Content-Type: application/pdf",
                 b"",
                 path.read_bytes(),

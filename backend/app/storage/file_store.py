@@ -16,4 +16,3 @@ def save_upload(project_id: int, artifact_type: str, upload: UploadFile) -> Path
             target.write(chunk)
     upload.file.seek(0)
     return path
-
