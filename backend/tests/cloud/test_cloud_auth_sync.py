@@ -75,7 +75,10 @@ def _register_verify_login(client: TestClient, email: str = "owner@example.com")
     return logged_in.json()
 
 
-def test_unverified_account_cannot_create_cloud_project(cloud_client: TestClient) -> None:
+def test_unverified_account_cannot_create_cloud_project(
+    cloud_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "cloud_require_email_verification", True)
     registered = cloud_client.post(
         "/api/v1/auth/register",
         json={"email": "pending@example.com", "password": "correct horse battery staple"},
@@ -98,6 +101,82 @@ def test_unverified_account_cannot_create_cloud_project(cloud_client: TestClient
         },
     )
     assert response.status_code == 403
+
+
+def test_unverified_account_can_create_cloud_project_when_verification_disabled(
+    cloud_client: TestClient,
+) -> None:
+    registered = cloud_client.post(
+        "/api/v1/auth/register",
+        json={"email": "auto-verified@example.com", "password": "correct horse battery staple"},
+    )
+    assert registered.status_code == 201
+    assert registered.json()["user"]["email_verified"] is True
+    logged_in = cloud_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "auto-verified@example.com",
+            "password": "correct horse battery staple",
+            "client_kind": "desktop",
+        },
+    ).json()
+    response = cloud_client.post(
+        "/api/v1/projects",
+        headers={"Authorization": f"Bearer {logged_in['access_token']}"},
+        json={
+            "workspace_id": logged_in["default_workspace"]["workspace_id"],
+            "name": "created without email verification",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["name"] == "created without email verification"
+
+
+def test_bootstrap_includes_device_bindings(cloud_client: TestClient) -> None:
+    auth = _register_verify_login(cloud_client, "bootstrap@example.com")
+    headers = {"Authorization": f"Bearer {auth['access_token']}"}
+    workspace_id = auth["default_workspace"]["workspace_id"]
+    created = cloud_client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"workspace_id": workspace_id, "name": "binding fixture"},
+    ).json()
+    cloud_client.patch(
+        f"/api/v1/projects/{created['public_id']}/device-sync",
+        headers=headers,
+        json={"sync_mode": "cloud_paused"},
+    )
+    bootstrap = cloud_client.get(
+        "/api/v1/sync/bootstrap",
+        headers=headers,
+        params={"workspace_id": workspace_id},
+    )
+    assert bootstrap.status_code == 200
+    body = bootstrap.json()
+    assert body["device_id"] == auth["device_id"]
+    assert body["last_pulled_seq"] == 0
+    assert {
+        "project_public_id": created["public_id"],
+        "sync_mode": "cloud_paused",
+    } in body["device_bindings"]
+
+
+def test_project_sync_enable_pause_detach(cloud_client: TestClient) -> None:
+    auth = _register_verify_login(cloud_client, "sync-control@example.com")
+    headers = {"Authorization": f"Bearer {auth['access_token']}"}
+    workspace_id = auth["default_workspace"]["workspace_id"]
+    created = cloud_client.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"workspace_id": workspace_id, "name": "sync control"},
+    ).json()
+    public_id = created["public_id"]
+    enabled = cloud_client.post(f"/api/v1/projects/{public_id}/sync/enable", headers=headers)
+    paused = cloud_client.post(f"/api/v1/projects/{public_id}/sync/pause", headers=headers)
+    detached = cloud_client.post(f"/api/v1/projects/{public_id}/sync/detach", headers=headers)
+    assert enabled.json()["sync_mode"] == "cloud_enabled"
+    assert paused.json()["sync_mode"] == "cloud_paused"
+    assert detached.json()["sync_mode"] == "cloud_detached"
 
 
 def test_project_sync_is_idempotent_and_conflicts_are_explicit(cloud_client: TestClient) -> None:

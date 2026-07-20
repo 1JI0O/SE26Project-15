@@ -43,12 +43,15 @@ def normalize_email(email: str) -> str:
 
 
 def user_read(user: UserAccount) -> dict:
+    email_verified = user.email_verified_at is not None
+    if not settings.cloud_require_email_verification:
+        email_verified = True
     return {
         "user_id": user.user_id,
         "email": user.email_normalized,
         "display_name": user.display_name,
         "status": user.status,
-        "email_verified": user.email_verified_at is not None,
+        "email_verified": email_verified,
         "is_platform_admin": user.is_platform_admin,
     }
 
@@ -108,10 +111,12 @@ def create_account(
     normalized = normalize_email(email)
     if session.exec(select(UserAccount).where(UserAccount.email_normalized == normalized)).first():
         raise HTTPException(status_code=409, detail="Account could not be created")
+    verified_at = None if settings.cloud_require_email_verification else datetime.now(UTC)
     user = UserAccount(
         email_normalized=normalized,
         password_hash=hash_password(password),
         display_name=display_name.strip() or normalized.split("@", 1)[0],
+        email_verified_at=verified_at,
     )
     session.add(user)
     session.flush()

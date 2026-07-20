@@ -225,6 +225,67 @@ def _persist_derived_result(
             payload_json=entity.payload_json,
         )
     )
+    _propagate_derived_snapshot_to_source(
+        session,
+        source,
+        processor_version=version_label,
+        result_blob_id=derived.blob_id,
+    )
+
+
+def _propagate_derived_snapshot_to_source(
+    session: Session,
+    source: BlobObject,
+    *,
+    processor_version: str,
+    result_blob_id: str,
+) -> None:
+    reference = session.exec(
+        select(BlobReference).where(
+            BlobReference.workspace_id == source.workspace_id,
+            BlobReference.blob_id == source.blob_id,
+            BlobReference.deleted_at.is_(None),
+            BlobReference.entity_type.in_(("paper_document", "code_repository")),
+        )
+    ).first()
+    if reference is None:
+        return
+    entity = session.exec(
+        select(CloudEntity).where(
+            CloudEntity.workspace_id == source.workspace_id,
+            CloudEntity.entity_type == reference.entity_type,
+            CloudEntity.public_id == reference.entity_public_id,
+            CloudEntity.deleted_at.is_(None),
+        )
+    ).first()
+    if entity is None:
+        return
+    entity.version += 1
+    entity.payload_json = {
+        **entity.payload_json,
+        "structured_snapshot_blob_id": result_blob_id,
+        "structured_snapshot_processor": processor_version,
+        "structured_snapshot_status": "ready",
+        "source_hash": source.sha256,
+    }
+    entity.updated_at = utc_now()
+    session.add(entity)
+    workspace = session.exec(
+        select(Workspace).where(Workspace.workspace_id == source.workspace_id).with_for_update()
+    ).one()
+    workspace.workspace_seq += 1
+    session.add(workspace)
+    session.add(
+        SyncEvent(
+            workspace_id=source.workspace_id,
+            workspace_seq=workspace.workspace_seq,
+            entity_type=entity.entity_type,
+            entity_public_id=entity.public_id,
+            operation="upsert",
+            entity_version=entity.version,
+            payload_json=entity.payload_json,
+        )
+    )
 
 
 def _execute_analysis_job(session: Session, job: BackgroundJob) -> None:

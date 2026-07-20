@@ -8,6 +8,7 @@ from app.models.cloud_entities import (
     CloudEntity,
     CloudProject,
     Device,
+    DeviceProjectBinding,
     EntityTombstone,
     SyncDeviceCursor,
     SyncEvent,
@@ -48,9 +49,30 @@ def bootstrap(
     tombstones = session.exec(
         select(EntityTombstone).where(EntityTombstone.workspace_id == workspace_id)
     ).all()
+    bindings = session.exec(
+        select(DeviceProjectBinding).where(
+            DeviceProjectBinding.workspace_id == workspace_id,
+            DeviceProjectBinding.device_id == identity.device_id,
+        )
+    ).all()
+    cursor = session.exec(
+        select(SyncDeviceCursor).where(
+            SyncDeviceCursor.workspace_id == workspace_id,
+            SyncDeviceCursor.device_id == identity.device_id,
+        )
+    ).first()
     return {
         "workspace_id": workspace_id,
+        "device_id": identity.device_id,
         "current_seq": workspace.workspace_seq if workspace else 0,
+        "last_pulled_seq": cursor.last_pulled_seq if cursor else 0,
+        "device_bindings": [
+            {
+                "project_public_id": item.project_public_id,
+                "sync_mode": item.sync_mode,
+            }
+            for item in bindings
+        ],
         "projects": [
             {
                 "public_id": item.public_id,
