@@ -48,6 +48,6 @@ def test_large_repository_analysis_runs_in_background_and_persists(monkeypatch) 
         graph = client.get(f"/api/v1/projects/{project_id}/workspace/tensor-flow").json()
 
     assert payload["tensor_graph"]["nodes"]
-    assert graph["analysis_status"] == "missing"
-    assert graph["renderer"] == "agent-dag-v1"
-    assert graph["nodes"] == []
+    assert graph["analysis_status"] == "ready"
+    assert graph["renderer"] == "architecture-dag-v2"
+    assert graph["nodes"]

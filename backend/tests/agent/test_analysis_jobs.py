@@ -19,6 +19,8 @@ from app.schemas.agent import AgentAnalysisJobCreate
 from app.services import workspace_service
 from app.services.agent.analysis_jobs import _persist_artifact, create_analysis_job
 from app.services.agent.analysis_tools import execute_tool
+from app.services.analysis_jobs import ANALYZER_VERSION
+from app.services.code_analysis.analyzer import analyze_code_archive
 from app.services.paper_markdown import inject_block_anchors
 
 
@@ -229,7 +231,9 @@ def test_publish_architecture_validates_evidence_and_depth(tmp_path: Path) -> No
     assert result["payload"]["nodes"][2]["depth"] == 2
 
 
-def test_agent_architecture_artifact_drives_workspace_graph(tmp_path: Path) -> None:
+def test_agent_architecture_artifact_does_not_override_local_workspace_graph(
+    tmp_path: Path,
+) -> None:
     with _session() as session:
         project, _paper, code = _artifacts(session, tmp_path)
         conversation = AgentConversation(project_id=project.id or 0, kind="analysis")
@@ -258,16 +262,20 @@ def test_agent_architecture_artifact_drives_workspace_graph(tmp_path: Path) -> N
         job.artifact_id = artifact.artifact_id
         job.status = "succeeded"
         session.add(job)
+        analysis = analyze_code_archive(code.storage_path)
+        code.analysis_json = analysis
+        code.tensor_graph_json = analysis["tensor_graph"]
+        code.analysis_revision = code.revision
+        code.analysis_version = ANALYZER_VERSION
+        code.analysis_status = "ready"
+        session.add(code)
         session.commit()
         graph = workspace_service.get_tensor_flow(session, project.id or 0)
 
-    assert graph["renderer"] == "agent-dag-v1"
+    assert graph["renderer"] == "architecture-dag-v2"
     assert graph["analysis_status"] == "ready"
-    assert [node["label"] for node in graph["nodes"]] == [
-        "Model.forward",
-        "self.encode",
-        "self.proj",
-    ]
+    assert graph["root_symbol"] == "models/net.py::Model"
+    assert "Model.forward" not in [node["label"] for node in graph["nodes"]]
 
 
 def test_agent_trace_publish_creates_only_proposed_evidence_backed_link(tmp_path: Path) -> None:

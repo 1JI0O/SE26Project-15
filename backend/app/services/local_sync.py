@@ -66,7 +66,7 @@ def paper_payload(project: Project, document: PaperDocument) -> dict[str, Any]:
 
 
 def repository_payload(project: Project, repository: CodeRepository) -> dict[str, Any]:
-    # The generated flow diagram (tensor graph + Agent-refined analysis) can be
+    # The locally generated flow diagram (tensor graph + architecture analysis) can be
     # hundreds of KB — far above the 64KB sync-event cap — so it travels as a
     # dedicated diagram blob rather than inline. ``requires_diagram_blob`` tells
     # the client to upload it and replace the marker with ``diagram_blob_id``.

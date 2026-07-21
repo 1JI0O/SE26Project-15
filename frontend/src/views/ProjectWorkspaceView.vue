@@ -614,7 +614,7 @@ const repositoryStatusLabel = computed(() => {
   if (!code.hasCode.value) return '等待代码'
   if (tensorFlow.analysisStatus.value === 'ready') return '仓库已分析'
   if (tensorFlow.analysisStatus.value === 'failed') return '仓库分析失败'
-  if (tensorFlow.analysisStatus.value === 'missing') return '等待 Agent 分析'
+  if (tensorFlow.analysisStatus.value === 'missing') return '等待本地分析'
   return '仓库分析中'
 })
 

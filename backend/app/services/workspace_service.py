@@ -6,8 +6,6 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.entities import (
-    AgentAnalysisArtifact,
-    AgentAnalysisJob,
     CodeRepository,
     PaperDocument,
     Project,
@@ -489,9 +487,19 @@ def build_tensor_flow_payload(
         analysis_status=code.analysis_status,
         analysis_revision=code.analysis_revision,
         repository_revision=code.revision,
-        stale=code.analysis_revision != code.revision,
+        stale=(
+            code.analysis_revision != code.revision
+            or code.analysis_version != _local_analyzer_version()
+            or code.analysis_status != "ready"
+        ),
     )
     return payload
+
+
+def _local_analyzer_version() -> str:
+    from app.services.analysis_jobs import ANALYZER_VERSION
+
+    return ANALYZER_VERSION
 
 
 def get_tensor_flow(
@@ -502,114 +510,22 @@ def get_tensor_flow(
     root_symbol: str | None = None,
 ) -> dict[str, Any]:
     code = _latest_code(session, project_id)
-    if code is None:
-        return build_tensor_flow_payload(None, str(project_id))
-    artifacts = session.exec(
-        select(AgentAnalysisArtifact)
-        .where(
-            AgentAnalysisArtifact.project_id == project_id,
-            AgentAnalysisArtifact.kind == "architecture",
-            AgentAnalysisArtifact.code_repository_id == (code.id or 0),
-            AgentAnalysisArtifact.code_revision == code.revision,
-            AgentAnalysisArtifact.is_current == True,  # noqa: E712
-        )
-        .order_by(AgentAnalysisArtifact.created_at.desc())
-    ).all()
-    artifact = next(
-        (
-            item
-            for item in artifacts
-            if root_symbol is None or item.payload_json.get("root_symbol") == root_symbol
-        ),
-        None,
-    )
-    if artifact is not None:
-        source = artifact.payload_json
-        graph = {
-            "root_symbol": source.get("root_symbol"),
-            "root_label": source.get("root_label"),
-            "nodes": [
-                {
-                    "id": node.get("id"),
-                    "label": node.get("label"),
-                    "kind": node.get("kind", "operation"),
-                    "description": node.get("description", ""),
-                    "source_path": node.get("source_path", ""),
-                    "line_start": node.get("line_start", 1),
-                    "line_end": node.get("line_end", node.get("line_start", 1)),
-                    "symbol_id": node.get("symbol_id", ""),
-                    "op": node.get("callee") or node.get("kind", "operation"),
-                    "shape": None,
-                    "shape_reason": "Agent static evidence does not claim runtime tensor shape",
-                    "metadata": {
-                        "component_symbol_id": node.get("component_symbol_id"),
-                        "expandable": bool(node.get("expandable", False)),
-                        "external": bool(node.get("external", False)),
-                        "depth": node.get("depth", 0),
-                        "evidence": node.get("evidence", []),
-                    },
-                }
-                for node in source.get("nodes", [])
-            ],
-            "edges": source.get("edges", []),
-        }
-        roots = [
-            {
-                "symbol_id": str(item.payload_json.get("root_symbol", "")),
-                "label": str(item.payload_json.get("root_label", "模型架构")),
-                "source_path": str(
-                    item.payload_json.get("nodes", [{}])[0].get("source_path", "")
-                )
-                if item.payload_json.get("nodes")
-                else "",
-                "score": 0,
-            }
-            for item in artifacts
-        ]
-        payload = layout_tensor_graph(
-            graph,
-            str(project_id),
-            renderer="agent-dag-v1",
-            view=view,
-            available_roots=roots,
-        )
-        payload.update(
-            analysis_status="ready",
-            analysis_revision=artifact.code_revision,
-            repository_revision=code.revision,
-            stale=False,
-        )
-        return payload
-    latest_job = session.exec(
-        select(AgentAnalysisJob)
-        .where(
-            AgentAnalysisJob.project_id == project_id,
-            AgentAnalysisJob.kind == "architecture",
-            AgentAnalysisJob.code_repository_id == (code.id or 0),
-            AgentAnalysisJob.code_revision == code.revision,
-        )
-        .order_by(AgentAnalysisJob.created_at.desc())
-    ).first()
-    status_map = {
-        "queued": "queued",
-        "running": "running",
-        "validating": "running",
-        "failed": "failed",
-        "stale": "stale",
-    }
-    payload = layout_tensor_graph(
-        {"nodes": [], "edges": [], "root_symbol": root_symbol, "root_label": None},
+    if code is not None:
+        from app.services.analysis_jobs import analysis_is_current, ensure_repository_analysis
+
+        if not analysis_is_current(code) and code.analysis_status not in {"queued", "running"}:
+            try:
+                ensure_repository_analysis(project_id)
+                session.refresh(code)
+            except ValueError:
+                pass
+    return build_tensor_flow_payload(
+        code,
         str(project_id),
-        renderer="agent-dag-v1",
+        analysis=code.analysis_json if code else None,
         view=view,
+        root_symbol=root_symbol,
     )
-    payload.update(
-        analysis_status=status_map.get(latest_job.status, "missing") if latest_job else "missing",
-        analysis_revision=0,
-        repository_revision=code.revision,
-        stale=bool(latest_job and latest_job.status == "stale"),
-    )
-    return payload
 
 
 def get_code_analysis(session: Session, project_id: int) -> dict[str, Any] | None:

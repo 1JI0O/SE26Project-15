@@ -96,7 +96,7 @@
 
 ## 4. 分层模型架构图与张量语义图
 
-分析器保留两种用途不同的图。默认架构图先从 PyTorch 模块组合关系中识别主模型，沿真实 `forward` 或其委托的 `forward_step` 提取输入、模块调用、关键融合和输出；损失、数据集、渲染器等辅助类不进入默认总览。原有语句级分析继续识别函数调用、张量二元运算、条件分支、残差、`torch.cat/concat/stack` 和返回值，作为按模块查看的调试图。
+分析器保留两种用途不同的图。默认架构图先从 PyTorch 模块组合关系中识别主模型，沿真实 `forward` 或其委托的 `forward_step` 提取输入、模块调用、关键融合和输出；损失、数据集、渲染器等辅助类不进入默认总览。项目方法、模块级函数和自定义模块在能唯一解析时生成独立子图，每次下钻只展示当前函数体的直接调用；`torch.*`、`torch.nn.functional.*` 和构造出的 `nn.Module` 作为本地终点节点保留。动态或歧义调用显示为不可展开的未解析节点，不猜测目标。原有语句级分析继续识别函数调用、张量二元运算、条件分支、残差、`torch.cat/concat/stack` 和返回值，作为按模块查看的调试图。
 
 语义节点不包含布局坐标：
 
@@ -119,10 +119,10 @@
 
 边的 `kind` 可为 `tensor`、`control`、`branch` 或 `residual`。当前迭代不伪造静态 shape；未执行运行时 shape propagation 时必须返回 `null` 和原因。
 
-`GET /workspace/tensor-flow` 默认返回 `view=architecture`，`renderer` 为 `architecture-dag-v2`。可使用以下查询参数：
+`GET /workspace/tensor-flow` 只读取本地代码分析缓存，不查询或创建 Agent 任务。默认返回 `view=architecture`，`renderer` 为 `architecture-dag-v2`。可使用以下查询参数：
 
 - `view=architecture|debug`：切换模块级架构图或当前模块的语句级调试图。
-- `root_symbol={path}::{ClassName}`：选择主模型或下钻到 `expandable=true` 的自定义组件。
+- `root_symbol={path}::{ClassName|QualifiedCallable}`：选择主模型，或下钻到 `expandable=true` 的自定义组件、项目方法和函数。
 
 响应通过 `root_symbol`、`root_label` 和 `available_roots` 描述当前层级；节点通过 `component_symbol_id`、`expandable`、`external` 区分可下钻的自定义模块与默认折叠的外部黑盒。两种视图均增加 `x`、`y`、`width`、`height` 和正交边 `points`。前端应使用 `source_path`、`line_start`、`line_end` 跳转源码，不应依赖节点 ID 推断路径。
 
@@ -162,6 +162,6 @@
 ## 6. 已知限制
 
 - 静态分析不执行用户仓库代码，无法保证动态调用、反射和运行时 shape 的完整性。
-- 跨文件解析当前按唯一类名提供候选 `resolved_symbol_id`，不等价于完整 Python import resolution。
+- 跨文件解析优先使用同文件符号和显式 import alias，再使用全局唯一名称；它不等价于完整 Python import resolution。
 - `nn.Sequential` 当前作为单个语义节点返回构造组件元数据，不展开为经过运行时验证的逐层 shape 图。
 - GitHub 导入依赖本机 `git` 和网络可用性；失败不会创建仓库数据库记录。
