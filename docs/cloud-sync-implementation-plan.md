@@ -1,93 +1,134 @@
-# TraceLab 云端账号与同步实施说明
+# TraceLab 账号与基础同步实施说明
 
-本文是 `cloud-sync-architecture.md` 的实现落点。架构文档中的安全、容量和本地优先约束仍是权威规则；本文说明代码入口、交付顺序和验收方法。
-字段、权限矩阵与端点约束见 [`contracts/cloud-sync.md`](contracts/cloud-sync.md)。
+> 状态：独立服务器源码和本地后端解耦已完成；生产 feature flag 仍默认关闭。只有真实
+> PostgreSQL 16 staging、SMTP、磁盘阈值和外部备份恢复验收全部通过后，才允许生产开启。
 
-## 运行入口
+本文说明当前代码入口和部署方式。架构约束见
+[`cloud-sync-architecture.md`](cloud-sync-architecture.md)，重构审查记录见
+[`server-deployment-refactor-plan.md`](server-deployment-refactor-plan.md)。
 
-| 模式 | 入口 | 数据与职责 |
+## 1. 运行边界
+
+| 产品 | 入口 | 职责 |
 |---|---|---|
-| Local API | `app.main:app` | SQLite、本地绝对路径、离线解析/分析、本地 outbox/inbox；仅绑定 loopback |
-| Cloud API | `app.cloud:app` | PostgreSQL、账号、workspace、UUID 项目、同步、Blob、管理员；生产必须 HTTPS |
-| Cloud Worker | `python -m app.worker` | PostgreSQL 任务领取、重试、解析/分析适配、墓碑与 Blob 维护 |
+| Local API | `backend/app/main.py` | SQLite、本地文件、论文解析、代码分析、TraceLink、Agent、本地 outbox/inbox |
+| 应用前端 | `frontend/src/**` | 本地 Web 与 Tauri Desktop 的完整工作台；通过 `localHttp`/`cloudHttp` 分别连接本地和远程 API |
+| Sync Server API | `server/tracelab_server/main.py` | 账号、Workspace、项目同步、Blob、管理员 API 和最小管理员控制台 |
+| Maintenance Worker | `server/tracelab_server/worker.py` | 邮件、Blob/tombstone GC、事件压缩；不执行解析、分析或 Agent |
 
-Cloud API 不装配本地集成设置或整数项目路由；Local API 不暴露云端账号表和管理员接口。两种 API 共享 Pydantic 同步契约和纯分析逻辑，不传输 SQLite 文件。
+完整 Vue 前端不部署到服务器。服务器 Docker build context 固定为 `server/`，不复制
+`frontend/` 或 `backend/`。Local 与 Server 使用独立 Python 包、依赖、metadata 和 Alembic
+chain，只通过冻结的 `/api/v1` 契约通信。
 
-Desktop 构建时默认绑定统一云端 `https://10.119.5.94/api/v1`（见
-`frontend/.env.desktop`）。终端用户无需自行配置远程服务器；本地工作台可不登录离线使用，
-登录后按项目启用同步。平台管理员登录后可通过顶栏「管理」进入账号/配额/运维界面。
+本地历史 SQLite migration 保持不变，已有项目升级后仍是 `local_only`。服务器不接收 SQLite
+文件，也不会自动上传任何旧项目。
 
-若需临时指向其他 staging，可覆盖为 `.env.desktop.local` 中的
-`VITE_CLOUD_API_BASE_URL`；未覆盖时始终使用上述统一服务器。
+## 2. 已实现能力
 
-## 已实现的领域边界
+- 邮箱/密码注册登录、邮箱验证、密码重置、设备管理、15 分钟 access token 和旋转的 30 天
+  refresh token；密码使用 Argon2id，数据库只保存 token 哈希。
+- Workspace 和 `owner/editor/viewer`；项目、同步、Blob 均以 Workspace 为授权边界。
+- Project、Paper、Repository、代码编辑、TraceLink、Agent Conversation/Message/Run/Event/Memory
+  的 UUID/版本同步。
+- `bootstrap/push/pull/ack`、逐操作事务、workspace sequence、幂等 receipt、显式 conflict、
+  设备 cursor 和至少 30 天 tombstone。
+- `local_only/cloud_enabled/cloud_paused/cloud_detached`；paused 只影响当前设备，detach 不删除
+  云端项目。
+- Blob 分块上传、断点位置、SHA-256、MIME/PDF/ZIP 校验、Workspace UUID 句柄、全局物理
+  去重、不可变 artifact version、Range 下载、配额和宽限期 GC。
+- `/api/v1/admin/*` 兼容现有 Desktop 管理入口；`/admin-console` 是 server-owned Jinja2
+  管理页面，只显示账号、Workspace、项目元数据、用量、任务和审计。
+- 管理员控制台使用独立 opaque session、`HttpOnly; SameSite=Strict` Cookie 和 CSRF，数据库
+  只保存会话/CSRF 哈希。
 
-- 本地 Project、Paper、Repository、TraceLink 拥有 public UUID 和版本；已有项目迁移后保持 `local_only`。
-- 账号使用 Argon2id；access token 15 分钟，refresh token 30 天并旋转，数据库只保存哈希。
-- Browser refresh token 使用 Secure/HttpOnly/SameSite Cookie；Desktop 使用操作系统凭据库。
-- Cloud API 的项目、同步和 Blob 请求必须先通过用户、有效会话、邮箱验证和 workspace role 检查。
-- workspace sequence、领域修改、sync event 和 receipt 在单个事务内提交；删除生成至少 30 天墓碑。
-- PDF/ZIP 先写 quarantine，校验大小、MIME、SHA-256 和 ZIP 安全后进入内容寻址目录。
-- 云端任务通过 PostgreSQL `FOR UPDATE SKIP LOCKED` 领取；没有 Redis、MinIO 或 Kubernetes 依赖。
-- 管理员接口只返回账号、配额、任务、存储和审计摘要，不提供项目正文读取能力。
+服务器明确不提供 PDF/源码/TraceLink 正文/Agent 正文的管理员读取接口，也不提供任意 SQL、
+文件浏览或 Shell。
 
-## 交付阶段
+## 3. 目录与迁移
 
-1. C0/C1：运行模式、迁移、Compose、Nginx、PostgreSQL、Blob、Worker、备份入口。
-2. C2：注册登录、验证/重置、设备、workspace/member、管理员和统一授权。
-3. C3：本地 outbox/inbox、bootstrap/push/pull/ack、幂等回执、冲突和墓碑。
-4. C4：分块 Blob、断点续传、去重、配额、Range 下载和数据库任务。
-5. C5：Cloud Web、Desktop 双 client、系统凭据、显式同步授权、暂停和冲突提示。
+```text
+backend/                   Local API 与 SQLite
+  app/models/sync.py       local outbox/inbox/state/conflict
+frontend/                  本地 Web/Tauri 完整应用前端
+server/                    可独立复制部署的服务器产品
+  compose.yaml
+  Dockerfile
+  .env.example
+  tracelab_server/
+  tests/
+  deploy/
+```
 
-每阶段都必须保持 Local API 测试通过。任何没有 `cloud_enabled` 的项目不得出现在本地 outbox；云端不可返回本地路径或第三方 API key。
+Server baseline 位于
+`server/tracelab_server/db/migrations/versions/0001_server_baseline_server_baseline.py`，显式创建
+表、索引、外键和约束，不调用 runtime metadata `create_all`。Compose 使用一次性 migrator；
+API/Worker 等待迁移成功，普通启动不 drop/rebuild 数据。
 
-## 部署
+## 4. 部署
 
-1. 准备 Linux 主机的 `/srv/tracelab/postgres`、`/srv/tracelab/blobs`、`/srv/tracelab/tmp`，权限仅授予容器运行账号。生产环境必须把它们放在分别限额约 8 GB、25 GB、4 GB 的 LVM volume 或项目 quota 上，而不是仅创建同一分区中的普通目录；剩余空间留给系统、镜像与日志。
-2. 复制 `.env.cloud.example` 为 `.env.cloud`，设置域名、随机 JWT 密钥、数据库密码、SMTP 和服务器外 `BACKUP_REMOTE`。
-3. 预先为域名签发证书并挂载到 `/etc/letsencrypt/live/<domain>`。
-4. 执行 `docker compose --env-file .env.cloud up -d --build`；随后用 `docker compose --env-file .env.cloud exec api python -m app.cli create-admin --email <email>` 创建首个管理员。
+1. 在 Linux 主机准备 `/srv/tracelab/postgres`、`/srv/tracelab/blobs`、
+   `/srv/tracelab/tmp`，分别用 LVM/project quota 限制约 8 GB、25 GB、4 GB。
+2. 进入 `server/`，复制 `.env.example` 为 `.env`，配置生产域名、强随机 JWT secret、数据库
+   密码、SMTP、应用账号链接地址和服务器外 `BACKUP_REMOTE`。
+3. 为域名准备 `/etc/letsencrypt/live/<domain>` 证书。
+4. 保持 `CLOUD_SYNC_FEATURE_ENABLED=false`，执行：
 
-当前实现补充说明：Compose 使用一次性 `migrator`，API/Worker 仅在迁移成功后启动；普通启动不会重建数据。Web 与 Desktop 写操作统一进入 Cloud Domain Command Service，设备暂停保存在 `device_project_binding`，不会修改其他设备或 Web 的项目状态。
+   ```bash
+   docker compose --env-file .env up -d postgres
+   docker compose --env-file .env run --rm migrator
+   docker compose --env-file .env up -d api worker proxy
+   ```
 
-Local SQLite 与 Cloud PostgreSQL 使用独立 Alembic chain。新建 SQLite 只创建本地领域和 outbox/inbox 表；历史 SQLite 中已经存在的空云端表会原样保留但不再迁移或引用。Cloud baseline 只创建账号、Workspace、云端领域、同步、Blob 和任务表；检测到旧的混合 schema 时迁移器会停止并要求执行显式维护重建流程。
-5. 安装 `deploy/tracelab-backup.service` 和 `.timer`，首次上线前执行一次备份及恢复演练。
-6. `.env.cloud` 中的 `CLOUD_SYNC_FEATURE_ENABLED` 初始保持 `false`；仅在 staging 连续运行、SMTP、磁盘阈值和恢复演练全部通过后改为 `true` 并重启 API。
+5. 一次性创建平台管理员：
 
-恢复演练必须使用独立的空数据库和空目录，禁止覆盖生产数据。设置
-`RESTORE_DB_DUMP_REMOTE`、`RESTORE_BLOB_REMOTE`、`RESTORE_DATABASE_URL`、
-`RESTORE_BLOB_ROOT` 后运行 `sh deploy/restore-verify.sh`；脚本会恢复 PostgreSQL、
-下载 Blob，并逐条检查数据库中的 ready Blob 引用是否存在。
+   ```bash
+   docker compose --env-file .env run --rm api \
+     python -m tracelab_server.cli create-admin --email admin@example.com
+   ```
 
-生产就绪要求：只有 80/443 对外、PostgreSQL 无宿主端口、SMTP 可用、外部备份成功、90% 磁盘阈值测试通过，并完成跨 workspace 越权测试。
+6. 验证 `https://<domain>/api/v1/health` 和 `/admin-console/login`，执行备份与空库恢复演练。
+7. staging 全部验收后才将 feature flag 改为 `true` 并重启 API/Worker。
 
-## 验证命令
+Compose 只发布 Nginx 的 80/443；PostgreSQL、API、Worker 和 Blob 不发布公网端口。Nginx
+认证日志不记录 query，认证和下载路径分别限流。
+
+## 5. 备份和维护
+
+- `server/deploy/backup.sh`：每日 custom-format `pg_dump`、7 个日备份、4 个周备份，以及 Blob
+  不可变增量复制到外部 rclone target。
+- `server/deploy/restore-verify.sh`：只允许恢复到空验证数据库和空 Blob 目录，并逐条核对
+  ready Blob 的物理文件。
+- `server/deploy/rebuild-cloud.sh`：需要精确确认字符串的显式破坏性维护入口；普通启动绝不调用。
+- 80% 磁盘使用率告警；90% 时拒绝新上传和派生 Blob，但继续允许登录、pull、下载和删除。
+
+## 6. 验证命令
 
 ```bash
 cd backend
+uv sync --frozen --extra dev
 uv run ruff check app tests
-uv run python -m pytest -q
+uv run pytest -q
+
+cd ../server
+uv sync --frozen --extra dev
+uv run ruff check tracelab_server tests
+uv run pytest -q
 
 cd ../frontend
 pnpm typecheck
 pnpm build
-
-cd src-tauri
-cargo check
-
-cd ../..
-CLOUD_ENV_FILE=.env.cloud.example docker compose --env-file .env.cloud.example config --quiet
 ```
 
-PostgreSQL 迁移和 `SKIP LOCKED` 并发测试应在 staging 使用 PostgreSQL 16 运行；SQLite 测试只验证 Local API 和协议逻辑，不能替代生产数据库验证。
+CI 分为 `local-backend`、`sync-server`、`frontend` 三个 Job。`sync-server` 固定启动
+PostgreSQL 16 并注入 `TEST_POSTGRES_URL`；CI 中缺少该变量会直接失败，不允许静默 skip。
 
-## 当前验收状态
+## 7. 尚未完成的生产验收
 
-- 后端完整回归、云端账号/权限/同步/Blob/Worker/冲突与新建 SQLite 迁移测试通过。
-- 当前开发机未提供可用的 PostgreSQL 16 服务，因此真实 PostgreSQL 用例在本机跳过。CI 已固定
-  PostgreSQL 16，且 CI 缺少 `TEST_POSTGRES_URL` 时会直接失败，不允许静默 skip；目标 staging
-  仍必须完成迁移、并发 sequence 和 `FOR UPDATE SKIP LOCKED` 实测。
-- Vue TypeScript 检查和生产构建、Tauri Rust `cargo check`、Compose 展开、备份与恢复脚本
-  shell 语法检查通过。
-- 当前仓库没有生产 SMTP 凭据、域名证书或外部备份账号，因此不宣告生产就绪；
-  `.env.cloud.example` 也有意保持 `CLOUD_SYNC_FEATURE_ENABLED=false`。
+当前仓库不包含生产域名证书、SMTP 凭据、外部备份账号和目标服务器 quota 配置，因此不能宣告
+生产就绪。上线前必须完成：
+
+- 真实 PostgreSQL 16 migration、并发 sequence 和 `FOR UPDATE SKIP LOCKED`；
+- 两台 Desktop 对显式启用项目的 Project/Paper/Repository/TraceLink/Agent 双向同步；
+- paused/detach、冲突、断网重试、文件双版本和跨 Workspace 去重 GC；
+- 90% 停传、7/4 备份保留和 PostgreSQL + Blob 空环境恢复；
+- 正式 SMTP 邮箱验证、HTTPS/Origin/CSRF 和跨 Workspace 越权测试。

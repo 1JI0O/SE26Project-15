@@ -10,12 +10,6 @@ from sqlmodel import Session, select
 from app.api.routes.projects import get_project_or_404
 from app.core.config import settings
 from app.db.session import get_session
-from app.models.cloud_entities import (
-    LocalSyncConflict,
-    LocalSyncInbox,
-    LocalSyncOutbox,
-    LocalSyncState,
-)
 from app.models.entities import (
     AgentConversation,
     AgentMemory,
@@ -28,6 +22,12 @@ from app.models.entities import (
     Project,
     TraceLink,
     utc_now,
+)
+from app.models.sync import (
+    LocalSyncConflict,
+    LocalSyncInbox,
+    LocalSyncOutbox,
+    LocalSyncState,
 )
 from app.schemas.local_sync import (
     LocalAgentHistoryPatch,

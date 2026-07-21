@@ -20,6 +20,7 @@ mkdirSync(path.dirname(runtimeRoot), { recursive: true })
 const addDataSeparator = process.platform === 'win32' ? ';' : ':'
 const migrations = path.join(backendRoot, 'app', 'db', 'migrations')
 const builtinSkills = path.join(backendRoot, 'app', 'services', 'agent', 'builtin_skills')
+const resources = path.join(backendRoot, 'app', 'resources')
 const pyinstallerArgs = [
   'run',
   '--project',
@@ -49,6 +50,8 @@ const pyinstallerArgs = [
   `${migrations}${addDataSeparator}app/db/migrations`,
   '--add-data',
   `${builtinSkills}${addDataSeparator}app/services/agent/builtin_skills`,
+  '--add-data',
+  `${resources}${addDataSeparator}app/resources`,
   path.join(backendRoot, 'app', 'desktop.py'),
 ]
 

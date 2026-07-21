@@ -16,6 +16,7 @@ TraceLab 是面向论文复现与代码审阅的本地工作台。当前技术�
 ```text
 backend/                 FastAPI、数据库、解析/分析/追溯/Agent 服务
 frontend/                Vue Web UI 与 Tauri 2 壳
+server/                  独立账号、同步、Blob、管理员与部署服务
 docs/contracts/          按领域拆分的接口契约
 docs/collaboration/      四人协作边界与任务派发
 UIPrototype/             迭代材料、模型和演示文档
@@ -103,18 +104,28 @@ pnpm dev
 
 浏览器仍通过 `/api/v1` 使用本地 FastAPI；账号、Workspace、Blob 和同步请求通过同源的 `/cloud-api` 转发至 Cloud API。登录后，项目列表会显示“启用同步”，顶部会显示“云端项目”“云同步”和冲突中心入口。项目在用户确认上云范围之前始终为 `local_only`，不会产生上传操作。`.env.local` 仅用于本机开发且已被 Git 忽略。
 
-## 部署云端版
+## 部署账号与同步服务器
 
-云端版与本地 Web/Desktop 分离运行，使用 PostgreSQL、数据库 Worker 和内容寻址 Blob。完整约束与部署检查见 [云端同步实施说明](docs/cloud-sync-implementation-plan.md)。最小部署流程：
+完整 TraceLab 前端和 Local API 仍运行在本地 Web/Tauri Desktop。远程服务器只提供账号、
+Workspace、基础同步、Blob、维护任务和最小管理员控制台，不构建应用前端，也不执行
+MinerU、代码分析、LLM 或 Agent。完整约束见
+[服务器重构方案](docs/server-deployment-refactor-plan.md)和
+[云端同步实施说明](docs/cloud-sync-implementation-plan.md)。最小部署流程：
 
 ```bash
-cp .env.cloud.example .env.cloud
+cd server
+cp .env.example .env
 # 填写域名、随机密钥、SMTP、数据库密码和外部备份目标
-docker compose --env-file .env.cloud up -d --build
-docker compose --env-file .env.cloud exec api python -m app.cli create-admin --email admin@example.com
+docker compose --env-file .env up -d postgres
+docker compose --env-file .env run --rm migrator
+docker compose --env-file .env up -d api worker proxy
+docker compose --env-file .env run --rm api \
+  python -m tracelab_server.cli create-admin --email admin@example.com
 ```
 
-云端服务器只开放 80/443；`postgres` 没有宿主端口。Desktop 仍使用本地 SQLite，只有用户明确为项目启用云同步后才会生成上传操作。
+服务器只开放 80/443；`postgres`、API 和 Worker 没有宿主端口。管理员控制台位于
+`https://<domain>/admin-console/login`。Desktop 仍使用本地 SQLite，只有用户明确为项目
+启用云同步后才会生成上传操作。
 
 ### Windows（PowerShell）启动 Web 版
 
@@ -194,7 +205,9 @@ pnpm desktop:dev
 
 该命令会打包并启动内置 FastAPI 后端，然后启动 Tauri 窗口；不需要另行启动 Uvicorn。首次运行会下载 Rust/Python/Node 依赖，耗时较长。
 
-PyInstaller 可能提示 `tzdata`、`pysqlite2`、`MySQLdb` 或 `psycopg2` 等 hidden import 未找到。这些是 SQLAlchemy 探测的可选时区/数据库驱动；桌面版使用 Python 内置 SQLite，不影响启动和项目功能。构建以 `Prepared Tauri backend runtime` 和后续 Tauri 编译结果为准。
+PyInstaller 可能提示 `tzdata`、`pysqlite2` 或 `MySQLdb` 等 hidden import 未找到。这些是
+SQLAlchemy 探测的可选驱动；桌面版使用 Python 内置 SQLite，不影响启动和项目功能。构建以
+`Prepared Tauri backend runtime` 和后续 Tauri 编译结果为准。
 
 要生成可安装的 Windows 包，请在 Windows 主机上执行：
 

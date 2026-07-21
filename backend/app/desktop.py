@@ -1,6 +1,7 @@
 import ctypes
 import multiprocessing
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -19,6 +20,17 @@ def _configure_desktop_environment() -> None:
             "http://tauri.localhost,https://tauri.localhost"
         ),
     )
+    # Loopback cloud proxy: forward cloud API calls to the unified TraceLab
+    # server over a pinned CA bundle. The WebView talks plain HTTP to the local
+    # backend, sidestepping its inability to accept the self-signed cloud cert.
+    os.environ.setdefault("TRACELAB_CLOUD_UPSTREAM", "https://10.119.5.94")
+    # PyInstaller relocates modules to _internal/; use sys._MEIPASS in frozen mode.
+    if getattr(sys, "frozen", False):
+        bundled_ca = Path(sys._MEIPASS) / "app" / "resources" / "cloud_ca.pem"
+    else:
+        bundled_ca = Path(__file__).with_name("resources") / "cloud_ca.pem"
+    if bundled_ca.exists():
+        os.environ.setdefault("TRACELAB_CLOUD_CA_FILE", str(bundled_ca))
 
 
 def _watch_desktop_parent() -> None:

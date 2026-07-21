@@ -1,9 +1,0 @@
-[Unit]
-Description=TraceLab external PostgreSQL and blob backup
-Requires=docker.service
-After=docker.service
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/tracelab
-ExecStart=/usr/bin/docker compose --env-file .env.cloud --profile maintenance run --rm backup

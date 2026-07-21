@@ -12,7 +12,13 @@ export const localApiBaseUrl =
 
 // Desktop is bound to the single TraceLab cloud deployment. End users never
 // pick a remote server; build-time env can override for staging forks.
-const DEFAULT_DESKTOP_CLOUD_API = 'https://10.119.5.94/api/v1'
+//
+// Desktop cannot reach the cloud server directly: its self-signed certificate
+// is rejected by the WebView with no user-facing override. Instead the local
+// backend exposes a loopback reverse proxy (/cloud-api/v1) that forwards to the
+// real server over a pinned CA. The WebView only ever speaks plain HTTP to
+// 127.0.0.1, so TLS validation never blocks account/sync features.
+const DEFAULT_DESKTOP_CLOUD_API = 'http://127.0.0.1:8765/cloud-api/v1'
 
 export const cloudApiBaseUrl =
   import.meta.env.VITE_CLOUD_API_BASE_URL ||

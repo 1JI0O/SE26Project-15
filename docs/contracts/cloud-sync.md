@@ -1,7 +1,8 @@
 # Cloud API 与同步契约
 
-Cloud API 固定前缀为 `/api/v1`，只接受 public UUID 作为租户和领域边界。生产 OpenAPI
-由 `app.cloud:app` 的 `/openapi.json` 提供；Local API 不装配本文件中的账号或管理员路由。
+Server API 固定前缀为 `/api/v1`，只接受 public UUID 作为租户和领域边界。运行入口是
+`server/tracelab_server/main.py`，版本化快照见
+[`cloud-sync.openapi.json`](cloud-sync.openapi.json)；Local API 不装配账号或管理员路由。
 
 ## 身份与权限矩阵
 
