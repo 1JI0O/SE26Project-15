@@ -107,7 +107,7 @@ async function importDiagramBlob(
       responseType: 'arraybuffer',
     })
     await localHttp.put(
-      `/local-sync/projects/${projectId}/imports/diagram/${publicId}`,
+      `/local-sync/projects/${projectId}/diagram-imports/${publicId}`,
       diagram.data,
       { headers: { 'Content-Type': 'application/json' } },
     )
