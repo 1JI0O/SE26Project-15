@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import shutil
@@ -71,8 +72,27 @@ class BlobStore:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             source.unlink(missing_ok=True)
-        else:
+            return destination
+        try:
             os.replace(source, destination)
+        except OSError as error:
+            if error.errno != errno.EXDEV:
+                raise
+            # The quarantine (tmp) and blob roots may live on different mounts
+            # (e.g. separate Docker volumes), where rename(2) fails with EXDEV.
+            # Stream-copy into the destination directory, fsync, then rename
+            # within that same filesystem so the published blob is atomic.
+            temp_path = destination.parent / f".{sha256}.{os.getpid()}.tmp"
+            try:
+                with source.open("rb") as src, temp_path.open("wb") as dst:
+                    shutil.copyfileobj(src, dst, 1024 * 1024)
+                    dst.flush()
+                    os.fsync(dst.fileno())
+                os.replace(temp_path, destination)
+            except BaseException:
+                temp_path.unlink(missing_ok=True)
+                raise
+            source.unlink(missing_ok=True)
         return destination
 
     def disk_percent(self) -> float:
