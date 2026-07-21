@@ -7,23 +7,10 @@
       </router-link>
       <div class="topbar-actions">
         <router-link
-          v-if="localCloudSyncAvailable && auth.authenticated && auth.verified"
-          class="account-link"
-          to="/cloud-projects"
-        >云端项目</router-link>
-        <el-button
-          v-if="localCloudSyncAvailable && auth.authenticated && auth.verified"
-          text
-          :loading="sync.syncing"
-          @click="runSync"
-        >
-          云同步<span v-if="sync.conflictCount">（{{ sync.conflictCount }} 个冲突）</span>
-        </el-button>
-        <router-link
           v-if="localCloudSyncAvailable && sync.conflictCount"
           class="account-link conflict-link"
           to="/conflicts"
-        >冲突中心</router-link>
+        >冲突中心（{{ sync.conflictCount }}）</router-link>
         <el-tooltip v-if="runtimeMode !== 'cloud'" content="集成设置" placement="bottom">
           <el-button text :icon="Setting" aria-label="集成设置" @click="settingsOpen = true" />
         </el-tooltip>
@@ -45,8 +32,8 @@
 <script setup lang="ts">
 import { Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import { cloudConfigured, localCloudSyncAvailable, runtimeMode } from '@/api/http'
 import IntegrationSettingsDialog from '@/features/settings/IntegrationSettingsDialog.vue'
@@ -55,22 +42,27 @@ import { useSyncStore } from '@/stores/sync'
 
 const settingsOpen = ref(false)
 const route = useRoute()
+const router = useRouter()
 const isWorkspace = computed(() => route.name === 'workspace')
 const auth = useAuthStore()
 const sync = useSyncStore()
 
+// Single-device login: when this account signs in on another device, this
+// device's next cloud request is rejected and the session is cleared. Surface
+// a clear notice and return to the login screen.
+watch(
+  () => auth.sessionEndedElsewhere,
+  (ended) => {
+    if (!ended) return
+    ElMessage.warning('账号已在其他设备登录，本设备已退出登录')
+    auth.sessionEndedElsewhere = false
+    if (route.name !== 'login') void router.push('/login')
+  },
+)
+
 onMounted(() => {
   if (localCloudSyncAvailable && auth.authenticated) void sync.refreshConflicts()
 })
-
-async function runSync() {
-  try {
-    await sync.sync()
-    ElMessage.success('云同步完成')
-  } catch {
-    ElMessage.error('云同步失败，本地工作不受影响')
-  }
-}
 
 async function logout() {
   await auth.logout()

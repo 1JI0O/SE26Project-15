@@ -57,6 +57,20 @@
           <span>生成追溯</span>
         </el-button>
         <el-button size="small" @click="openArtifactVersions">版本历史</el-button>
+        <!-- 需求 3.1: sync a synced project from inside the workbench -->
+        <template v-if="cloudSyncEnabled && workspace.syncMode.value === 'cloud_enabled'">
+          <el-tag size="small" :type="workspaceStatus.type" effect="plain" round>
+            {{ workspaceStatus.label }}
+          </el-tag>
+          <el-button
+            size="small"
+            :icon="Refresh"
+            :loading="sync.syncing"
+            @click="syncWorkspace"
+          >
+            <span>同步</span>
+          </el-button>
+        </template>
       </div>
     </header>
 
@@ -513,6 +527,7 @@ import {
   Files,
   FolderOpened,
   MagicStick,
+  Refresh,
   Share,
   Tickets,
   UploadFilled,
@@ -521,7 +536,9 @@ import {
 import { ElMessage } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
-import { localHttp } from '@/api/http'
+import { localCloudSyncAvailable, localHttp } from '@/api/http'
+import { useAuthStore } from '@/stores/auth'
+import { useSyncStore } from '@/stores/sync'
 
 import { isEditableFile, fileIcon, useCode } from '@/composables/useCode'
 import { useDesktop } from '@/composables/useDesktop'
@@ -559,6 +576,29 @@ interface LocalArtifactVersionRow {
 }
 
 const workspace = useWorkspace()
+const auth = useAuthStore()
+const sync = useSyncStore()
+const cloudSyncEnabled = computed(
+  () => localCloudSyncAvailable && auth.authenticated && auth.verified,
+)
+const workspaceStatus = computed<{ label: string; type: 'success' | 'warning' }>(() => {
+  const status = sync.projectStatus({
+    public_id: workspace.projectPublicId.value,
+    sync_mode: workspace.syncMode.value,
+  })
+  if (status === 'syncing') return { label: '正在同步', type: 'warning' }
+  if (status === 'pending') return { label: '待同步', type: 'warning' }
+  return { label: '已同步', type: 'success' }
+})
+async function syncWorkspace() {
+  try {
+    await sync.sync()
+    await workspace.loadProject()
+    ElMessage.success('云同步完成')
+  } catch {
+    ElMessage.error('云同步失败，本地工作不受影响')
+  }
+}
 const paper = usePaper(() => workspace.projectId.value)
 const code = useCode(() => workspace.projectId.value)
 const tensorFlow = useTensorFlow(() => workspace.projectId.value)
@@ -646,6 +686,7 @@ onMounted(async () => {
   workspace.loadingWorkspace.value = true
   try {
     await workspace.loadProject()
+    if (cloudSyncEnabled.value) void sync.refreshPending()
     await Promise.allSettled([
       paper.loadPaperPages(),
       code.loadCodeTree(),

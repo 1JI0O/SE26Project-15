@@ -8,6 +8,8 @@ export function useWorkspace() {
   const projectId = computed(() => Number(route.params.id))
   const projectIdLabel = computed(() => String(route.params.id ?? ''))
   const projectName = ref('加载中...')
+  const projectPublicId = ref('')
+  const syncMode = ref('local_only')
   const loadingWorkspace = ref(false)
   const error = ref<string | null>(null)
 
@@ -16,6 +18,8 @@ export function useWorkspace() {
     try {
       const project = await getProject(projectId.value)
       projectName.value = project.name
+      projectPublicId.value = project.public_id
+      syncMode.value = project.sync_mode
     } catch (e) {
       ElMessage.error('加载项目信息失败')
       console.error(e)
@@ -27,6 +31,8 @@ export function useWorkspace() {
     projectId,
     projectIdLabel,
     projectName,
+    projectPublicId,
+    syncMode,
     loadingWorkspace,
     error,
     loadProject,

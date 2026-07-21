@@ -22,7 +22,6 @@ const router = createRouter({
     { path: '/verify-email', name: 'verify', component: AuthView, meta: { public: true } },
     { path: '/account', name: 'account', component: AccountView, meta: { cloudAuth: true } },
     { path: '/conflicts', name: 'conflicts', component: ConflictCenterView, meta: { cloudAuth: true } },
-    { path: '/cloud-projects', name: 'cloud-projects', component: CloudProjectsView, meta: { cloudAuth: true } },
     { path: '/admin', name: 'admin', component: AdminView, meta: { cloudAuth: true, admin: true } },
     { path: '/', name: 'projects', component: cloudWeb ? CloudProjectsView : ProjectListView, meta: { cloudAuth: cloudWeb } },
     { path: '/projects/:id', name: 'workspace', component: cloudWeb ? CloudProjectView : ProjectWorkspaceView, props: !cloudWeb, meta: { cloudAuth: cloudWeb } },
@@ -37,6 +36,12 @@ router.beforeEach(async (to) => {
   }
   if (to.meta.admin && !auth.user?.is_platform_admin) return { name: 'projects' }
   if (to.name === 'login' && auth.authenticated) return { name: 'projects' }
+  // 需求 3.2: a cloud-only project must be downloaded to this device before its
+  // workspace can be opened. On desktop/local the workspace id is a numeric
+  // local id; a non-numeric id here means an undownloaded cloud project.
+  if (!cloudWeb && to.name === 'workspace' && Number.isNaN(Number(to.params.id))) {
+    return { name: 'projects' }
+  }
 })
 
 export default router
