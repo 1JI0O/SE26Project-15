@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     tracelab_analysis_workers: int = Field(default=2, ge=1, le=8)
     tracelab_agent_confirmation_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
     github_clone_timeout_seconds: int = Field(default=60, ge=5, le=300)
+    # Loopback cloud reverse proxy. The desktop WebView cannot bypass TLS errors
+    # from the self-signed cloud certificate, so the local backend forwards
+    # cloud API calls upstream over a pinned CA. Empty upstream disables it.
+    tracelab_cloud_upstream: str = ""
+    tracelab_cloud_ca_file: str = ""
+    tracelab_cloud_tls_verify: bool = True
+    tracelab_cloud_proxy_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
     backend_cors_origins: list[str] | str = Field(
         default_factory=lambda: [
             "http://127.0.0.1:5173",

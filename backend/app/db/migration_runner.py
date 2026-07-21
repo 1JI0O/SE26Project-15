@@ -138,24 +138,65 @@ def _alembic_config(database_url: str) -> Any:
     return config
 
 
+def _available_revisions(config: Any) -> set[str]:
+    """Revision ids whose migration script is actually present in this build.
+
+    Packaged Desktop builds can drift: ``LOCAL_REVISIONS`` (and a persisted
+    SQLite ``alembic_version``) may reference a revision whose script was not
+    bundled into ``migrations/versions``. Alembic then aborts with
+    ``Can't locate revision identified by '...'``. We use this set to clamp any
+    stamp/upgrade target to what the running build can actually resolve.
+    """
+
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(config)
+    return {revision.revision for revision in script.walk_revisions()}
+
+
+def _highest_available(candidate: str, available: set[str]) -> str:
+    """Largest LOCAL_REVISIONS entry <= ``candidate`` whose script exists."""
+
+    ceiling = LOCAL_REVISIONS.index(candidate)
+    for revision in reversed(LOCAL_REVISIONS[: ceiling + 1]):
+        if revision in available:
+            return revision
+    return candidate
+
+
 def _run_alembic(engine: Engine) -> None:
     from alembic import command
 
     config = _alembic_config(_database_url(engine))
+    available = _available_revisions(config)
     tables = set(inspect(engine).get_table_names())
     if "project" in tables:
         detected_revision = _detect_local_revision(engine, tables)
+        # Never target a revision whose script is missing from this build.
+        detected_revision = _highest_available(detected_revision, available)
         current_revision = None
         if "alembic_version" in tables:
             with engine.connect() as connection:
                 current_revision = connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one_or_none()
+        # A DB stamped to a revision this build cannot resolve (e.g. a newer dev
+        # build wrote 0009 before this build shipped its script) would make the
+        # upgrade below abort. Re-stamp it down to the detected, resolvable
+        # revision; already-present columns/tables make the upgrade a no-op.
+        current_unresolved = current_revision is not None and current_revision not in available
         current_position = (
             LOCAL_REVISIONS.index(current_revision) if current_revision in LOCAL_REVISIONS else -1
         )
+        if current_unresolved:
+            # ``command.stamp`` first resolves the *current* version_num to purge
+            # it, which itself raises for an unresolvable id. Clear the row via
+            # SQL so the subsequent stamp starts from a clean slate.
+            with engine.begin() as connection:
+                connection.execute(text("DELETE FROM alembic_version"))
         if (
             current_revision is None
+            or current_unresolved
             or LOCAL_REVISIONS.index(detected_revision) > current_position
         ):
             command.stamp(config, detected_revision)
