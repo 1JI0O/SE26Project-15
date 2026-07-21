@@ -50,6 +50,7 @@ export const cloudHttp = axios.create({
 let accessToken = ''
 let refreshHandler: (() => Promise<string>) | null = null
 let refreshPromise: Promise<string> | null = null
+let sessionExpiredHandler: ((reason: 'revoked' | 'expired') => void) | null = null
 
 export function setCloudAccessToken(token: string) {
   accessToken = token
@@ -57,6 +58,13 @@ export function setCloudAccessToken(token: string) {
 
 export function setCloudRefreshHandler(handler: () => Promise<string>) {
   refreshHandler = handler
+}
+
+// Invoked when a previously-authenticated session can no longer be refreshed
+// (e.g. this device was kicked by a single-device login elsewhere). Lets the
+// app log out and surface a message instead of silently failing requests.
+export function setSessionExpiredHandler(handler: (reason: 'revoked' | 'expired') => void) {
+  sessionExpiredHandler = handler
 }
 
 cloudHttp.interceptors.request.use((config: InternalAxiosRequestConfig) => {
@@ -72,10 +80,21 @@ cloudHttp.interceptors.response.use(undefined, async (error: AxiosError) => {
   }
   config._retried = true
   if (!refreshHandler) throw error
+  // Only treat this as a session loss if we actually had a token — an
+  // unauthenticated 401 (e.g. browsing before login) must not trigger logout.
+  const hadToken = Boolean(accessToken)
   refreshPromise ??= refreshHandler().finally(() => {
     refreshPromise = null
   })
-  const token = await refreshPromise
+  let token: string
+  try {
+    token = await refreshPromise
+  } catch (refreshError) {
+    // Refresh failed after a live session: this device was likely kicked by a
+    // single-device login on another device, or the session expired.
+    if (hadToken) sessionExpiredHandler?.('revoked')
+    throw refreshError
+  }
   config.headers.Authorization = `Bearer ${token}`
   return cloudHttp.request(config)
 })

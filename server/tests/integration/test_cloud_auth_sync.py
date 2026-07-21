@@ -515,6 +515,41 @@ def test_password_and_one_time_tokens_are_not_stored_in_plaintext(
     assert raw_email_token not in queued_mail
 
 
+def test_single_device_login_revokes_previous_sessions(cloud_client: TestClient) -> None:
+    # First device logs in and can call an authenticated endpoint.
+    first = _register_verify_login(cloud_client, "single-device@example.com")
+    first_headers = {"Authorization": f"Bearer {first['access_token']}"}
+    workspace_id = first["default_workspace"]["workspace_id"]
+    assert (
+        cloud_client.get(f"/api/v1/projects?workspace_id={workspace_id}", headers=first_headers)
+    ).status_code == 200
+
+    # A second login for the same account (a different device) must kick the first.
+    second = cloud_client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "single-device@example.com",
+            "password": "correct horse battery staple",
+            "client_kind": "desktop",
+            "device_name": "Second desktop",
+            "platform": "test",
+        },
+    )
+    assert second.status_code == 200
+    second_headers = {"Authorization": f"Bearer {second.json()['access_token']}"}
+
+    # The first device's access token is now rejected immediately (revoked check
+    # runs per-request, not only on refresh).
+    kicked = cloud_client.get(
+        f"/api/v1/projects?workspace_id={workspace_id}", headers=first_headers
+    )
+    assert kicked.status_code == 401
+    # The second device remains fully authenticated.
+    assert (
+        cloud_client.get(f"/api/v1/projects?workspace_id={workspace_id}", headers=second_headers)
+    ).status_code == 200
+
+
 def test_login_limit_persists_failed_attempts(cloud_client: TestClient) -> None:
     responses = [
         cloud_client.post(

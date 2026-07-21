@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -1169,6 +1170,73 @@ def resolve_conflict(
     session.add(outbox)
     session.add(conflict)
     session.commit()
+
+
+@router.put("/local-sync/projects/{project_id}/diagram-imports/{public_id}", status_code=204)
+async def import_cloud_diagram(
+    project_id: int,
+    public_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> None:
+    """Restore a synced flow diagram onto a downloaded code repository.
+
+    Overwrites the locally re-scanned base graph with the structured diagram
+    (tensor graph + Agent-refined analysis) that travelled through the cloud, so
+    the downloading device shows the same diagram without re-running analysis.
+    """
+
+    get_project_or_404(project_id, session)
+    repository = session.exec(
+        select(CodeRepository).where(CodeRepository.public_id == public_id)
+    ).first()
+    if repository is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    try:
+        document = json.loads(await request.body())
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid diagram payload") from exc
+    tensor_graph = document.get("tensor_graph")
+    if isinstance(tensor_graph, dict):
+        repository.tensor_graph_json = tensor_graph
+    analysis = document.get("analysis")
+    if isinstance(analysis, dict):
+        repository.analysis_json = analysis
+    repository.analysis_revision = int(document.get("analysis_revision", 0) or 0)
+    repository.analysis_version = str(document.get("analysis_version", "") or "")
+    repository.analysis_status = str(document.get("analysis_status", "succeeded") or "succeeded")
+    repository.analysis_updated_at = utc_now()
+    repository.updated_at = utc_now()
+    session.add(repository)
+    session.commit()
+
+
+@router.get("/local-sync/diagram/{public_id}")
+def read_local_sync_diagram(public_id: str, session: Session = Depends(get_session)) -> Response:
+    """Serve a repository's generated flow diagram as a structured JSON blob.
+
+    Bundles the tensor graph and the Agent-refined analysis so the diagram
+    survives a round trip through the cloud without re-running analysis on the
+    downloading device.
+    """
+
+    repository = session.exec(
+        select(CodeRepository).where(CodeRepository.public_id == public_id)
+    ).first()
+    if repository is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    document = {
+        "schema_version": "diagram-v1",
+        "tensor_graph": repository.tensor_graph_json or {"nodes": [], "edges": []},
+        "analysis": repository.analysis_json or {},
+        "analysis_revision": repository.analysis_revision,
+        "analysis_version": repository.analysis_version,
+        "analysis_status": repository.analysis_status,
+    }
+    return Response(
+        content=json.dumps(document, ensure_ascii=False).encode("utf-8"),
+        media_type="application/json",
+    )
 
 
 @router.get("/local-sync/blobs/{entity_type}/{public_id}")

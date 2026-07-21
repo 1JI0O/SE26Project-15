@@ -11,6 +11,7 @@ import {
   runtimeMode,
   setCloudAccessToken,
   setCloudRefreshHandler,
+  setSessionExpiredHandler,
 } from '@/api/http'
 import {
   deleteRefreshToken,
@@ -36,6 +37,7 @@ export const useAuthStore = defineStore('cloud-auth', {
     workspace: null as CloudWorkspace | null,
     ready: false,
     busy: false,
+    sessionEndedElsewhere: false,
   }),
   getters: {
     authenticated: (state) => Boolean(state.accessToken && state.user),
@@ -63,6 +65,19 @@ export const useAuthStore = defineStore('cloud-auth', {
     async initialize() {
       if (this.ready) return
       setCloudRefreshHandler(() => this.refresh())
+      setSessionExpiredHandler(() => {
+        // A revoked session (e.g. this account logged in on another device)
+        // fails refresh. Clear local auth and flag a one-time notice so the
+        // router/UI can surface "signed in elsewhere" and redirect to login.
+        const wasAuthenticated = Boolean(this.user)
+        this.accessToken = ''
+        this.csrfToken = ''
+        this.user = null
+        this.workspace = null
+        setCloudAccessToken('')
+        void deleteRefreshToken()
+        if (wasAuthenticated) this.sessionEndedElsewhere = true
+      })
       try {
         if (isDesktop) {
           const refreshToken = await loadRefreshToken()
