@@ -20,6 +20,14 @@ export async function getProject(projectId: number): Promise<Project> {
   return data
 }
 
+export async function updateProject(
+  projectId: number,
+  payload: { name?: string; description?: string },
+): Promise<Project> {
+  const { data } = await http.patch<Project>(`/projects/${projectId}`, payload)
+  return data
+}
+
 export async function deleteProjects(
   projectIds: number[],
 ): Promise<ProjectBatchDeleteResult> {

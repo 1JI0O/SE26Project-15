@@ -9,27 +9,21 @@ async function sha256Hex(data: ArrayBuffer): Promise<string> {
     .join('')
 }
 
-async function attachBlob(operation: SyncOperation): Promise<SyncOperation> {
-  if (!operation.payload.requires_blob) return operation
-  const response = await localHttp.get<ArrayBuffer>(
-    `/local-sync/blobs/${operation.entity_type}/${operation.entity_public_id}`,
-    { responseType: 'arraybuffer' },
-  )
-  const bytes = response.data
-  const filename = String(operation.payload.filename ?? 'upload.bin')
-  const mimeType = filename.toLowerCase().endsWith('.pdf')
-    ? 'application/pdf'
-    : filename.toLowerCase().endsWith('.zip')
-      ? 'application/zip'
-      : 'application/octet-stream'
+async function uploadBlobBytes(
+  bytes: ArrayBuffer,
+  filename: string,
+  mimeType: string,
+  workspaceId: string,
+  projectPublicId: string,
+): Promise<string> {
   const initialized = await cloudHttp.post<{
     blob_id: string
     status: 'upload' | 'reuse'
     chunk_size: number
     uploaded_bytes: number
   }>('/blobs/upload-init', {
-    workspace_id: operation.workspace_id,
-    project_public_id: operation.payload.project_public_id,
+    workspace_id: workspaceId,
+    project_public_id: projectPublicId,
     sha256: await sha256Hex(bytes),
     byte_size: bytes.byteLength,
     mime_type: mimeType,
@@ -51,13 +45,76 @@ async function attachBlob(operation: SyncOperation): Promise<SyncOperation> {
     }
     await cloudHttp.post(`/blobs/${initialized.data.blob_id}/complete`)
   }
-  const { requires_blob: _requiresBlob, _upload_content: _uploadContent, ...safePayload } = operation.payload
-  return {
-    ...operation,
-    payload: {
-      ...safePayload,
-      blob_id: initialized.data.blob_id,
-    },
+  return initialized.data.blob_id
+}
+
+async function attachBlob(operation: SyncOperation): Promise<SyncOperation> {
+  let payload = operation.payload
+  // Upload the primary code/PDF blob if not yet on the cloud.
+  if (payload.requires_blob) {
+    const response = await localHttp.get<ArrayBuffer>(
+      `/local-sync/blobs/${operation.entity_type}/${operation.entity_public_id}`,
+      { responseType: 'arraybuffer' },
+    )
+    const bytes = response.data
+    const filename = String(payload.filename ?? 'upload.bin')
+    const mimeType = filename.toLowerCase().endsWith('.pdf')
+      ? 'application/pdf'
+      : filename.toLowerCase().endsWith('.zip')
+        ? 'application/zip'
+        : 'application/octet-stream'
+    const blobId = await uploadBlobBytes(
+      bytes,
+      filename,
+      mimeType,
+      operation.workspace_id,
+      String(payload.project_public_id),
+    )
+    const { requires_blob: _r, _upload_content: _u, ...rest } = payload
+    payload = { ...rest, blob_id: blobId }
+  }
+  // Upload the generated flow diagram (tensor graph + analysis) for code repos.
+  // The diagram can be hundreds of KB, so it travels as its own cloud blob.
+  if (payload.requires_diagram_blob) {
+    const response = await localHttp.get<ArrayBuffer>(
+      `/local-sync/diagram/${operation.entity_public_id}`,
+      { responseType: 'arraybuffer' },
+    )
+    const diagramBlobId = await uploadBlobBytes(
+      response.data,
+      `${operation.entity_public_id}-diagram.json`,
+      'application/json',
+      operation.workspace_id,
+      String(payload.project_public_id),
+    )
+    const { requires_diagram_blob: _rd, ...rest2 } = payload
+    payload = { ...rest2, diagram_blob_id: diagramBlobId }
+  }
+  return { ...operation, payload }
+}
+
+async function importDiagramBlob(
+  entityType: string,
+  payload: Record<string, unknown>,
+  projectId: number,
+  publicId: string,
+): Promise<void> {
+  if (entityType !== 'code_repository') return
+  const diagramBlobId = payload.diagram_blob_id
+  if (typeof diagramBlobId !== 'string') return
+  try {
+    const diagram = await cloudHttp.get<ArrayBuffer>(`/blobs/${diagramBlobId}/download`, {
+      responseType: 'arraybuffer',
+    })
+    await localHttp.put(
+      `/local-sync/projects/${projectId}/imports/diagram/${publicId}`,
+      diagram.data,
+      { headers: { 'Content-Type': 'application/json' } },
+    )
+  } catch {
+    // A missing/failed diagram must not abort the whole import. The base graph
+    // was already rebuilt from the code archive on import; the diagram is an
+    // enhancement layer.
   }
 }
 
@@ -102,6 +159,8 @@ async function importRemoteSourceEvents(events: SyncEvent[]): Promise<void> {
           headers: { 'Content-Type': 'application/octet-stream' },
         },
       )
+      // Restore the generated flow diagram after the repository exists locally.
+      await importDiagramBlob(event.entity_type, event.payload, projectId, event.entity_public_id)
     } else if (event.entity_type === 'code_edit') {
       const blobId = event.payload.blob_id
       if (typeof blobId !== 'string') continue
@@ -297,6 +356,7 @@ export async function downloadCloudProjectToLocal(
           headers: { 'Content-Type': 'application/octet-stream' },
         },
       )
+      await importDiagramBlob(entity.entity_type, entity.payload, projectId, entity.public_id)
     } else if (entity.entity_type === 'code_edit') {
       const blobId = entity.payload.blob_id
       if (typeof blobId !== 'string') continue

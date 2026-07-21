@@ -5,7 +5,7 @@
         <div class="header-title">
           <el-icon><FolderOpened /></el-icon>
           <h1>工作区</h1>
-          <span>{{ store.projects.length }} 个项目</span>
+          <span>{{ mergedRows.length }} 个项目</span>
         </div>
         <div v-if="managing" class="batch-actions">
           <el-checkbox v-model="allSelected" :indeterminate="partlySelected">
@@ -54,7 +54,7 @@
 
       <div class="project-content">
         <el-skeleton v-if="store.loading" class="project-loading" :rows="5" animated />
-        <el-empty v-else-if="store.projects.length === 0" description="暂无项目" />
+        <el-empty v-else-if="mergedRows.length === 0" description="暂无项目" />
         <template v-else>
           <div class="list-heading" aria-hidden="true">
             <span>项目</span>
@@ -64,39 +64,93 @@
           </div>
           <div class="project-list">
             <article
-              v-for="project in store.projects"
-              :key="project.id"
+              v-for="row in mergedRows"
+              :key="row.key"
               class="project-row"
-              :class="{ selected: selectedIds.includes(project.id) }"
-              @dblclick="openProject(project.id)"
+              :class="{ selected: row.local && selectedIds.includes(row.local.id), 'cloud-row': row.kind === 'cloud' }"
+              @dblclick="row.local ? openProject(row.local.id) : downloadCloudRow(row.cloud!)"
             >
               <div class="project-primary">
                 <el-checkbox
-                  v-if="managing"
+                  v-if="managing && row.local"
                   v-model="selectedIds"
-                  :value="project.id"
-                  :aria-label="`选择项目 ${project.name}`"
+                  :value="row.local.id"
+                  :aria-label="`选择项目 ${row.name}`"
                   @dblclick.stop
                 />
                 <el-icon class="project-icon"><Folder /></el-icon>
                 <div>
-                  <strong :title="project.name">{{ project.name }}</strong>
-                  <small>#{{ project.id }} · {{ syncLabel(project.sync_mode) }}</small>
+                  <strong :title="row.name">{{ row.name }}</strong>
+                  <small class="row-meta">
+                    <template v-if="row.local">#{{ row.local.id }}</template>
+                    <el-tag
+                      v-if="row.kind === 'cloud'"
+                      size="small"
+                      type="primary"
+                      effect="plain"
+                      round
+                    >云端 · 未下载</el-tag>
+                    <el-tag
+                      v-else-if="cloudSync && row.local"
+                      size="small"
+                      :type="statusInfo(row.local).type"
+                      effect="plain"
+                      round
+                    >{{ statusInfo(row.local).label }}</el-tag>
+                  </small>
                 </div>
               </div>
-              <p :title="project.description || '未填写项目说明'">
-                {{ project.description || '未填写项目说明' }}
+              <p :title="row.description || '未填写项目说明'">
+                {{ row.description || '未填写项目说明' }}
               </p>
-              <time :datetime="project.updated_at">{{ formatDate(project.updated_at) }}</time>
+              <time :datetime="row.updatedAt">{{ formatDate(row.updatedAt) }}</time>
               <div class="row-actions">
-                <template v-if="localCloudSyncAvailable">
-                  <el-button v-if="project.sync_mode === 'local_only'" size="small" text @click.stop="openSyncDialog(project.id)">启用同步</el-button>
-                  <el-button v-else-if="project.sync_mode === 'cloud_enabled'" size="small" text @click.stop="setSyncMode(project.id, 'cloud_paused')">暂停</el-button>
-                  <el-button v-else-if="project.sync_mode === 'cloud_paused'" size="small" text @click.stop="setSyncMode(project.id, 'cloud_enabled')">继续</el-button>
-                  <el-button v-if="['cloud_enabled', 'cloud_paused'].includes(project.sync_mode)" size="small" text type="danger" @click.stop="detach(project.id)">解除绑定</el-button>
-                  <el-button v-else-if="project.sync_mode === 'cloud_detached'" size="small" text @click.stop="setSyncMode(project.id, 'local_only')">转为仅本地</el-button>
+                <!-- Cloud-only project: must be downloaded before it can be opened (需求 3.2) -->
+                <template v-if="row.kind === 'cloud'">
+                  <el-button
+                    size="small"
+                    text
+                    type="primary"
+                    :icon="Download"
+                    :loading="downloadingId === row.publicId"
+                    @click.stop="downloadCloudRow(row.cloud!)"
+                  >同步到本地</el-button>
                 </template>
-                <el-button class="open-button" size="small" text type="primary" :icon="ArrowRight" aria-label="打开项目" @click="openProject(project.id)" />
+                <!-- Local project actions (需求 3.1 / 4: one consolidated set) -->
+                <template v-else-if="row.local">
+                  <template v-if="cloudSync">
+                    <el-button
+                      v-if="row.local.sync_mode === 'local_only'"
+                      size="small"
+                      text
+                      @click.stop="openSyncDialog(row.local.id)"
+                    >启用同步</el-button>
+                    <el-button
+                      v-else-if="row.local.sync_mode === 'cloud_enabled'"
+                      size="small"
+                      text
+                      :icon="Refresh"
+                      :loading="sync.syncing"
+                      @click.stop="syncNow()"
+                    >同步</el-button>
+                    <el-dropdown
+                      v-if="managing && ['cloud_enabled', 'cloud_paused', 'cloud_detached'].includes(row.local.sync_mode)"
+                      trigger="click"
+                      @command="(cmd: string) => onSyncCommand(row.local!.id, row.local!.sync_mode, cmd)"
+                    >
+                      <el-button size="small" text @click.stop>更多</el-button>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item v-if="row.local.sync_mode === 'cloud_enabled'" command="pause">暂停同步</el-dropdown-item>
+                          <el-dropdown-item v-if="row.local.sync_mode === 'cloud_paused'" command="resume">继续同步</el-dropdown-item>
+                          <el-dropdown-item v-if="['cloud_enabled', 'cloud_paused'].includes(row.local.sync_mode)" command="detach" divided>解除云端绑定</el-dropdown-item>
+                          <el-dropdown-item v-if="row.local.sync_mode === 'cloud_detached'" command="local_only">转为仅本地</el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </template>
+                  <el-button class="open-button" size="small" text type="primary" :icon="ArrowRight" aria-label="打开项目" @click.stop="openProject(row.local.id)" />
+                </template>
               </div>
             </article>
           </div>
@@ -111,19 +165,49 @@
         <el-button type="primary" :loading="sync.syncing" @click="enableSync">确认启用</el-button>
       </template>
     </el-dialog>
+    <el-dialog v-model="conflictDialogOpen" title="云端已存在同名项目" width="460px">
+      <p>云端已有名为“{{ conflictLocal?.name }}”的项目，请选择处理方式：</p>
+      <ul class="conflict-options">
+        <li><strong>保留云端</strong>：放弃本地上云，改为把云端版本下载到本地。</li>
+        <li><strong>覆盖云端</strong>：删除云端同名项目，用本地内容作为新的云端项目。</li>
+        <li><strong>创建副本</strong>：本地项目改名为“（副本）”后作为新的云端项目上传，两者共存。</li>
+      </ul>
+      <template #footer>
+        <el-button :disabled="conflictBusy" @click="conflictDialogOpen = false">取消</el-button>
+        <el-button :loading="conflictBusy" @click="applyConflictChoice('keep_cloud')">保留云端</el-button>
+        <el-button :loading="conflictBusy" type="warning" @click="applyConflictChoice('overwrite_cloud')">覆盖云端</el-button>
+        <el-button :loading="conflictBusy" type="primary" @click="applyConflictChoice('create_copy')">创建副本</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ArrowRight, Delete, EditPen, Folder, FolderOpened, Plus } from '@element-plus/icons-vue'
+import { ArrowRight, Delete, EditPen, Folder, FolderOpened, Plus, Refresh, Download } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { localCloudSyncAvailable } from '@/api/http'
+import { downloadCloudProjectToLocal } from '@/services/sync-client'
 import { useProjectStore } from '@/stores/project'
 import { useAuthStore } from '@/stores/auth'
 import { useSyncStore } from '@/stores/sync'
+import type { CloudProject } from '@/types/cloud'
+import type { Project } from '@/types/projects'
+
+// A unified row for the home page: either a local project (possibly synced) or
+// a cloud-only project that has not been downloaded to this device yet.
+interface MergedRow {
+  key: string
+  kind: 'local' | 'cloud'
+  publicId: string
+  name: string
+  description: string
+  updatedAt: string
+  local?: Project
+  cloud?: CloudProject
+}
 
 const router = useRouter()
 const store = useProjectStore()
@@ -131,6 +215,7 @@ const auth = useAuthStore()
 const sync = useSyncStore()
 const managing = ref(false)
 const selectedIds = ref<number[]>([])
+const downloadingId = ref<string | null>(null)
 const form = reactive({
   name: '',
   description: '',
@@ -138,6 +223,47 @@ const form = reactive({
 const syncDialogOpen = ref(false)
 const syncProjectId = ref<number | null>(null)
 const agentHistorySync = ref(true)
+const conflictDialogOpen = ref(false)
+const conflictBusy = ref(false)
+const conflictLocal = ref<Project | null>(null)
+const conflictCloud = ref<CloudProject | null>(null)
+
+const cloudSync = computed(
+  () => localCloudSyncAvailable && auth.authenticated && auth.verified,
+)
+
+// Cloud projects whose public_id is not already represented by a local project.
+const cloudOnlyProjects = computed<CloudProject[]>(() => {
+  if (!cloudSync.value) return []
+  const localPublicIds = new Set(store.projects.map((project) => project.public_id))
+  return sync.cloudProjects.filter(
+    (cloud) => cloud.sync_mode !== 'cloud_detached' && !localPublicIds.has(cloud.public_id),
+  )
+})
+
+// The merged list rendered on the home page: local projects first, then
+// cloud-only projects that still need to be downloaded.
+const mergedRows = computed<MergedRow[]>(() => {
+  const local: MergedRow[] = store.projects.map((project) => ({
+    key: `local-${project.id}`,
+    kind: 'local',
+    publicId: project.public_id,
+    name: project.name,
+    description: project.description,
+    updatedAt: project.updated_at,
+    local: project,
+  }))
+  const cloud: MergedRow[] = cloudOnlyProjects.value.map((project) => ({
+    key: `cloud-${project.public_id}`,
+    kind: 'cloud',
+    publicId: project.public_id,
+    name: project.name,
+    description: project.description,
+    updatedAt: project.updated_at,
+    cloud: project,
+  }))
+  return [...local, ...cloud]
+})
 
 const allSelected = computed({
   get: () =>
@@ -157,6 +283,9 @@ onMounted(async () => {
   } catch (error) {
     console.error('Failed to load projects', error)
     ElMessage.error('项目列表加载失败，请确认本地后端已启动')
+  }
+  if (cloudSync.value) {
+    await Promise.all([sync.refreshCloudProjects(), sync.refreshPending()])
   }
 })
 
@@ -183,17 +312,17 @@ function openProject(projectId: number) {
   void router.push({ name: 'workspace', params: { id: projectId } })
 }
 
-function syncLabel(mode: string) {
-  return {
-    local_only: '仅本地',
-    cloud_enabled: '云同步',
-    cloud_paused: '同步已暂停',
-    cloud_detached: '已解除云端绑定',
-  }[mode] ?? mode
+// Status label + tone for a local project's sync state (需求 3.1).
+function statusInfo(project: Project): { label: string; type: 'info' | 'success' | 'warning' } {
+  const status = sync.projectStatus(project)
+  if (status === 'local') return { label: '本地', type: 'info' }
+  if (status === 'syncing') return { label: '正在同步', type: 'warning' }
+  if (status === 'pending') return { label: '待同步', type: 'warning' }
+  return { label: '已同步', type: 'success' }
 }
 
 function openSyncDialog(projectId: number) {
-  if (!auth.authenticated || !auth.verified) {
+  if (!cloudSync.value) {
     ElMessage.warning('请先登录后再启用项目云同步')
     void router.push('/login')
     return
@@ -204,15 +333,106 @@ function openSyncDialog(projectId: number) {
 }
 
 async function enableSync() {
-  if (syncProjectId.value === null) return
+  const projectId = syncProjectId.value
+  if (projectId === null) return
+  const local = store.projects.find((project) => project.id === projectId)
+  if (!local) return
+  // 需求 3.3: if the cloud already has a project with the same name (different
+  // public_id), let the user decide before we push.
+  const conflict = sync.cloudProjects.find(
+    (cloud) =>
+      cloud.name === local.name &&
+      cloud.public_id !== local.public_id &&
+      cloud.sync_mode !== 'cloud_detached',
+  )
+  if (conflict) {
+    syncDialogOpen.value = false
+    await resolveNameConflict(local, conflict)
+    return
+  }
   try {
-    await sync.enable(syncProjectId.value, agentHistorySync.value)
+    await sync.enable(projectId, agentHistorySync.value)
     syncDialogOpen.value = false
     await store.fetchProjects()
     ElMessage.success('项目云同步已启用')
   } catch {
     ElMessage.error('启用同步失败，本地项目未被删除或覆盖')
   }
+}
+
+// 需求 3.3: open the conflict dialog for a local↔cloud name collision.
+function resolveNameConflict(local: Project, conflict: CloudProject) {
+  conflictLocal.value = local
+  conflictCloud.value = conflict
+  conflictDialogOpen.value = true
+}
+
+async function applyConflictChoice(choice: 'keep_cloud' | 'overwrite_cloud' | 'create_copy') {
+  const local = conflictLocal.value
+  const conflict = conflictCloud.value
+  if (!local || !conflict) return
+  conflictBusy.value = true
+  try {
+    if (choice === 'keep_cloud') {
+      await downloadToLocalByCloud(conflict)
+    } else if (choice === 'overwrite_cloud') {
+      await sync.overwriteCloudWithLocal(local.id, conflict.public_id, agentHistorySync.value)
+      await store.fetchProjects()
+      ElMessage.success('已用本地项目覆盖云端')
+    } else {
+      await sync.enableAsCopy(local.id, agentHistorySync.value)
+      await store.fetchProjects()
+      ElMessage.success('已创建云端副本并同步')
+    }
+    conflictDialogOpen.value = false
+  } catch {
+    ElMessage.error('处理冲突失败，本地项目未受影响')
+  } finally {
+    conflictBusy.value = false
+  }
+}
+
+// Per-project manual sync (需求 3.1): push local changes + pull remote.
+async function syncNow() {
+  try {
+    await sync.sync()
+    await store.fetchProjects()
+    ElMessage.success('云同步完成')
+  } catch {
+    ElMessage.error('云同步失败，本地工作不受影响')
+  }
+}
+
+// 需求 3.2: download a cloud-only project to this device.
+async function downloadToLocalByCloud(cloud: CloudProject) {
+  if (!auth.deviceId) return
+  downloadingId.value = cloud.public_id
+  try {
+    const projectId = await downloadCloudProjectToLocal(cloud, auth.deviceId)
+    await store.fetchProjects()
+    await sync.refreshCloudProjects()
+    ElMessage.success('已同步到本地，可进入工作区')
+    return projectId
+  } finally {
+    downloadingId.value = null
+  }
+}
+
+async function downloadCloudRow(cloud: CloudProject) {
+  try {
+    const projectId = await downloadToLocalByCloud(cloud)
+    if (projectId) void router.push({ name: 'workspace', params: { id: projectId } })
+  } catch {
+    ElMessage.error('下载失败，已有本地数据不会被覆盖')
+  }
+}
+
+// Dispatch the "更多" dropdown commands (需求 4: keep the row uncluttered).
+function onSyncCommand(projectId: number, _mode: string, command: string) {
+  if (command === 'pause') return setSyncMode(projectId, 'cloud_paused')
+  if (command === 'resume') return setSyncMode(projectId, 'cloud_enabled')
+  if (command === 'detach') return detach(projectId)
+  if (command === 'local_only') return setSyncMode(projectId, 'local_only')
 }
 
 async function setSyncMode(

@@ -183,6 +183,19 @@ def create_login_session(
         device.platform = platform
         device.client_version = client_version
         device.last_seen_at = utc_now()
+    # Single active device per account: logging in anywhere revokes every other
+    # live session for this user. Because get_current_identity checks
+    # revoked_at on every request, the displaced device's access token stops
+    # working immediately (not just when its refresh token next rotates).
+    revoked_at = utc_now()
+    for other_session in session.exec(
+        select(AuthSession).where(
+            AuthSession.user_id == user.user_id,
+            AuthSession.revoked_at.is_(None),
+        )
+    ).all():
+        other_session.revoked_at = revoked_at
+        session.add(other_session)
     auth_session = AuthSession(
         user_id=user.user_id,
         device_id=device.device_id,
