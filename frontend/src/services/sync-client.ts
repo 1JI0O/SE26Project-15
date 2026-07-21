@@ -171,6 +171,16 @@ export async function setLocalProjectSyncMode(
   }
 }
 
+async function pushOperations(operations: SyncOperation[]): Promise<number> {
+  if (!operations.length) return 0
+  const pushed = await cloudHttp.post<{ results: Array<Record<string, unknown>> }>(
+    '/sync/push',
+    { operations },
+  )
+  await localHttp.post('/local-sync/outbox/results', pushed.data)
+  return pushed.data.results.filter((result) => result.status === 'conflict').length
+}
+
 export async function synchronizeWorkspace(
   workspaceId: string,
   deviceId: string,
@@ -179,19 +189,21 @@ export async function synchronizeWorkspace(
   const outbox = await localHttp.get<{ operations: SyncOperation[] }>('/local-sync/outbox', {
     params: { workspace_id: workspaceId },
   })
-  const operations: SyncOperation[] = []
-  for (const operation of outbox.data.operations) {
-    operations.push(await attachBlob(operation))
-  }
+  // The CloudProject must exist server-side before any blob upload-init or
+  // child-entity push: the server rejects uploads for an unknown project with
+  // 409 "Project is not accepting uploads". attachBlob() calls the cloud, so it
+  // must run only AFTER the project operation has been pushed. Push project
+  // operations first, then attach blobs and push the remaining operations.
+  const projectOps = outbox.data.operations.filter((op) => op.entity_type === 'project')
+  const childOps = outbox.data.operations.filter((op) => op.entity_type !== 'project')
   let conflicts = 0
-  if (operations.length) {
-    const pushed = await cloudHttp.post<{ results: Array<Record<string, unknown>> }>(
-      '/sync/push',
-      { operations },
-    )
-    conflicts = pushed.data.results.filter((result) => result.status === 'conflict').length
-    await localHttp.post('/local-sync/outbox/results', pushed.data)
+  conflicts += await pushOperations(projectOps)
+  const preparedChildOps: SyncOperation[] = []
+  for (const operation of childOps) {
+    preparedChildOps.push(await attachBlob(operation))
   }
+  conflicts += await pushOperations(preparedChildOps)
+  const pushedCount = projectOps.length + preparedChildOps.length
   let after = 0
   try {
     const state = await localHttp.get<{ last_pulled_seq: number }>('/local-sync/state', {
@@ -226,7 +238,7 @@ export async function synchronizeWorkspace(
     device_id: deviceId,
     last_pulled_seq: after,
   })
-  return { pushed: operations.length, pulled: pulledCount, conflicts }
+  return { pushed: pushedCount, pulled: pulledCount, conflicts }
 }
 
 export async function downloadCloudProjectToLocal(
