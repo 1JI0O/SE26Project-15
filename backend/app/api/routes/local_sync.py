@@ -1172,7 +1172,7 @@ def resolve_conflict(
     session.commit()
 
 
-@router.put("/local-sync/projects/{project_id}/imports/diagram/{public_id}", status_code=204)
+@router.put("/local-sync/projects/{project_id}/diagram-imports/{public_id}", status_code=204)
 async def import_cloud_diagram(
     project_id: int,
     public_id: str,
