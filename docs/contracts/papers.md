@@ -49,7 +49,9 @@ export TRACELAB_MINERU_API_TOKEN='<从 MinerU 控制台获取>'
 
 `GET /api/v1/projects/{project_id}/paper-jobs/{job_id}`
 
-状态为 `queued`、`running`、`succeeded` 或 `failed`。完成后读取：
+状态为 `queued`、`running`、`succeeded` 或 `failed`。这两个轮询接口对非数字的
+`project_id`（例如客户端离开工作台后路由 id 变为 `NaN` 的在飞轮询）返回 `404` 而非 `422`，
+避免导航过程中出现请求校验错误。完成后读取：
 
 `GET /api/v1/projects/{project_id}/paper-jobs/{job_id}/result`
 

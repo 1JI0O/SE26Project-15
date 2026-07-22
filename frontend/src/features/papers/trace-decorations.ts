@@ -42,14 +42,28 @@ function wrapOccurrence(
   targetId: string,
   status: string,
 ): HTMLElement | null {
-  const needle = quote.trim()
-  if (!needle) return null
   const raw = el.textContent ?? ''
+  // The rendered DOM shows KaTeX glyphs, not `$…$` source, so a quote containing math rarely
+  // matches verbatim. Try the full quote first, then its leading plain-text run (up to the first
+  // math/backslash), so mixed "text $x$ …" quotes still get a precise partial highlight. Pure-math
+  // quotes fall through to the caller's block-level fallback.
+  const plainLead = quote.split(/[$\\]/, 1)[0].trim()
+  const candidates = [quote.trim(), plainLead].filter((c) => c.length >= 6)
+  let needle = ''
   let index = -1
-  for (let i = 0; i < occurrence; i += 1) {
-    index = raw.indexOf(needle, index + 1)
-    if (index < 0) return null
+  for (const candidate of candidates) {
+    let idx = -1
+    for (let i = 0; i < occurrence; i += 1) {
+      idx = raw.indexOf(candidate, idx + 1)
+      if (idx < 0) break
+    }
+    if (idx >= 0) {
+      needle = candidate
+      index = idx
+      break
+    }
   }
+  if (index < 0 || !needle) return null
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
   let consumed = 0
   let startNode: Text | null = null

@@ -220,6 +220,12 @@ class PublishTraceArguments(StrictModel):
     payload: TracePayload
 
 
+class FinishAnalysisArguments(TolerantModel):
+    """Declare exploration complete. Tolerant so a bare `{}` or an extra summary both work."""
+
+    summary: str = Field(default="", max_length=2000)
+
+
 TOOL_MODELS: dict[str, type[StrictModel]] = {
     "list_repository_files": RepositoryFilesArguments,
     "search_repository_text": RepositorySearchArguments,
@@ -232,6 +238,7 @@ TOOL_MODELS: dict[str, type[StrictModel]] = {
     "get_analysis_artifact": ArtifactArguments,
     "publish_architecture_graph": PublishArchitectureArguments,
     "publish_trace_candidates": PublishTraceArguments,
+    "finish_analysis": FinishAnalysisArguments,
 }
 
 TOOL_DESCRIPTIONS = {
@@ -265,14 +272,20 @@ TOOL_DESCRIPTIONS = {
         "to complete architecture analysis."
     ),
     "publish_trace_candidates": (
-        "Publish all evidence-backed proposed paper-code trace candidates. This must be called "
-        "to complete trace analysis. Each candidate needs: paper_evidence (block_id, exact quote, "
+        "Publish evidence-backed proposed paper-code trace candidates. You MAY call this multiple "
+        "times to publish in batches as you confirm them — each call is persisted and shown to "
+        "the user immediately. Each candidate needs: paper_evidence (block_id, exact quote, "
         "occurrence = which match inside the block when the quote repeats, target_type), "
         "code_evidence (path, line_start, line_end, exact quote, occurrence, role), a "
         "relation_type, and three separate scores in [0,1]: salience (importance of the target), "
         "relevance (how much this code implements it), confidence (certainty the relation is "
         "correct). Quotes are re-verified against real content at the declared occurrence; a "
-        "mismatch is rejected."
+        "mismatch is rejected. Never call it with an empty payload."
+    ),
+    "finish_analysis": (
+        "Call this exactly once when you have published every defensible trace candidate and "
+        "checked each must-inspect target. It ends the analysis. Do NOT call it before your "
+        "first successful publish unless no defensible relation exists at all."
     ),
 }
 
@@ -300,6 +313,7 @@ def tool_definitions(kind: str) -> list[dict[str, Any]]:
             "get_paper_block",
             "get_analysis_artifact",
             "publish_trace_candidates",
+            "finish_analysis",
         },
     }[kind]
     return [
@@ -675,6 +689,11 @@ def execute_tool(
     arguments = _normalize_publish_arguments(tool_name, arguments)
     if tool_name == "publish_trace_candidates":
         return _execute_publish_trace(session, project_id, repository_id, paper_id, arguments)
+    if tool_name == "finish_analysis":
+        summary = ""
+        if isinstance(arguments, dict):
+            summary = str(arguments.get("summary", ""))[:2000]
+        return {"finished": True, "summary": summary}
     validated = model.model_validate(arguments)
     repository = _repository(session, project_id, repository_id)
 

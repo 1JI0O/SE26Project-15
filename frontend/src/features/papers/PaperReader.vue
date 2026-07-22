@@ -5,6 +5,14 @@
       <span>{{ error }}</span>
       <el-button size="small" @click="$emit('retry')">重试</el-button>
     </div>
+    <div
+      v-else-if="!hasPaper && (parseStatus === 'queued' || parseStatus === 'running')"
+      class="state-placeholder"
+    >
+      <el-icon class="parsing-spin"><Loading /></el-icon>
+      <span>正在解析论文…</span>
+      <small>MinerU 正在提取正文、公式与图表，双栏长论文通常需要数分钟</small>
+    </div>
     <el-empty v-else-if="!hasPaper" description="请先上传论文 PDF" />
     <template v-else>
       <div class="markdown-toolbar">
@@ -34,6 +42,7 @@
 <script setup lang="ts">
 import 'katex/dist/katex.min.css'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { Loading } from '@element-plus/icons-vue'
 import { getPaperAssetBlob, resolvePaperAssetUrl } from '@/api/paper-api'
 import { renderPaperMarkdown } from './markdown-renderer'
 import {
@@ -51,6 +60,7 @@ const props = defineProps<{
   loading: boolean
   error: string | null
   source: string
+  parseStatus?: string
   blocks: WorkspacePaperBlock[]
   traceTargets?: PaperMark[]
   activeTargetIds?: Set<string>
@@ -123,9 +133,12 @@ function scrollToBlock(blockId: string, quote = ''): boolean {
   const root = scrollRef.value
   if (!root) return false
   const block = props.blocks.find((item) => item.id === blockId)
-  let target = block?.anchor_resolved
-    ? root.querySelector<HTMLElement>(`#${CSS.escape(block.render_anchor)}`)
-    : null
+  // Prefer the injected block anchor (id or data-paper-block-id); fall back to fuzzy quote.
+  let target =
+    root.querySelector<HTMLElement>(`[data-paper-block-id="${CSS.escape(blockId)}"]`) ||
+    (block?.anchor_resolved
+      ? root.querySelector<HTMLElement>(`#${CSS.escape(block.render_anchor)}`)
+      : null)
   if (!target && quote) {
     const needle = quote.replace(/\s+/g, ' ').trim().slice(0, 120)
     target = [...root.querySelectorAll<HTMLElement>('p, li, pre, blockquote, td')].find((item) =>
@@ -141,6 +154,9 @@ function scrollToBlock(blockId: string, quote = ''): boolean {
   highlightedElement = visualTarget || target
   highlightedElement.classList.add('paper-block-highlight')
   const top = target.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
+  // Suppress scroll-tracking for the duration of the smooth animation, otherwise the
+  // intermediate scroll events flip the active section to section-1 and snap to the top.
+  suppressScrollTrackingUntil = Date.now() + 900
   root.scrollTo({ top: Math.max(0, top - root.clientHeight * 0.2), behavior: 'smooth' })
   window.setTimeout(() => {
     highlightedElement?.classList.remove('paper-block-highlight')
@@ -163,6 +179,7 @@ function revealActiveTarget(): void {
   const active = body.querySelector<HTMLElement>('[data-trace-target].trace-target-active')
   if (!active) return
   const top = active.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
+  suppressScrollTrackingUntil = Date.now() + 900
   root.scrollTo({ top: Math.max(0, top - root.clientHeight * 0.35), behavior: 'smooth' })
 }
 
@@ -192,9 +209,11 @@ function updateActiveSection(): void {
     const root = scrollRef.value
     if (!root) return
     const headings = [...root.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')]
+    // Start from null (NOT headings[0]); otherwise any sample above the first heading — which
+    // every smooth programmatic jump passes through — would emit section-1 and snap to the top.
     const active = headings.reduce<HTMLElement | null>((current, heading) => {
       return heading.offsetTop <= root.scrollTop + 70 ? heading : current
-    }, headings[0] ?? null)
+    }, null)
     if (active?.id && active.id !== props.activeSectionId) emit('selectSection', active.id)
   })
 }
@@ -267,6 +286,23 @@ defineExpose({ scrollToSection, scrollToBlock })
 
 .state-error {
   color: #b64a3c;
+}
+
+.state-placeholder small {
+  color: #9aa5b1;
+  font-size: 11px;
+}
+
+.parsing-spin {
+  font-size: 22px;
+  color: #5885ff;
+  animation: paper-parsing-spin 1s linear infinite;
+}
+
+@keyframes paper-parsing-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .markdown-toolbar {
@@ -393,12 +429,16 @@ defineExpose({ scrollToSection, scrollToBlock })
 .markdown-body :deep(.trace-block-target) {
   cursor: pointer;
   border-left: 3px solid rgba(88, 133, 255, 0.5);
+  background: rgba(88, 133, 255, 0.1);
+  border-radius: 2px;
   padding-left: 8px;
   margin-left: -11px;
+  transition: background 140ms ease;
 }
 
 .markdown-body :deep(.trace-block-accepted) {
   border-left-color: rgba(46, 168, 118, 0.65);
+  background: rgba(46, 168, 118, 0.12);
 }
 
 .markdown-body :deep(.trace-target-active) {

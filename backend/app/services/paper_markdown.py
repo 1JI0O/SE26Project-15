@@ -98,6 +98,29 @@ def _normalized_index(markdown: str) -> tuple[str, list[int]]:
     return "".join(chars), offsets
 
 
+def _math_safe_line_start(markdown: str, start: int) -> int:
+    """Return an insertion offset at a line boundary that is never inside a math region.
+
+    Snaps back to the start of ``start``'s line; if the immediately preceding line is a lone
+    display-math opener (``$$``), snaps above that too, so a display formula rendered as::
+
+        $$
+        \\frac{a}{b}
+        $$
+
+    keeps its delimiters intact instead of receiving the anchor span between ``$$`` and the
+    LaTeX (which breaks KaTeX and destroys the anchor).
+    """
+
+    line_start = markdown.rfind("\n", 0, start) + 1
+    prev_end = line_start - 1  # index of the newline terminating the previous line
+    if prev_end > 0:
+        prev_start = markdown.rfind("\n", 0, prev_end) + 1
+        if markdown[prev_start:prev_end].strip() == "$$":
+            return prev_start
+    return line_start
+
+
 def inject_block_anchors(
     markdown: str,
     pages: list[dict[str, Any]],
@@ -145,7 +168,13 @@ def inject_block_anchors(
             match_len = min(match_len, len(norm_md) - np)
             start = offsets[np]
             end = offsets[min(np + match_len, len(offsets) - 1)]
-            anchor_position = end if block.get("kind") == "title" else start
+            if block.get("kind") == "title":
+                anchor_position = end
+            else:
+                # Place the anchor at the start of the block's markdown line, on its own line,
+                # so it is never injected inside inline `$…$` or display `$$…$$` math (which
+                # KaTeX would otherwise swallow, breaking both the formula and the anchor).
+                anchor_position = _math_safe_line_start(markdown, start)
             insertions.append(
                 (
                     anchor_position,

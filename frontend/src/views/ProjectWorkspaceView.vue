@@ -270,7 +270,13 @@
                 <el-icon><Document /></el-icon>
                 {{ paper.paperFilename.value || '论文.pdf' }}
               </span>
-              <span class="pane-meta">只读 · {{ paper.parserName.value || '等待解析' }}</span>
+              <span class="pane-meta">
+                只读 ·
+                {{
+                  paper.parserName.value ||
+                  (['queued', 'running'].includes(paper.parseStatus.value) ? '解析中…' : '等待解析')
+                }}
+              </span>
             </div>
             <PaperReader
               ref="paperReaderRef"
@@ -281,6 +287,7 @@
               :loading="paper.loading.value"
               :error="paper.error.value"
               :source="paper.paperDocument.value?.source || ''"
+              :parse-status="paper.parseStatus.value"
               :blocks="paper.paperDocument.value?.blocks || []"
               :trace-targets="paperMarks"
               :active-target-ids="traceIndex.activePaperTargetIds.value"
@@ -387,7 +394,8 @@
                 :error="trace.error.value"
                 :mode="trace.mode.value"
                 :degraded="trace.degraded.value"
-                @suggest="generateAgentAnalysis"
+                :has-generated="hasGeneratedTrace"
+                @suggest="generateAgentAnalysis(hasGeneratedTrace)"
                 @review="trace.reviewTrace"
                 @select-row="onTraceRowSelect"
                 @open-paper="jumpToTracePaper"
@@ -425,9 +433,15 @@
                   size="small"
                   type="primary"
                   :loading="trace.generating.value"
-                  @click="generateAgentAnalysis"
+                  @click="generateAgentAnalysis(hasGeneratedTrace)"
                 >
-                  {{ trace.generating.value ? 'Agent 追溯中…' : '重新生成' }}
+                  {{
+                    trace.generating.value
+                      ? 'Agent 追溯中…'
+                      : hasGeneratedTrace
+                        ? '重新生成'
+                        : '生成追溯'
+                  }}
                 </el-button>
               </aside>
             </div>
@@ -519,7 +533,12 @@
     <footer class="status-bar">
       <span><el-icon><Connection /></el-icon> {{ trace.traceRows.value.length }} 条追溯</span>
       <span>{{ paper.hasPaper.value ? '论文已解析' : '等待论文' }}</span>
-      <span>{{ repositoryStatusLabel }}</span>
+      <el-tooltip
+        content="对上传代码做静态分析：构建文件树、解析符号/调用、抽取张量流图，供追溯 Agent 导航。大仓库走后台任务，较慢。"
+        placement="top"
+      >
+        <span>{{ repositoryStatusLabel }}</span>
+      </el-tooltip>
       <span class="status-spacer" />
       <span>{{ code.selectedFile.value?.symbol || '无活动符号' }}</span>
       <span>Project {{ workspace.projectIdLabel }}</span>
@@ -793,6 +812,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', clampAgentWidth)
   window.removeEventListener('keydown', onGlobalKeydown)
   stopResize()
+  paper.cancelPolling() // stop any in-flight parse poll so it can't hit /projects/NaN/... (422)
 })
 
 watch([explorerOpen, explorerWidth], async () => {
@@ -894,13 +914,18 @@ function openBottomPanel(tab: BottomPanelKey): void {
   bottomPanelOpen.value = true
 }
 
+const hasGeneratedTrace = computed(
+  () => trace.mode.value === 'agent' || trace.traceLinks.value.length > 0,
+)
+
 function openTraceAndGenerate(): void {
   openBottomPanel('trace')
-  void generateAgentAnalysis()
+  // First run may reuse an existing job; an explicit regenerate forces a fresh pass.
+  void generateAgentAnalysis(hasGeneratedTrace.value)
 }
 
-async function generateAgentAnalysis(): Promise<void> {
-  await trace.generateSuggestions()
+async function generateAgentAnalysis(force = false): Promise<void> {
+  await trace.generateSuggestions(force)
   await tensorFlow.loadTensorFlow({ force: true })
 }
 

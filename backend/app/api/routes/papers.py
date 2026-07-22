@@ -173,14 +173,19 @@ async def submit_paper_parse_job(
 
 @router.get("/paper-jobs/{job_id}", response_model=PaperParseJobRead)
 def read_paper_parse_job(
-    project_id: int,
+    project_id: str,
     job_id: str,
     session: Session = Depends(get_session),
     service: PaperParsingService = Depends(get_paper_parsing_service),
 ) -> PaperParseJobRead:
-    get_project_or_404(project_id, session)
+    # Accept str so a stale poll with a non-numeric id (e.g. the client's route id became NaN
+    # after navigating away mid-parse) is a clean 404, not a 422 request-validation error.
+    numeric_id = parse_workspace_project_id(project_id)
+    if numeric_id is None:
+        raise HTTPException(status_code=404, detail="Paper parse job not found")
+    get_project_or_404(numeric_id, session)
     job = service.get(job_id)
-    if job is None or job.project_id != project_id:
+    if job is None or job.project_id != numeric_id:
         raise HTTPException(status_code=404, detail="Paper parse job not found")
     document = _document_for_job(job, service, session) if job.status == "succeeded" else None
     return _job_read(job, document)
@@ -188,14 +193,17 @@ def read_paper_parse_job(
 
 @router.get("/paper-jobs/{job_id}/result", response_model=PaperParseResultRead)
 def read_paper_parse_result(
-    project_id: int,
+    project_id: str,
     job_id: str,
     session: Session = Depends(get_session),
     service: PaperParsingService = Depends(get_paper_parsing_service),
 ) -> PaperParseResultRead:
-    get_project_or_404(project_id, session)
+    numeric_id = parse_workspace_project_id(project_id)
+    if numeric_id is None:
+        raise HTTPException(status_code=404, detail="Paper parse job not found")
+    get_project_or_404(numeric_id, session)
     job = service.get(job_id)
-    if job is None or job.project_id != project_id:
+    if job is None or job.project_id != numeric_id:
         raise HTTPException(status_code=404, detail="Paper parse job not found")
     if job.status != "succeeded":
         raise HTTPException(status_code=409, detail=f"Paper parse job is {job.status}")

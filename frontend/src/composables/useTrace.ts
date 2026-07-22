@@ -100,8 +100,28 @@ export function useTrace(projectId: () => number) {
     analysisLog.value = [...analysisLog.value.slice(-15), entry]
   }
 
-  async function runAnalysis(kind: 'architecture' | 'trace'): Promise<void> {
-    const submitted = await createAgentAnalysisJob(projectId(), { kind, depth: 2 })
+  // Progressive render: pull the links published so far and swap them in as batches arrive,
+  // instead of waiting for the whole run to finish. Guarded so overlapping events don't race.
+  let mergingLinks = false
+  async function mergePublishedLinks(): Promise<void> {
+    if (mergingLinks) return
+    mergingLinks = true
+    try {
+      const links = await listTraceLinks(projectId())
+      if (links.length) {
+        traceLinks.value = links
+        traceRows.value = links.map(fromTraceLink)
+        mode.value = 'agent'
+      }
+    } catch (cause) {
+      console.warn('progressive trace merge failed', cause)
+    } finally {
+      mergingLinks = false
+    }
+  }
+
+  async function runAnalysis(kind: 'architecture' | 'trace', force = false): Promise<void> {
+    const submitted = await createAgentAnalysisJob(projectId(), { kind, depth: 2, force })
     analysisProgress.value = String(submitted.progress.message || '等待 Agent 分析')
     analysisActivity.value = analysisProgress.value
     analysisLog.value = []
@@ -119,8 +139,12 @@ export function useTrace(projectId: () => number) {
           pushLog(`#${analysisStep.value} ${activity}`)
         } else if (event.event_type === 'analysis.tool.failed') {
           pushLog(`⚠ ${String(p.code ?? '重试')}`)
+        } else if (event.event_type === 'analysis.published') {
+          const total = Number(p.total_links ?? 0)
+          pushLog(`✓ 新增 ${Number(p.new_links ?? 0)} 条（累计 ${total}）`)
+          void mergePublishedLinks() // render progressively as batches land
         } else if (event.event_type === 'analysis.completed') {
-          pushLog('✓ 已发布追溯结果')
+          pushLog('✓ 追溯完成')
         } else if (event.event_type === 'analysis.validating') {
           analysisActivity.value = '正在校验并保存证据'
         }
@@ -132,13 +156,14 @@ export function useTrace(projectId: () => number) {
     }
   }
 
-  async function generateSuggestions(): Promise<void> {
+  async function generateSuggestions(force = false): Promise<void> {
     generating.value = true
     error.value = null
     try {
       // Trace only: the architecture Agent job is optional context (the flow graph is local
       // static analysis) and must never block or fail the bidirectional trace deliverable.
-      await runAnalysis('trace')
+      // force=true (从“重新生成”) bypasses the succeeded-job dedup and runs a genuinely fresh pass.
+      await runAnalysis('trace', force)
       mode.value = 'agent'
       degraded.value = false
       degradedReason.value = null

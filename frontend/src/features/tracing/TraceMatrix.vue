@@ -6,7 +6,7 @@
         <p>论文段落、公式、图表与代码文件/符号的关联审阅队列。点击行查看证据详情。</p>
       </div>
       <el-button type="primary" :loading="generating" @click="$emit('suggest')">
-        生成候选
+        {{ generating ? 'Agent 追溯中…' : hasGenerated ? '重新生成' : '生成追溯' }}
       </el-button>
     </header>
 
@@ -81,14 +81,18 @@
 import type { TraceRowView } from '@/composables/useTrace'
 import type { TraceStatus } from '@/types/tracing'
 
-defineProps<{
-  rows: TraceRowView[]
-  loading: boolean
-  generating: boolean
-  error: string | null
-  mode: string
-  degraded: boolean
-}>()
+withDefaults(
+  defineProps<{
+    rows: TraceRowView[]
+    loading: boolean
+    generating: boolean
+    error: string | null
+    mode: string
+    degraded: boolean
+    hasGenerated?: boolean
+  }>(),
+  { hasGenerated: false },
+)
 
 defineEmits<{
   suggest: []

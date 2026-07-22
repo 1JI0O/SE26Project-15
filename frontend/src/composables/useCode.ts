@@ -191,6 +191,20 @@ export function useCode(projectId: () => number) {
     return null
   }
 
+  // Prefer a top-level README as the default open file so users land on the repo overview;
+  // fall back to the first editable file anywhere in the tree.
+  function findDefaultFile(nodes: WorkspaceCodeTreeNode[]): WorkspaceCodeTreeNode | null {
+    const topFiles = nodes.filter((node) => node.kind === 'file' && isEditableFile(node.path))
+    const readme =
+      topFiles.find((node) => /^readme\.md$/i.test(baseName(node.path))) ??
+      topFiles.find((node) => /^readme(\.|$)/i.test(baseName(node.path)))
+    return readme ?? findFirstEditableFile(nodes)
+  }
+
+  function baseName(path: string): string {
+    return path.split('/').pop() ?? path
+  }
+
   async function loadCodeTree(): Promise<void> {
     loading.value = true
     error.value = null
@@ -208,8 +222,8 @@ export function useCode(projectId: () => number) {
       ignoreSummary.value = repository.summary
         ? `已忽略 ${repository.summary.ignored_count} 个规则匹配文件。`
         : '已应用 .gitignore 与 macOS 元数据过滤规则。'
-      const firstFile = findFirstEditableFile(tree)
-      if (firstFile) await openCodeFile(firstFile.path)
+      const defaultFile = findDefaultFile(tree)
+      if (defaultFile) await openCodeFile(defaultFile.path)
     } catch (cause) {
       codeTree.value = []
       codeFilename.value = ''

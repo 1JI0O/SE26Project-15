@@ -164,13 +164,12 @@ def _submit(job_id: str) -> None:
     _executor.submit(_execute_job, job_id)
 
 
-def _system_prompt(job: AgentAnalysisJob) -> tuple[str, str]:
+def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, str]:
     common = (
         "You are TraceLab's autonomous evidence analysis agent. You are the only semantic "
         "decision-maker. Local indexes are navigation aids, not conclusions. Inspect actual "
         "paper/code evidence through tools. Never invent a path, symbol, line, quote, node, or "
-        "relation. A task completes only by calling its publish tool with a schema-valid payload. "
-        "If something cannot be resolved, record it as unresolved instead of guessing."
+        "relation. If something cannot be resolved, record it as unresolved instead of guessing."
     )
     if job.kind == "architecture":
         request = (
@@ -184,8 +183,9 @@ def _system_prompt(job: AgentAnalysisJob) -> tuple[str, str]:
     else:
         request = (
             f"Trace paper document {job.paper_document_id} against repository revision "
-            f"{job.code_revision}. Work in four stages inside this single run, then publish "
-            "once.\n\n"
+            f"{job.code_revision}. Work in four stages inside this single run, publishing "
+            f"candidates in batches as you confirm them. Aim to finish within about "
+            f"{soft_target} tool steps.\n\n"
             "STAGE 1 — SCOUT (paper focus). Read the abstract and section structure first "
             "(list_paper_blocks, get_paper_block). Identify 3-8 core contributions / method "
             "components and the sections that implement them. Mark method-chapter formulas, "
@@ -216,8 +216,12 @@ def _system_prompt(job: AgentAnalysisJob) -> tuple[str, str]:
             "Rules: never let keyword overlap be the verdict; read real code before publishing; if "
             "a must-inspect target has no defensible implementation, list it in unresolved with "
             "code regions you searched. Read the current architecture artifact when useful. Prefer "
-            "few high-value relations over dense low-value ones. Call publish_trace_candidates "
-            "exactly once (an empty candidates list is valid if nothing is defensible)."
+            "few high-value relations over dense low-value ones.\n"
+            "Finishing: call publish_trace_candidates as many times as needed (each batch is "
+            "saved and shown immediately); NEVER publish an empty payload. When every defensible "
+            "candidate is published and every must-inspect target is linked or listed in "
+            "unresolved, call finish_analysis exactly once to end. If nothing at all is "
+            "defensible, call finish_analysis directly."
         )
     return common, request
 
@@ -261,6 +265,8 @@ def _activity(tool_name: str, arguments: dict[str, Any]) -> str:
             return f"发布 {count} 条追溯候选并校验证据"
         case "publish_architecture_graph":
             return "发布架构图"
+        case "finish_analysis":
+            return "整理并结束追溯"
     return "分析中"
 
 
@@ -553,6 +559,87 @@ def _persist_artifact(
     return artifact
 
 
+def _append_trace_links(
+    session: Session,
+    job: AgentAnalysisJob,
+    artifact: AgentAnalysisArtifact,
+    payload: dict[str, Any],
+) -> None:
+    """Append a later publish batch to the run's existing artifact (no new artifact row).
+
+    Links are upserted by content fingerprint (idempotent), and the artifact payload
+    accumulates candidates/unresolved so it reflects the whole run.
+    """
+
+    _persist_trace_links(session, job, artifact, payload)
+    merged = dict(artifact.payload_json)
+    merged["candidates"] = [*merged.get("candidates", []), *payload.get("candidates", [])]
+    merged["unresolved"] = [*merged.get("unresolved", []), *payload.get("unresolved", [])]
+    artifact.payload_json = merged
+    session.add(artifact)
+
+
+def _trace_soft_target(session: Session, job: AgentAnalysisJob) -> int:
+    """Heuristic soft step target derived from the paper (not a hard cap).
+
+    Scales with the number of formula/algorithm objects (each needs read+verify) plus a
+    small allowance for document size, clamped to a sane band. Only nudges the model to wrap
+    up; the hard cap is separate.
+    """
+
+    paper = session.get(PaperDocument, job.paper_document_id) if job.paper_document_id else None
+    if paper is None:
+        return 40
+    blocks = [b for page in (paper.pages_json or []) for b in page.get("blocks", [])]
+    n_formula = sum(
+        1
+        for b in blocks
+        if isinstance(b, dict)
+        and b.get("kind") in {"equation", "equation_interline", "algorithm"}
+    )
+    soft = 18 + 2 * n_formula + len(blocks) // 30
+    return max(28, min(soft, 64))
+
+
+def _finalize_trace_run(
+    session: Session,
+    job: AgentAnalysisJob,
+    run: AgentRun,
+    emitter: RunEventEmitter,
+    artifact: AgentAnalysisArtifact | None,
+    published_count: int,
+) -> None:
+    """Mark a (possibly multi-publish) trace run complete and emit terminal events."""
+
+    now = utc_now()
+    job.status = "succeeded"
+    job.error_code = None
+    if artifact is not None:
+        job.artifact_id = artifact.artifact_id
+    job.progress_json = {
+        "message": "Agent 分析完成" if published_count else "Agent 未发现可靠追溯关系"
+    }
+    job.updated_at = now
+    job.completed_at = now
+    run.status = "completed"
+    run.updated_at = now
+    run.completed_at = now
+    session.add(job)
+    session.add(run)
+    if artifact is not None:
+        session.add(artifact)
+    session.commit()
+    emitter.emit(
+        "analysis.completed",
+        {
+            "job_id": job.job_id,
+            "artifact_id": artifact.artifact_id if artifact else None,
+            "kind": job.kind,
+        },
+    )
+    emitter.emit("run.completed", {"status": "completed"})
+
+
 def _fail(session: Session, job: AgentAnalysisJob, run: AgentRun | None, code: str) -> None:
     now = utc_now()
     job.status = "failed"
@@ -615,7 +702,8 @@ def _execute_job(job_id: str) -> None:
                 return
             emitter = RunEventEmitter(session, run)
             emitter.emit("analysis.started", {"job_id": job.job_id, "kind": job.kind})
-            system_prompt, request = _system_prompt(job)
+            soft_target = _trace_soft_target(session, job) if job.kind == "trace" else 40
+            system_prompt, request = _system_prompt(job, soft_target)
             context = {
                 "system_prompt": system_prompt,
                 "history": [],
@@ -649,7 +737,9 @@ def _execute_job(job_id: str) -> None:
                 "llm_upstream_error",
             }
             provider_failures = 0
-            budget = 48 if job.kind == "architecture" else 80
+            # Hard safety cap on tool steps only. Normal termination is the model calling
+            # finish_analysis (trace) or publishing once (architecture); soft_target just nudges.
+            budget = 48 if job.kind == "architecture" else 100
             # Cache identical read results so the model does not burn steps/tokens re-reading the
             # same block or code window, and nudge it toward publishing once it has the evidence.
             seen_calls: dict[str, dict[str, Any]] = {}
@@ -665,6 +755,8 @@ def _execute_job(job_id: str) -> None:
                 "get_analysis_artifact",
             }
             converge_nudged = False
+            run_artifact: AgentAnalysisArtifact | None = None
+            published_count = 0
             publish_name = (
                 "publish_architecture_graph"
                 if job.kind == "architecture"
@@ -767,18 +859,21 @@ def _execute_job(job_id: str) -> None:
                         },
                     )
                     continue
-                if not converge_nudged and step_number >= int(budget * 0.7):
+                if not converge_nudged and step_number >= soft_target:
                     converge_nudged = True
+                    finish_hint = (
+                        ", then call finish_analysis to end" if job.kind == "trace" else ""
+                    )
                     tool_results.append(
                         {
                             "tool": "runtime",
                             "ok": False,
-                            "error": "budget_running_low",
+                            "error": "soft_target_reached",
                             "instruction": (
-                                f"You are past 70% of the step budget. Call {publish_name} ONCE "
-                                "now with every candidate you can already defend filled in "
-                                "(never an empty payload); list anything unconfirmed in "
-                                "unresolved rather than continuing to read."
+                                f"You have reached the soft step target (~{soft_target}). "
+                                f"Publish any remaining defensible candidates now (never empty)"
+                                f"{finish_hint}; put anything unconfirmed in unresolved instead "
+                                "of reading more."
                             ),
                         }
                     )
@@ -870,42 +965,117 @@ def _execute_job(job_id: str) -> None:
                         "published": bool(result.get("published")),
                     },
                 )
+                if tool_name == "finish_analysis" and result.get("finished"):
+                    # Explicit model-declared completion (trace).
+                    _finalize_trace_run(
+                        session, job, run, emitter, run_artifact, published_count
+                    )
+                    return
                 if tool_name == publish_name and result.get("published"):
-                    job.status = "validating"
-                    job.progress_json = {"message": "正在校验并保存 Agent 结果"}
-                    job.updated_at = utc_now()
-                    session.add(job)
-                    session.commit()
-                    emitter.emit("analysis.validating", {"job_id": job.job_id})
-                    try:
-                        artifact = _persist_artifact(session, job, run, result["payload"])
-                    except ValueError as exc:
-                        emitter.emit("analysis.failed", {"code": str(exc)})
-                        _fail(session, job, run, str(exc))
+                    if job.kind == "architecture":
+                        # Architecture publishes exactly once and terminates.
+                        job.status = "validating"
+                        job.progress_json = {"message": "正在校验并保存 Agent 结果"}
+                        job.updated_at = utc_now()
+                        session.add(job)
+                        session.commit()
+                        emitter.emit("analysis.validating", {"job_id": job.job_id})
+                        try:
+                            artifact = _persist_artifact(session, job, run, result["payload"])
+                        except ValueError as exc:
+                            emitter.emit("analysis.failed", {"code": str(exc)})
+                            _fail(session, job, run, str(exc))
+                            return
+                        now = utc_now()
+                        job.status = "succeeded"
+                        job.error_code = None
+                        job.progress_json = {"message": "Agent 分析完成"}
+                        job.updated_at = now
+                        job.completed_at = now
+                        run.status = "completed"
+                        run.updated_at = now
+                        run.completed_at = now
+                        session.add(job)
+                        session.add(run)
+                        session.add(artifact)
+                        session.commit()
+                        emitter.emit(
+                            "analysis.completed",
+                            {
+                                "job_id": job.job_id,
+                                "artifact_id": artifact.artifact_id,
+                                "kind": job.kind,
+                            },
+                        )
+                        emitter.emit("run.completed", {"status": "completed"})
                         return
-                    now = utc_now()
-                    job.status = "succeeded"
-                    job.error_code = None
-                    job.progress_json = {"message": "Agent 分析完成"}
-                    job.updated_at = now
-                    job.completed_at = now
-                    run.status = "completed"
-                    run.updated_at = now
-                    run.completed_at = now
-                    session.add(job)
-                    session.add(run)
-                    session.add(artifact)
-                    session.commit()
+                    # Trace: incremental, NON-terminal publish — persist and render now.
+                    try:
+                        if run_artifact is None:
+                            emitter.emit("analysis.validating", {"job_id": job.job_id})
+                            run_artifact = _persist_artifact(session, job, run, result["payload"])
+                        else:
+                            _append_trace_links(session, job, run_artifact, result["payload"])
+                        session.add(job)
+                        session.add(run_artifact)
+                        session.commit()
+                    except ValueError as exc:
+                        feedback = {
+                            "tool": tool_name,
+                            "ok": False,
+                            "error": str(exc)[:200],
+                            "instruction": (
+                                "Fix the flagged evidence and re-publish only the corrected "
+                                "candidates."
+                            ),
+                        }
+                        tool_results.append(feedback)
+                        _trace_step(run, {"type": "tool_result", **feedback}, session)
+                        emitter.emit(
+                            "analysis.tool.failed",
+                            {
+                                "tool_name": tool_name,
+                                "code": str(exc)[:120],
+                                "step": step_number,
+                                "budget": budget,
+                            },
+                        )
+                        continue
+                    new_links = len(result["payload"].get("candidates", []))
+                    published_count += new_links
                     emitter.emit(
-                        "analysis.completed",
+                        "analysis.published",
                         {
                             "job_id": job.job_id,
-                            "artifact_id": artifact.artifact_id,
-                            "kind": job.kind,
+                            "artifact_id": run_artifact.artifact_id,
+                            "new_links": new_links,
+                            "total_links": published_count,
+                            "code_revision": job.code_revision,
+                            "step": step_number,
                         },
                     )
-                    emitter.emit("run.completed", {"status": "completed"})
-                    return
+                    # Past the soft target with results in hand: push to wrap up so runs don't
+                    # drift toward the hard cap re-publishing overlapping candidates.
+                    if step_number >= soft_target:
+                        tool_results.append(
+                            {
+                                "tool": "runtime",
+                                "ok": False,
+                                "error": "wrap_up",
+                                "instruction": (
+                                    f"You have published {published_count} relations and passed "
+                                    "the soft target. If the core contributions and must-inspect "
+                                    "targets are covered, call finish_analysis NOW to end. Only "
+                                    "publish again for a genuinely new, defensible target."
+                                ),
+                            }
+                        )
+                    continue
+            # Budget exhausted. If the run already produced results, finalize as succeeded;
+            # otherwise nothing defensible was ever published.
+            if run_artifact is not None or published_count > 0:
+                _finalize_trace_run(session, job, run, emitter, run_artifact, published_count)
+                return
             emitter.emit("analysis.failed", {"code": "agent_output_incomplete"})
             _fail(session, job, run, "agent_output_incomplete")
     except Exception as exc:

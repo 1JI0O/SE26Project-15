@@ -26,6 +26,8 @@ Agent 路由注册在 `/api/v1/projects/{project_id}/agent`。运行时由会话
 
 分析任务的进度事件（`analysis.tool.started`/`analysis.tool.completed`/`analysis.tool.failed`）携带可审计的 `activity`（如“阅读论文片段 p3-b44”“检索代码 …”“发布 N 条追溯候选并校验证据”）、`step` 与 `budget`，供前端展示实时活动与步数进度，不暴露模型隐式思维链。
 
+`trace` 任务支持**渐进发布**：`publish_trace_candidates` 可被多次调用（每批立即校验、落库、并发 `analysis.published` 事件，携带 `new_links`/`total_links`/`artifact_id`/`code_revision`），前端据此**边分析边渲染**，不必等整轮结束；同一次 run 复用一个 artifact，links 按内容指纹幂等累加。终止不再靠固定步数：模型在发布完所有可辩护候选、且每个 must-inspect 目标 linked 或列入 unresolved 后调用 `finish_analysis` 显式结束；步数只有**启发式软目标**（由论文公式/算法对象数推断，仅用于提醒收敛）与**硬上限**（安全兜底，耗尽时若已产出则定稿为成功、否则失败）。空 payload 的 publish 一律拒绝。`architecture` 仍为单次 publish 即终止。
+
 ## 会话
 
 | 方法 | 路径 | 说明 |

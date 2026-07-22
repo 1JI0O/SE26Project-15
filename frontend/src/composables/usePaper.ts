@@ -31,6 +31,9 @@ export function usePaper(projectId: () => number) {
   const uploading = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  // Set on unmount so an in-flight parse poll stops instead of hitting /projects/NaN/... (422)
+  // once the route id becomes undefined after navigating away from the workbench.
+  let cancelled = false
 
   const paperSections = computed(() => paperDocument.value?.sections ?? [])
   const hasPaper = computed(() => Boolean(paperDocument.value?.markdown))
@@ -63,12 +66,20 @@ export function usePaper(projectId: () => number) {
   async function waitForJob(jobId: string): Promise<PaperParseJob> {
     const deadline = Date.now() + PARSE_TIMEOUT_MS
     while (Date.now() < deadline) {
-      const job = await getPaperParseJob(projectId(), jobId)
+      const pid = projectId()
+      // Stop cleanly if the composable was torn down or the route id is gone (navigation),
+      // rather than polling /projects/NaN/paper-jobs/... which the backend rejects with 422.
+      if (cancelled || !Number.isFinite(pid)) throw new Error('parse_poll_cancelled')
+      const job = await getPaperParseJob(pid, jobId)
       parseStatus.value = job.status
       if (job.status === 'succeeded' || job.status === 'failed') return job
       await sleep(POLL_INTERVAL_MS)
     }
     throw new Error('论文解析等待超时')
+  }
+
+  function cancelPolling(): void {
+    cancelled = true
   }
 
   function selectSection(sectionId: string): void {
@@ -96,6 +107,9 @@ export function usePaper(projectId: () => number) {
       ElMessage.success(completed.cached ? '论文解析完成（命中缓存）' : '论文解析完成')
       return true
     } catch (cause) {
+      if (cancelled || (cause instanceof Error && cause.message === 'parse_poll_cancelled')) {
+        return false // navigated away mid-parse; not a real failure, stay silent
+      }
       parseStatus.value = 'failed'
       error.value = cause instanceof Error ? cause.message : '论文上传失败'
       ElMessage.error(error.value)
@@ -120,5 +134,6 @@ export function usePaper(projectId: () => number) {
     loadPaperPages,
     handleUpload,
     selectSection,
+    cancelPolling,
   }
 }
