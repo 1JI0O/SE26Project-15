@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlmodel import Session, select
 
 from app.models.entities import AgentAnalysisArtifact, CodeRepository, PaperDocument
@@ -42,6 +43,12 @@ class SymbolArguments(StrictModel):
 class PaperBlocksArguments(PageArguments):
     section: str | None = Field(default=None, max_length=300)
     kind: str | None = Field(default=None, max_length=64)
+
+
+class ReadSourceLinesArguments(StrictModel):
+    path: str = Field(min_length=1, max_length=1000)
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
 
 
 class PaperBlockArguments(StrictModel):
@@ -219,6 +226,7 @@ TOOL_MODELS: dict[str, type[StrictModel]] = {
     "list_code_symbols": CodeSymbolsArguments,
     "get_symbol_source": SymbolArguments,
     "get_symbol_calls": SymbolArguments,
+    "read_source_lines": ReadSourceLinesArguments,
     "list_paper_blocks": PaperBlocksArguments,
     "get_paper_block": PaperBlockArguments,
     "get_analysis_artifact": ArtifactArguments,
@@ -240,6 +248,10 @@ TOOL_DESCRIPTIONS = {
     "get_symbol_source": "Read the exact source and line range for one indexed symbol.",
     "get_symbol_calls": (
         "List call sites inside one symbol and any uniquely resolved project targets."
+    ),
+    "read_source_lines": (
+        "Read an exact line window from any repository file by path (no symbol id needed). "
+        "Use this to read and quote code precisely when you only know a path and line range."
     ),
     "list_paper_blocks": (
         "Page through structured paper blocks with stable IDs, page, kind, and section path."
@@ -273,6 +285,7 @@ def tool_definitions(kind: str) -> list[dict[str, Any]]:
             "list_code_symbols",
             "get_symbol_source",
             "get_symbol_calls",
+            "read_source_lines",
             "get_analysis_artifact",
             "publish_architecture_graph",
         },
@@ -282,6 +295,7 @@ def tool_definitions(kind: str) -> list[dict[str, Any]]:
             "list_code_symbols",
             "get_symbol_source",
             "get_symbol_calls",
+            "read_source_lines",
             "list_paper_blocks",
             "get_paper_block",
             "get_analysis_artifact",
@@ -335,6 +349,30 @@ def _symbol(repository: CodeRepository, symbol_id: str) -> dict[str, Any]:
         "code_symbol_not_found: use an exact id from list_code_symbols (page through it), "
         "or cite a file path + line range directly instead of a symbol id"
     )
+
+
+def _resolve_symbol(repository: CodeRepository, symbol_id: str) -> dict[str, Any]:
+    """Exact id, else a *unique* fuzzy match by qualified name or trailing component.
+
+    Small models often cite ``ClassName`` or ``ClassName.method`` instead of the full
+    ``path::qualified`` id. Resolving a unique candidate avoids wasting steps on
+    ``code_symbol_not_found`` while never guessing when the match is ambiguous.
+    """
+
+    for symbol in repository.symbols_json:
+        if str(symbol.get("id")) == symbol_id:
+            return symbol
+    tail = symbol_id.rsplit("::", 1)[-1]
+    matches = [
+        symbol
+        for symbol in repository.symbols_json
+        if str(symbol.get("qualified_name", "")) == tail
+        or str(symbol.get("id", "")).endswith(f"::{tail}")
+        or str(symbol.get("name", "")) == tail.rsplit(".", 1)[-1]
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return _symbol(repository, symbol_id)
 
 
 def _paper_blocks(paper: PaperDocument) -> list[dict[str, Any]]:
@@ -462,36 +500,164 @@ def _resolve_code_anchor(repository: CodeRepository, evidence: TraceCodeEvidence
     return result
 
 
+def _validate_one_trace(
+    repository: CodeRepository,
+    blocks: dict[str, Any],
+    symbols: set[str],
+    paths: set[str],
+    candidate: TraceCandidate,
+) -> dict[str, Any]:
+    """Validate one candidate against real evidence; raise ValueError if unusable."""
+
+    block = blocks.get(candidate.paper_block_id)
+    if block is None or candidate.paper_evidence.block_id != candidate.paper_block_id:
+        raise ValueError("paper_evidence_ref_invalid")
+    paper_anchor = _resolve_paper_anchor(str(block.get("text", "")), candidate.paper_evidence)
+    # code_symbol_id may be an indexed symbol id, a repo path, or a path with a line-range
+    # suffix like ``file.py:186-275`` — accept all three as long as the real file exists and
+    # the code evidence quote resolves against it.
+    code_ref = candidate.code_symbol_id
+    if code_ref not in symbols and code_ref not in paths:
+        bare = re.sub(r":\d+(?:-\d+)?$", "", code_ref)
+        if bare in paths or bare in symbols:
+            code_ref = bare
+        elif candidate.code_evidence.path in paths:
+            code_ref = candidate.code_evidence.path
+        else:
+            raise ValueError("code_reference_invalid")
+    code_anchor = _resolve_code_anchor(repository, candidate.code_evidence)
+    return {"paper": paper_anchor, "code": code_anchor, "code_ref": code_ref}
+
+
 def _validate_traces(
     repository: CodeRepository,
     paper: PaperDocument,
     payload: TracePayload,
-) -> list[dict[str, Any]]:
-    """Validate every candidate against real evidence and return per-candidate anchors.
+) -> tuple[list[TraceCandidate], list[dict[str, Any]], list[str]]:
+    """Validate candidates against real evidence, dropping only the individually invalid ones.
 
-    Each returned entry is ``{"paper": <anchor>, "code": <anchor>}`` with resolved
-    occurrence, char range, and content hash so persistence can build precise targets.
+    Returns ``(kept_candidates, anchors, dropped_reasons)``. One malformed candidate must not
+    reject an entire batch of otherwise-sound relations, so bad candidates are skipped and
+    reported rather than raising. Raising only happens when the whole batch is empty/unusable,
+    so the run keeps retrying instead of silently publishing nothing.
     """
 
     blocks = {str(item.get("id")): item for item in _paper_blocks(paper)}
     symbols = {str(item.get("id")) for item in repository.symbols_json if item.get("id")}
     paths = {str(item.get("path")) for item in repository.file_tree_json if item.get("path")}
+    kept: list[TraceCandidate] = []
     anchors: list[dict[str, Any]] = []
+    dropped: list[str] = []
     for candidate in payload.candidates:
-        block = blocks.get(candidate.paper_block_id)
-        if block is None or candidate.paper_evidence.block_id != candidate.paper_block_id:
-            raise ValueError("paper_evidence_ref_invalid")
-        paper_anchor = _resolve_paper_anchor(str(block.get("text", "")), candidate.paper_evidence)
-        if candidate.code_symbol_id not in symbols and candidate.code_symbol_id not in paths:
-            raise ValueError("code_reference_invalid")
-        if (
-            candidate.code_evidence.symbol_id
-            and candidate.code_evidence.symbol_id != candidate.code_symbol_id
-        ):
-            raise ValueError("code_evidence_ref_invalid")
-        code_anchor = _resolve_code_anchor(repository, candidate.code_evidence)
-        anchors.append({"paper": paper_anchor, "code": code_anchor})
-    return anchors
+        try:
+            anchor = _validate_one_trace(repository, blocks, symbols, paths, candidate)
+        except ValueError as exc:
+            dropped.append(
+                f"{candidate.paper_block_id}->{candidate.code_symbol_id}: {exc}"[:200]
+            )
+            continue
+        kept.append(candidate)
+        anchors.append(anchor)
+    if payload.candidates and not kept:
+        # Every candidate failed — surface the first reason so the model can correct and retry.
+        raise ValueError(
+            "all_candidates_invalid: " + "; ".join(dropped[:3])
+            if dropped
+            else "all_candidates_invalid"
+        )
+    return kept, anchors, dropped
+
+
+def _normalize_publish_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Wrap flattened publish arguments into the expected ``{"payload": {...}}`` shape.
+
+    Models routinely call ``publish_trace_candidates({"candidates": [...]})`` instead of the
+    schema-required ``publish_trace_candidates({"payload": {"candidates": [...]}})``. Rejecting
+    that as ``payload: Field required`` wastes whole runs even when the evidence is sound, so we
+    normalize the two equivalent shapes here rather than depending on the model getting the
+    nesting right.
+    """
+
+    if tool_name not in {"publish_trace_candidates", "publish_architecture_graph"}:
+        return arguments
+    if not isinstance(arguments, dict):
+        return arguments
+    payload = arguments.get("payload")
+    if isinstance(payload, dict):
+        return arguments
+    # No usable payload wrapper: treat the top-level dict as the payload itself.
+    flattened = {key: value for key, value in arguments.items() if key != "payload"}
+    if flattened:
+        return {"payload": flattened}
+    return arguments
+
+
+def _execute_publish_trace(
+    session: Session,
+    project_id: int,
+    repository_id: int,
+    paper_id: int | None,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Tolerant trace publish: drop individually-bad candidates instead of failing the batch.
+
+    Two independent drop stages, both non-fatal unless *everything* fails:
+    1. schema — a candidate missing/mistyping a field is dropped, not raised as
+       ``invalid_tool_arguments`` for the whole call;
+    2. evidence — a candidate whose quote/occurrence/reference cannot be verified is dropped.
+    Raising only when the model sent candidates but none survive keeps the run retrying rather
+    than silently publishing nothing.
+    """
+
+    repository = _repository(session, project_id, repository_id)
+    payload_in = arguments.get("payload")
+    if not isinstance(payload_in, dict):
+        payload_in = {}
+    raw_candidates = payload_in.get("candidates")
+    if not isinstance(raw_candidates, list):
+        raw_candidates = []
+    unresolved = payload_in.get("unresolved")
+    unresolved = unresolved if isinstance(unresolved, list) else []
+    # An empty publish (no candidates and no unresolved) is almost always a premature/malformed
+    # call, not a genuine "nothing to trace". Reject it so the run retries with real candidates
+    # instead of succeeding with zero links. A true empty result must justify itself via
+    # ``unresolved``.
+    if not raw_candidates and not unresolved:
+        raise ValueError(
+            "empty_publish: payload.candidates was empty. Put every defensible relation in "
+            "payload.candidates, each with paper_evidence{block_id,quote} and "
+            "code_evidence{path,line_start,line_end,quote}. If truly none exist, list the "
+            "must-inspect targets you searched in payload.unresolved."
+        )
+    schema_kept: list[TraceCandidate] = []
+    dropped: list[str] = []
+    for raw in raw_candidates:
+        try:
+            schema_kept.append(TraceCandidate.model_validate(raw))
+        except ValidationError as exc:
+            first = exc.errors()[0] if exc.errors() else {}
+            loc = ".".join(str(part) for part in first.get("loc", ()))
+            dropped.append(f"schema:{loc}:{first.get('msg', 'invalid')}"[:160])
+    if raw_candidates and not schema_kept:
+        raise ValueError("all_candidates_schema_invalid: " + "; ".join(dropped[:3]))
+
+    tp = TracePayload(candidates=schema_kept, unresolved=unresolved)
+    paper = _paper(session, project_id, paper_id)
+    kept, anchors, evidence_dropped = _validate_traces(repository, paper, tp)
+    dropped.extend(evidence_dropped)
+
+    candidates_out: list[dict[str, Any]] = []
+    for candidate, anchor in zip(kept, anchors, strict=True):
+        dump = candidate.model_dump()
+        dump["code_symbol_id"] = anchor.get("code_ref", candidate.code_symbol_id)
+        dump["paper_anchor"] = anchor["paper"]
+        dump["code_anchor"] = anchor["code"]
+        candidates_out.append(dump)
+    payload = tp.model_dump()
+    payload["candidates"] = candidates_out
+    if dropped:
+        payload["dropped"] = dropped
+    return {"published": True, "payload": payload, "dropped": dropped}
 
 
 def execute_tool(
@@ -506,6 +672,9 @@ def execute_tool(
     model = TOOL_MODELS.get(tool_name)
     if model is None:
         raise ValueError("unknown_analysis_tool")
+    arguments = _normalize_publish_arguments(tool_name, arguments)
+    if tool_name == "publish_trace_candidates":
+        return _execute_publish_trace(session, project_id, repository_id, paper_id, arguments)
     validated = model.model_validate(arguments)
     repository = _repository(session, project_id, repository_id)
 
@@ -558,8 +727,24 @@ def execute_tool(
             else None,
             "total": len(items),
         }
+    if isinstance(validated, ReadSourceLinesArguments):
+        lines = _read_file(repository, validated.path).splitlines()
+        start = max(1, min(validated.line_start, len(lines) or 1))
+        end = min(len(lines), max(start, validated.line_end))
+        if end - start > 400:  # bound the window
+            end = start + 400
+        return {
+            "path": validated.path,
+            "line_start": start,
+            "line_end": end,
+            "content": "\n".join(
+                f"{number:>5} | {line}"
+                for number, line in enumerate(lines[start - 1 : end], start)
+            ),
+        }
     if isinstance(validated, SymbolArguments):
-        symbol = _symbol(repository, validated.symbol_id)
+        symbol = _resolve_symbol(repository, validated.symbol_id)
+        canonical_id = str(symbol.get("id", validated.symbol_id))
         path = str(symbol.get("path", ""))
         start = int(symbol.get("line_start") or symbol.get("line") or 1)
         end = int(symbol.get("line_end") or start)
@@ -567,7 +752,7 @@ def execute_tool(
             lines = _read_file(repository, path).splitlines()
             end = min(end, len(lines))
             return {
-                "ref": validated.symbol_id,
+                "ref": canonical_id,
                 "path": path,
                 "line_start": start,
                 "line_end": end,
@@ -579,7 +764,7 @@ def execute_tool(
         calls = [
             dict(item)
             for item in repository.analysis_json.get("calls", [])
-            if item.get("caller_symbol_id") == validated.symbol_id
+            if item.get("caller_symbol_id") == canonical_id
         ]
         by_name: dict[str, list[str]] = {}
         for item in repository.symbols_json:
@@ -587,7 +772,7 @@ def execute_tool(
         for call in calls:
             targets = by_name.get(str(call.get("callee", "")).rsplit(".", 1)[-1], [])
             call["resolved_symbol_id"] = targets[0] if len(targets) == 1 else None
-        return {"ref": validated.symbol_id, "items": calls[:100]}
+        return {"ref": canonical_id, "items": calls[:100]}
     if isinstance(validated, PaperBlocksArguments):
         paper = _paper(session, project_id, paper_id)
         items = [
@@ -634,12 +819,4 @@ def execute_tool(
     if isinstance(validated, PublishArchitectureArguments):
         _validate_architecture(repository, validated.payload, depth)
         return {"published": True, "payload": validated.payload.model_dump()}
-    if isinstance(validated, PublishTraceArguments):
-        paper = _paper(session, project_id, paper_id)
-        anchors = _validate_traces(repository, paper, validated.payload)
-        payload = validated.payload.model_dump()
-        for candidate, anchor in zip(payload["candidates"], anchors, strict=True):
-            candidate["paper_anchor"] = anchor["paper"]
-            candidate["code_anchor"] = anchor["code"]
-        return {"published": True, "payload": payload}
     raise ValueError("unsupported_analysis_tool")

@@ -72,11 +72,37 @@ def extract_markdown_sections(
     return sections
 
 
+def _normalized_index(markdown: str) -> tuple[str, list[int]]:
+    """Collapse whitespace runs to single spaces, keeping each kept char's original offset.
+
+    Lets block text be located in the served markdown even when spacing, line wrapping, or
+    indentation differ from the normalized block ``text`` — the exact ``str.find`` used before
+    missed those blocks, leaving them without a DOM anchor for hover/scroll.
+    """
+
+    chars: list[str] = []
+    offsets: list[int] = []
+    prev_space = False
+    for index, char in enumerate(markdown):
+        if char.isspace():
+            if prev_space:
+                continue
+            chars.append(" ")
+            offsets.append(index)
+            prev_space = True
+        else:
+            chars.append(char)
+            offsets.append(index)
+            prev_space = False
+    offsets.append(len(markdown))  # sentinel for end-of-match mapping
+    return "".join(chars), offsets
+
+
 def inject_block_anchors(
     markdown: str,
     pages: list[dict[str, Any]],
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Inject stable anchors before exact MinerU block text without changing the text itself."""
+    """Inject stable anchors before MinerU block text (whitespace-tolerant match)."""
 
     blocks = [
         dict(block)
@@ -86,8 +112,9 @@ def inject_block_anchors(
     ]
     if not blocks:
         return markdown, []
+    norm_md, offsets = _normalized_index(markdown)
     insertions: list[tuple[int, str]] = []
-    cursor = 0
+    norm_cursor = 0
     enriched: list[dict[str, Any]] = []
     used_anchors: set[str] = set()
     for block in blocks:
@@ -97,26 +124,41 @@ def inject_block_anchors(
         if anchor in used_anchors:
             anchor = f"{anchor}-{hashlib.sha256(block_id.encode()).hexdigest()[:8]}"
         used_anchors.add(anchor)
-        text = str(block.get("text", "")).strip()
-        position = markdown.find(text, cursor) if text else -1
-        if position < 0 and len(text) >= 40:
-            position = markdown.find(text[: min(120, len(text))], cursor)
-        resolved = position >= 0
+        needle = " ".join(str(block.get("text", "")).split())
+        # The anchor only needs the block's START offset. Block text often embeds inline math
+        # (raw LaTeX in `text`, but `$…$` in the markdown), so the full string rarely matches;
+        # progressively shorter leading prefixes locate the plain-text start of the block.
+        prefixes = [needle, needle[:120], needle[:60], needle[:40], needle[:24]] if needle else []
+        np = -1
+        match_len = 0
+        for prefix in prefixes:
+            if len(prefix) < 12:
+                break
+            np = norm_md.find(prefix, norm_cursor)
+            if np < 0:  # out-of-order block: search from the top
+                np = norm_md.find(prefix, 0)
+            if np >= 0:
+                match_len = len(prefix)
+                break
+        resolved = np >= 0
         if resolved:
-            anchor_position = position + len(text) if block.get("kind") == "title" else position
+            match_len = min(match_len, len(norm_md) - np)
+            start = offsets[np]
+            end = offsets[min(np + match_len, len(offsets) - 1)]
+            anchor_position = end if block.get("kind") == "title" else start
             insertions.append(
                 (
                     anchor_position,
                     f'<span id="{anchor}" data-paper-block-id="{html.escape(block_id)}"></span>\n',
                 )
             )
-            cursor = position + max(len(text), 1)
+            norm_cursor = np + max(match_len, 1)
         block.update(
             render_anchor=anchor,
             anchor_resolved=resolved,
             page=block.get("page_number", block.get("page", 1)),
         )
         enriched.append(block)
-    for position, value in reversed(insertions):
+    for position, value in sorted(insertions, key=lambda item: item[0], reverse=True):
         markdown = f"{markdown[:position]}{value}{markdown[position:]}"
     return markdown, enriched

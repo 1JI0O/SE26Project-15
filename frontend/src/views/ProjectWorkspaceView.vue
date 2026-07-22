@@ -399,15 +399,35 @@
                 <strong>Agent 分析</strong>
                 <span v-if="trace.mode.value">{{ trace.mode.value }}</span>
                 <span v-else>Agent 自主读取论文与代码证据</span>
-                <p v-if="trace.analysisProgress.value">{{ trace.analysisProgress.value }}</p>
-                <p v-if="trace.degradedReason.value">{{ trace.degradedReason.value }}</p>
+
+                <template v-if="trace.generating.value">
+                  <div class="agent-activity">
+                    <el-icon class="spin"><Loading /></el-icon>
+                    <span class="agent-activity-text">{{ trace.analysisActivity.value || '启动中…' }}</span>
+                  </div>
+                  <el-progress
+                    v-if="trace.analysisBudget.value"
+                    :percentage="Math.min(100, Math.round((trace.analysisStep.value / trace.analysisBudget.value) * 100))"
+                    :format="() => `步骤 ${trace.analysisStep.value}/${trace.analysisBudget.value}`"
+                    :stroke-width="10"
+                  />
+                  <ul v-if="trace.analysisLog.value.length" class="agent-log">
+                    <li v-for="(entry, i) in trace.analysisLog.value.slice().reverse()" :key="i">
+                      {{ entry }}
+                    </li>
+                  </ul>
+                </template>
+                <p v-else-if="trace.analysisProgress.value">{{ trace.analysisProgress.value }}</p>
+                <p v-if="trace.degradedReason.value" class="agent-degraded">
+                  {{ trace.degradedReason.value }}
+                </p>
                 <el-button
                   size="small"
                   type="primary"
                   :loading="trace.generating.value"
                   @click="generateAgentAnalysis"
                 >
-                  重新生成
+                  {{ trace.generating.value ? 'Agent 追溯中…' : '重新生成' }}
                 </el-button>
               </aside>
             </div>
@@ -579,6 +599,7 @@ import {
   Refresh,
   Share,
   Tickets,
+  Loading,
   UploadFilled,
   Warning,
 } from '@element-plus/icons-vue'
@@ -1764,6 +1785,52 @@ watch(activeBottomPanel, (tab) => {
 .trace-summary p {
   margin: 0;
   line-height: 1.5;
+}
+
+.agent-activity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #eef4ff;
+  color: #2b4a86;
+  font-size: 11px;
+}
+
+.agent-activity-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spin {
+  animation: agent-spin 1s linear infinite;
+}
+
+@keyframes agent-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.agent-log {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 148px;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid #e6ebf0;
+  border-radius: 6px;
+  background: #ffffff;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.7;
+  color: #55636f;
+}
+
+.agent-degraded {
+  color: #b64a3c;
 }
 
 .tensor-flow-layout {

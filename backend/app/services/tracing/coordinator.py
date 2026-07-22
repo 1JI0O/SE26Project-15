@@ -59,10 +59,11 @@ def maybe_start_trace(project_id: int) -> list[str]:
                 return []
             if not _provider_ready(session):
                 return []
-            # Architecture first so the trace run can reference the current graph artifact.
-            for kind in ("architecture", "trace"):
-                job = create_analysis_job(session, project_id, AgentAnalysisJobCreate(kind=kind))
-                job_ids.append(job.job_id)
+            # Trace only. The architecture Agent job is optional context that the flow graph
+            # does not consume and is unreliable/expensive on small models, so auto-analysis
+            # never runs it — it must not gate or delay the bidirectional trace deliverable.
+            job = create_analysis_job(session, project_id, AgentAnalysisJobCreate(kind="trace"))
+            job_ids.append(job.job_id)
     except Exception:  # pragma: no cover - best-effort background trigger
         logger.exception("auto trace coordinator failed for project %s", project_id)
         return []

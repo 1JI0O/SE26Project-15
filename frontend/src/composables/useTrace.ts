@@ -68,6 +68,10 @@ export function useTrace(projectId: () => number) {
   const degraded = ref(false)
   const degradedReason = ref<string | null>(null)
   const analysisProgress = ref('')
+  const analysisActivity = ref('')
+  const analysisStep = ref(0)
+  const analysisBudget = ref(0)
+  const analysisLog = ref<string[]>([])
 
   async function loadTraceRows(): Promise<void> {
     loading.value = true
@@ -92,13 +96,34 @@ export function useTrace(projectId: () => number) {
     }
   }
 
+  function pushLog(entry: string): void {
+    analysisLog.value = [...analysisLog.value.slice(-15), entry]
+  }
+
   async function runAnalysis(kind: 'architecture' | 'trace'): Promise<void> {
     const submitted = await createAgentAnalysisJob(projectId(), { kind, depth: 2 })
     analysisProgress.value = String(submitted.progress.message || '等待 Agent 分析')
+    analysisActivity.value = analysisProgress.value
+    analysisLog.value = []
     if (!['succeeded', 'failed'].includes(submitted.status)) {
       await streamAgentAnalysisJob(projectId(), submitted.job_id, (event) => {
-        const message = event.payload.message
-        if (typeof message === 'string') analysisProgress.value = message
+        const p = event.payload as Record<string, unknown>
+        const activity = (p.activity ?? p.message) as string | undefined
+        if (typeof p.step === 'number') analysisStep.value = p.step
+        if (typeof p.budget === 'number') analysisBudget.value = p.budget
+        if (typeof activity === 'string' && activity) {
+          analysisActivity.value = activity
+          analysisProgress.value = activity
+        }
+        if (event.event_type === 'analysis.tool.started' && typeof activity === 'string') {
+          pushLog(`#${analysisStep.value} ${activity}`)
+        } else if (event.event_type === 'analysis.tool.failed') {
+          pushLog(`⚠ ${String(p.code ?? '重试')}`)
+        } else if (event.event_type === 'analysis.completed') {
+          pushLog('✓ 已发布追溯结果')
+        } else if (event.event_type === 'analysis.validating') {
+          analysisActivity.value = '正在校验并保存证据'
+        }
       })
     }
     const completed = await getAgentAnalysisJob(projectId(), submitted.job_id)
@@ -111,7 +136,8 @@ export function useTrace(projectId: () => number) {
     generating.value = true
     error.value = null
     try {
-      await runAnalysis('architecture')
+      // Trace only: the architecture Agent job is optional context (the flow graph is local
+      // static analysis) and must never block or fail the bidirectional trace deliverable.
       await runAnalysis('trace')
       mode.value = 'agent'
       degraded.value = false
@@ -121,7 +147,7 @@ export function useTrace(projectId: () => number) {
     } catch (cause) {
       degraded.value = true
       degradedReason.value = cause instanceof Error ? cause.message : 'agent_analysis_failed'
-      ElMessage.error('Agent 分析失败，已保留现有追溯结果')
+      ElMessage.error('Agent 追溯失败，已保留现有追溯结果')
       console.error(cause)
     } finally {
       generating.value = false
@@ -156,6 +182,10 @@ export function useTrace(projectId: () => number) {
     degraded,
     degradedReason,
     analysisProgress,
+    analysisActivity,
+    analysisStep,
+    analysisBudget,
+    analysisLog,
     loadTraceRows,
     generateSuggestions,
     reviewTrace,

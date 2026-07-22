@@ -484,6 +484,7 @@ class IntegrationConfig(SQLModel, table=True):
     agent_base_url: str = Field(default="", max_length=500)
     agent_api_key: str = Field(default="", sa_column=Column(Text, nullable=False), repr=False)
     agent_model: str = Field(default="", max_length=160)
+    agent_analysis_model: str = Field(default="", max_length=160)
     agent_thinking_mode: str = Field(default="", max_length=16)
     agent_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     mineru_provider: str = Field(default="local", max_length=16)

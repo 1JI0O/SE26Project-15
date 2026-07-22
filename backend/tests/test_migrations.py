@@ -48,7 +48,7 @@ def test_desktop_schema_created_at_revision_four_but_stamped_one_upgrades_lossle
         project = connection.execute(
             text("SELECT name, description, sync_mode FROM project")
         ).one()
-    assert revision == "0010_trace_targets"
+    assert revision == "0011_agent_analysis_model"
     assert project == ("preserved", "legacy data", "local_only")
     tables = set(inspect(engine).get_table_names())
     assert {

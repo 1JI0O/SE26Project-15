@@ -20,6 +20,12 @@ Agent 路由注册在 `/api/v1/projects/{project_id}/agent`。运行时由会话
 
 分析任务复用现有 Agent provider、Run、Run Event、重试和能力快照，但使用 `kind=analysis` 的隐藏会话，不出现在普通聊天历史。`publish_architecture_graph` 与 `publish_trace_candidates` 只在对应分析任务中可见；它们只能保存可重算 artifact 和 proposed trace，不能修改代码或代替用户接受追溯。
 
+导入完成后的**自动后台追溯只创建 `trace` 任务**：架构 Agent 任务是可选上下文（流程图由本地静态分析生成，不消费该 artifact），成本高且在小模型上不稳定，因此不自动运行、也绝不阻塞或延迟双向追溯交付。手动“重新生成”同样只跑 `trace`。
+
+分析任务可选使用比对话模型更强的模型：设置项 `agent.analysis_model`（或 `TRACELAB_LLM_ANALYSIS_MODEL`）留空时复用对话模型，填入（如 `deepseek-v4-pro`）后仅对 `trace`/`architecture` 分析任务生效，用于少量重要追溯的质量提升与成本控制。
+
+分析任务的进度事件（`analysis.tool.started`/`analysis.tool.completed`/`analysis.tool.failed`）携带可审计的 `activity`（如“阅读论文片段 p3-b44”“检索代码 …”“发布 N 条追溯候选并校验证据”）、`step` 与 `budget`，供前端展示实时活动与步数进度，不暴露模型隐式思维链。
+
 ## 会话
 
 | 方法 | 路径 | 说明 |

@@ -22,6 +22,7 @@ LOCAL_REVISIONS = (
     "0008_local_artifact_versions",
     "0009_agent_analysis",
     "0010_trace_targets",
+    "0011_agent_analysis_model",
 )
 
 
@@ -140,6 +141,10 @@ def _detect_local_revision(engine: Engine, tables: set[str]) -> str:
         )
     ):
         detected = LOCAL_REVISIONS[9]
+    else:
+        return detected
+    if _has_columns(inspector, "integration_config", {"agent_analysis_model"}):
+        detected = LOCAL_REVISIONS[10]
     return detected
 
 
@@ -290,6 +295,12 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
             engine,
             "agent_run",
             {"capability_snapshot_json": "JSON NOT NULL DEFAULT '[]'"},
+        )
+    if "integration_config" in tables:
+        _add_missing_columns(
+            engine,
+            "integration_config",
+            {"agent_analysis_model": "VARCHAR(160) NOT NULL DEFAULT ''"},
         )
     if "agent_tool_request" in tables:
         _add_missing_columns(

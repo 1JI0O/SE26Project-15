@@ -207,11 +207,12 @@ def _system_prompt(job: AgentAnalysisJob) -> tuple[str, str]:
             "(target importance), relevance (how much the code implements it), confidence "
             "(certainty). Set paper_evidence.occurrence and code_evidence.occurrence correctly "
             "when a quote repeats.\n\n"
-            "Tooling rules: only call get_symbol_source with an exact id returned by "
-            "list_code_symbols (page through it to discover ids) — do not guess ids; you may also "
-            "set code_symbol_id to a file path and cite a line range directly. Copy every paper "
-            "and code quote VERBATIM from get_paper_block / get_symbol_source (exact characters) "
-            "so it can be located; set occurrence when the quote repeats.\n"
+            "Tooling rules: to read code, either call get_symbol_source with an exact id from "
+            "list_code_symbols, or call read_source_lines(path, line_start, line_end) for any "
+            "file window — do NOT guess symbol ids. code_symbol_id may be a file path plus a line "
+            "range. Copy every paper and code quote VERBATIM from get_paper_block / "
+            "get_symbol_source / read_source_lines (exact characters) so it can be located; set "
+            "occurrence when the quote repeats.\n"
             "Rules: never let keyword overlap be the verdict; read real code before publishing; if "
             "a must-inspect target has no defensible implementation, list it in unresolved with "
             "code regions you searched. Read the current architecture artifact when useful. Prefer "
@@ -229,6 +230,38 @@ def _trace_step(run: AgentRun, item: dict[str, Any], session: Session) -> None:
     run.updated_at = utc_now()
     session.add(run)
     session.commit()
+
+
+def _activity(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Human-readable description of the current agent action for the progress UI."""
+
+    args = arguments or {}
+    payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+    match tool_name:
+        case "list_paper_blocks":
+            return "浏览论文结构"
+        case "get_paper_block":
+            return f"阅读论文片段 {args.get('block_id', '')}".strip()
+        case "list_repository_files":
+            return "浏览代码文件"
+        case "list_code_symbols":
+            return "枚举代码符号"
+        case "get_symbol_source":
+            return f"阅读代码 {args.get('symbol_id', '')}".strip()
+        case "get_symbol_calls":
+            return f"分析调用关系 {args.get('symbol_id', '')}".strip()
+        case "search_repository_text":
+            return f"检索代码 “{args.get('query', '')}”"
+        case "read_source_lines":
+            return f"阅读代码 {args.get('path', '')}:{args.get('line_start', '')}"
+        case "get_analysis_artifact":
+            return "读取已有分析结果"
+        case "publish_trace_candidates":
+            count = len(payload.get("candidates", []) or [])
+            return f"发布 {count} 条追溯候选并校验证据"
+        case "publish_architecture_graph":
+            return "发布架构图"
+    return "分析中"
 
 
 def _safe_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -554,7 +587,7 @@ def _execute_job(job_id: str) -> None:
             )
             session.add(conversation)
             session.flush()
-            provider, reason = _provider_from_settings(session)
+            provider, reason = _provider_from_settings(session, for_analysis=True)
             run = AgentRun(
                 conversation_id=conversation.conversation_id,
                 project_id=job.project_id,
@@ -604,7 +637,34 @@ def _execute_job(job_id: str) -> None:
                 "tool_definitions": tool_definitions(job.kind),
             }
             tool_results: list[dict[str, Any]] = []
-            budget = 48 if job.kind == "architecture" else 110
+            # Transient provider hiccups (malformed/truncated JSON on a big publish payload,
+            # empty responses, rate limits) should not kill an otherwise-successful run. Retry
+            # them a bounded number of times before giving up.
+            _RETRYABLE = {
+                "llm_invalid_json",
+                "llm_empty_response",
+                "llm_rate_limited",
+                "llm_timeout",
+                "llm_transport_error",
+                "llm_upstream_error",
+            }
+            provider_failures = 0
+            budget = 48 if job.kind == "architecture" else 80
+            # Cache identical read results so the model does not burn steps/tokens re-reading the
+            # same block or code window, and nudge it toward publishing once it has the evidence.
+            seen_calls: dict[str, dict[str, Any]] = {}
+            _READ_TOOLS = {
+                "list_repository_files",
+                "search_repository_text",
+                "list_code_symbols",
+                "get_symbol_source",
+                "get_symbol_calls",
+                "read_source_lines",
+                "list_paper_blocks",
+                "get_paper_block",
+                "get_analysis_artifact",
+            }
+            converge_nudged = False
             publish_name = (
                 "publish_architecture_graph"
                 if job.kind == "architecture"
@@ -618,6 +678,32 @@ def _execute_job(job_id: str) -> None:
                 try:
                     step = provider.next_step(request, context, tool_results)
                 except AgentProviderFailure as exc:
+                    if exc.reason in _RETRYABLE and provider_failures < 6:
+                        provider_failures += 1
+                        emitter.emit(
+                            "analysis.tool.failed",
+                            {
+                                "tool_name": "provider",
+                                "code": exc.reason,
+                                "step": step_number,
+                                "budget": budget,
+                            },
+                        )
+                        # Nudge the model to re-emit strictly valid, smaller JSON, and keep going.
+                        tool_results.append(
+                            {
+                                "tool": "runtime",
+                                "ok": False,
+                                "error": exc.reason,
+                                "instruction": (
+                                    "Your previous response was not valid JSON or was empty. "
+                                    "Re-issue exactly one tool call with strict JSON. If "
+                                    "publishing many candidates at once fails, publish fewer "
+                                    "at a time."
+                                ),
+                            }
+                        )
+                        continue
                     emitter.emit("analysis.failed", {"code": exc.reason})
                     _fail(session, job, run, exc.reason)
                     return
@@ -644,7 +730,68 @@ def _execute_job(job_id: str) -> None:
                     tool_results.append(feedback)
                     continue
                 tool_name = step.tool_name or ""
-                emitter.emit("analysis.tool.started", {"tool_name": tool_name})
+                activity = _activity(tool_name, step.arguments)
+                call_key = (
+                    tool_name
+                    + "|"
+                    + json.dumps(step.arguments, sort_keys=True, ensure_ascii=False)[:2000]
+                )
+                if tool_name in _READ_TOOLS and call_key in seen_calls:
+                    # Duplicate read: skip the environment hit and steer toward publishing.
+                    feedback = {
+                        "tool": tool_name,
+                        "ok": True,
+                        "reused": True,
+                        "result": seen_calls[call_key],
+                        "instruction": (
+                            "You already retrieved this exact content — do not read it again. "
+                            "Read anything still missing, then when ready call "
+                            f"{publish_name} ONCE with all candidates filled in. Never call it "
+                            "with an empty payload."
+                        ),
+                    }
+                    tool_results.append(feedback)
+                    _trace_step(
+                        run,
+                        {"type": "tool_result", "tool": tool_name, "ok": True, "reused": True},
+                        session,
+                    )
+                    emitter.emit(
+                        "analysis.tool.completed",
+                        {
+                            "tool_name": tool_name,
+                            "activity": activity,
+                            "step": step_number,
+                            "budget": budget,
+                            "reused": True,
+                        },
+                    )
+                    continue
+                if not converge_nudged and step_number >= int(budget * 0.7):
+                    converge_nudged = True
+                    tool_results.append(
+                        {
+                            "tool": "runtime",
+                            "ok": False,
+                            "error": "budget_running_low",
+                            "instruction": (
+                                f"You are past 70% of the step budget. Call {publish_name} ONCE "
+                                "now with every candidate you can already defend filled in "
+                                "(never an empty payload); list anything unconfirmed in "
+                                "unresolved rather than continuing to read."
+                            ),
+                        }
+                    )
+                emitter.emit(
+                    "analysis.tool.started",
+                    {
+                        "tool_name": tool_name,
+                        "activity": activity,
+                        "message": activity,
+                        "step": step_number,
+                        "budget": budget,
+                    },
+                )
                 try:
                     result = execute_tool(
                         session,
@@ -675,7 +822,15 @@ def _execute_job(job_id: str) -> None:
                     }
                     tool_results.append(feedback)
                     _trace_step(run, {"type": "tool_result", **feedback}, session)
-                    emitter.emit("analysis.tool.failed", {"tool_name": tool_name, "code": error})
+                    emitter.emit(
+                        "analysis.tool.failed",
+                        {
+                            "tool_name": tool_name,
+                            "code": error,
+                            "step": step_number,
+                            "budget": budget,
+                        },
+                    )
                     continue
                 except ValueError as exc:
                     error = str(exc)[:240] or "analysis_evidence_invalid"
@@ -689,15 +844,31 @@ def _execute_job(job_id: str) -> None:
                     }
                     tool_results.append(feedback)
                     _trace_step(run, {"type": "tool_result", **feedback}, session)
-                    emitter.emit("analysis.tool.failed", {"tool_name": tool_name, "code": error})
+                    emitter.emit(
+                        "analysis.tool.failed",
+                        {
+                            "tool_name": tool_name,
+                            "code": error,
+                            "step": step_number,
+                            "budget": budget,
+                        },
+                    )
                     continue
                 safe = _safe_result(tool_name, result)
+                if tool_name in _READ_TOOLS:
+                    seen_calls[call_key] = safe
                 feedback = {"tool": tool_name, "ok": True, "result": safe}
                 tool_results.append(feedback)
                 _trace_step(run, {"type": "tool_result", **feedback}, session)
                 emitter.emit(
                     "analysis.tool.completed",
-                    {"tool_name": tool_name, "published": bool(result.get("published"))},
+                    {
+                        "tool_name": tool_name,
+                        "activity": activity,
+                        "step": step_number,
+                        "budget": budget,
+                        "published": bool(result.get("published")),
+                    },
                 )
                 if tool_name == publish_name and result.get("published"):
                     job.status = "validating"
