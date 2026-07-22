@@ -167,8 +167,81 @@ def test_architecture_graph_selects_main_model_and_keeps_debug_graph(tmp_path: P
     encoder = next(node for node in graph["nodes"] if node["label"] == "Encoder")
     assert encoder["metadata"]["expandable"] is True
     assert encoder["metadata"]["component_symbol_id"] == "models/model.py::Encoder"
+    encoder_graph = architecture["graphs"]["models/model.py::Encoder"]
+    conv = next(node for node in encoder_graph["nodes"] if node["label"] == "Conv")
+    assert conv["metadata"]["expandable"] is False
+    assert conv["metadata"]["external"] is True
     assert all("Loss" not in root["label"] for root in architecture["roots"])
     assert any(node["op"] == "add" for node in analysis["tensor_graph"]["nodes"])
+
+
+def test_architecture_graph_expands_project_calls_and_keeps_torch_terminals(
+    tmp_path: Path,
+) -> None:
+    archive_path = tmp_path / "repository.zip"
+    _write_zip(
+        archive_path,
+        {
+            "repo/models/model.py": (
+                "import torch\n"
+                "import torch.nn as nn\n"
+                "import torch.nn.functional as F\n"
+                "from models.ops import project_encode\n\n"
+                "class Model(nn.Module):\n"
+                "    def __init__(self):\n"
+                "        super().__init__()\n"
+                "        self.proj = nn.Linear(8, 8)\n\n"
+                "    def encode(self, x):\n"
+                "        return self.proj(x)\n\n"
+                "    def forward(self, x):\n"
+                "        x = self.encode(x)\n"
+                "        x = project_encode(x)\n"
+                "        x = F.relu(x)\n"
+                "        x = ambiguous(x)\n"
+                "        x = getattr(self, 'encode')(x)\n"
+                "        return torch.cat([x, x], dim=1)\n"
+            ),
+            "repo/models/ops.py": (
+                "import torch.nn.functional as F\n\n"
+                "def project_encode(x):\n"
+                "    return F.gelu(x)\n"
+            ),
+            "repo/first/helpers.py": "def ambiguous(x):\n    return x\n",
+            "repo/second/helpers.py": "def ambiguous(x):\n    return x\n",
+        },
+    )
+
+    architecture = analyze_code_archive(archive_path)["architecture_graph"]
+    model_graph = architecture["graphs"]["models/model.py::Model"]
+    encode = next(node for node in model_graph["nodes"] if node["label"] == "Encode")
+    project = next(
+        node for node in model_graph["nodes"] if node["label"] == "Project Encode"
+    )
+
+    assert encode["metadata"]["component_symbol_id"] == "models/model.py::Model.encode"
+    assert encode["metadata"]["expandable"] is True
+    assert project["metadata"]["component_symbol_id"] == "models/ops.py::project_encode"
+    assert project["metadata"]["expandable"] is True
+    assert {node["op"] for node in model_graph["nodes"]} >= {
+        "torch.nn.functional.relu",
+        "torch.cat",
+        "unresolved_call",
+    }
+    unresolved = [
+        node for node in model_graph["nodes"] if node["op"] == "unresolved_call"
+    ]
+    assert any("ambiguous" in node["label"] for node in unresolved)
+    assert any("dynamic_call" in node["label"] for node in unresolved)
+    assert all(
+        node["metadata"]["component_symbol_id"] is None
+        and node["metadata"]["expandable"] is False
+        for node in unresolved
+    )
+
+    method_graph = architecture["graphs"]["models/model.py::Model.encode"]
+    assert any(node["label"] == "Proj" for node in method_graph["nodes"])
+    function_graph = architecture["graphs"]["models/ops.py::project_encode"]
+    assert any(node["op"] == "torch.nn.functional.gelu" for node in function_graph["nodes"])
 
 
 def test_analysis_uses_saved_edit_overlay(tmp_path: Path) -> None:

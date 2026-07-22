@@ -12,7 +12,7 @@ from app.db.session import engine
 from app.models.entities import CodeRepository, RepositoryAnalysisJob, utc_now
 from app.services.code_analysis.analyzer import analyze_code_archive
 
-ANALYZER_VERSION = "architecture-v3"
+ANALYZER_VERSION = "architecture-v4"
 
 _executor = ThreadPoolExecutor(
     max_workers=max(settings.tracelab_analysis_workers, 1),

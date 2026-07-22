@@ -44,24 +44,6 @@ _TRANSPARENT_CALLS = {
     "unsqueeze",
     "view",
 }
-_LOW_LEVEL_TORCH_CALLS = {
-    "arange",
-    "clamp",
-    "einsum",
-    "exp",
-    "full",
-    "linspace",
-    "matmul",
-    "mean",
-    "norm",
-    "ones",
-    "rand",
-    "randn",
-    "sigmoid",
-    "softmax",
-    "sum",
-    "zeros",
-}
 _MEANINGFUL_CALL_TOKENS = (
     "attention",
     "backbone",
@@ -107,6 +89,15 @@ def _call_owner(node: ast.Call) -> ast.AST | None:
     return node.func.value if isinstance(node.func, ast.Attribute) else None
 
 
+def _static_callee_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        owner = _static_callee_name(node.value)
+        return f"{owner}.{node.attr}" if owner else ""
+    return ""
+
+
 @dataclass
 class ModuleField:
     name: str
@@ -135,6 +126,56 @@ class ModelClass:
     @property
     def line_span(self) -> int:
         return max((self.node.end_lineno or self.node.lineno) - self.node.lineno, 1)
+
+
+@dataclass
+class ExecutionSpec:
+    root_symbol: str
+    execution_symbol: str
+    root_label: str
+    path: str
+    function: FunctionNode
+    owner: ModelClass | None = None
+
+
+@dataclass
+class ProjectCallResolution:
+    target: ExecutionSpec | None = None
+    unresolved_reason: str | None = None
+
+
+def _module_name(path: str) -> str:
+    parts = list(PurePosixPath(path).with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _import_bindings(path: str, tree: ast.Module) -> dict[str, str]:
+    bindings: dict[str, str] = {}
+    current_module = _module_name(path)
+    package_parts = current_module.split(".")[:-1]
+    if PurePosixPath(path).stem == "__init__":
+        package_parts = current_module.split(".")
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                local = alias.asname or alias.name.split(".", 1)[0]
+                bindings[local] = alias.name if alias.asname else local
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                keep = max(len(package_parts) - node.level + 1, 0)
+                prefix = package_parts[:keep]
+                module_parts = node.module.split(".") if node.module else []
+                module = ".".join([*prefix, *module_parts])
+            else:
+                module = node.module or ""
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                local = alias.asname or alias.name
+                bindings[local] = ".".join(part for part in (module, alias.name) if part)
+    return bindings
 
 
 def _collect_classes(
@@ -237,18 +278,96 @@ def _root_score(spec: ModelClass, referenced: set[str]) -> int:
     return score
 
 
+class ProjectCallableIndex:
+    def __init__(
+        self,
+        executions: list[ExecutionSpec],
+        imports_by_path: dict[str, dict[str, str]],
+    ) -> None:
+        self.imports_by_path = imports_by_path
+        self.by_symbol = {execution.root_symbol: execution for execution in executions}
+        self.methods: dict[tuple[str, str], ExecutionSpec] = {}
+        self.functions_by_name: dict[str, list[ExecutionSpec]] = {}
+        self.functions_by_canonical_name: dict[str, list[ExecutionSpec]] = {}
+        self.project_modules = {_module_name(execution.path) for execution in executions}
+        for execution in executions:
+            if execution.owner is not None:
+                method_name = execution.function.name
+                self.methods[(execution.owner.symbol_id, method_name)] = execution
+                continue
+            self.functions_by_name.setdefault(execution.function.name, []).append(execution)
+            canonical = f"{_module_name(execution.path)}.{execution.function.name}"
+            self.functions_by_canonical_name.setdefault(canonical, []).append(execution)
+
+    def canonical_callee(self, path: str, callee: str) -> str:
+        root, separator, suffix = callee.partition(".")
+        imported = self.imports_by_path.get(path, {}).get(root)
+        if imported is None:
+            return callee
+        return f"{imported}.{suffix}" if separator else imported
+
+    def resolve(self, execution: ExecutionSpec, callee: str) -> ProjectCallResolution:
+        if callee == "dynamic_call":
+            return ProjectCallResolution(unresolved_reason="调用目标由运行时表达式决定")
+        if callee.startswith("self."):
+            method_name = callee.removeprefix("self.")
+            if "." not in method_name and execution.owner is not None:
+                target = self.methods.get((execution.owner.symbol_id, method_name))
+                if target is not None:
+                    return ProjectCallResolution(target=target)
+                return ProjectCallResolution(
+                    unresolved_reason=f"当前类中找不到唯一方法 {callee}"
+                )
+            return ProjectCallResolution()
+
+        short_name = callee.rsplit(".", 1)[-1]
+        same_file = [
+            candidate
+            for candidate in self.functions_by_name.get(short_name, [])
+            if candidate.path == execution.path
+        ]
+        if "." not in callee and len(same_file) == 1:
+            return ProjectCallResolution(target=same_file[0])
+
+        canonical = self.canonical_callee(execution.path, callee)
+        imported = self.functions_by_canonical_name.get(canonical, [])
+        if len(imported) == 1:
+            return ProjectCallResolution(target=imported[0])
+        if len(imported) > 1:
+            return ProjectCallResolution(
+                unresolved_reason=f"项目中存在多个导入目标 {canonical}"
+            )
+
+        global_matches = self.functions_by_name.get(short_name, [])
+        if "." not in callee and len(global_matches) == 1:
+            return ProjectCallResolution(target=global_matches[0])
+        if "." not in callee and len(global_matches) > 1:
+            return ProjectCallResolution(
+                unresolved_reason=f"项目中存在多个名为 {short_name} 的函数"
+            )
+        if canonical != callee and any(
+            canonical == module or canonical.startswith(f"{module}.")
+            for module in self.project_modules
+        ):
+            return ProjectCallResolution(
+                unresolved_reason=f"导入的项目调用 {callee} 无法定位到唯一函数"
+            )
+        return ProjectCallResolution()
+
+
 class ArchitectureGraphBuilder:
     def __init__(
         self,
-        spec: ModelClass,
+        execution: ExecutionSpec,
         classes: dict[str, ModelClass],
-        function_symbols: dict[str, list[dict[str, Any]]],
+        callables: ProjectCallableIndex,
     ) -> None:
-        self.spec = spec
+        self.execution = execution
+        self.spec = execution.owner
         self.classes = classes
-        self.function = _delegated_execution_method(spec)
-        self.execution_symbol = f"{spec.path}::{spec.name}.{self.function.name}"
-        self.function_symbols = function_symbols
+        self.function = execution.function
+        self.execution_symbol = execution.execution_symbol
+        self.callables = callables
         self.nodes: list[dict[str, Any]] = []
         self.edges: list[dict[str, Any]] = []
         self.environment: dict[str, str] = {}
@@ -279,7 +398,7 @@ class ArchitectureGraphBuilder:
                 "symbol_id": self.execution_symbol,
                 "shape": None,
                 "shape_reason": "模块级静态架构视图不推断运行时张量形状",
-                "source_path": self.spec.path,
+                "source_path": self.execution.path,
                 "line_start": line_start,
                 "line_end": line_end,
                 "metadata": {"layer": "architecture", **(metadata or {})},
@@ -307,6 +426,8 @@ class ArchitectureGraphBuilder:
         )
 
     def _field_for_callee(self, callee: str) -> ModuleField | None:
+        if self.spec is None:
+            return None
         matches = [
             field
             for name, field in self.spec.modules.items()
@@ -314,11 +435,13 @@ class ArchitectureGraphBuilder:
         ]
         return max(matches, key=lambda field: len(field.name), default=None)
 
-    def _custom_function(self, callee: str) -> dict[str, Any] | None:
-        matches = self.function_symbols.get(callee.rsplit(".", 1)[-1], [])
-        return matches[0] if len(matches) == 1 else None
+    def _is_torch_call(self, callee: str) -> bool:
+        canonical = self.callables.canonical_callee(self.execution.path, callee)
+        return canonical == "torch" or canonical.startswith("torch.")
 
-    def _meaningful_function(self, callee: str, custom: dict[str, Any] | None) -> bool:
+    def _meaningful_function(
+        self, callee: str, resolution: ProjectCallResolution
+    ) -> bool:
         suffix = callee.rsplit(".", 1)[-1].lower()
         if callee.startswith("super.") and suffix == "forward":
             return True
@@ -326,11 +449,35 @@ class ArchitectureGraphBuilder:
             return True
         if suffix in _TRANSPARENT_CALLS:
             return False
-        if callee.startswith("torch.") and suffix in _LOW_LEVEL_TORCH_CALLS:
-            return False
-        if custom is not None:
+        if self._is_torch_call(callee):
+            return True
+        if resolution.target is not None or resolution.unresolved_reason is not None:
             return True
         return any(token in suffix for token in _MEANINGFUL_CALL_TOKENS)
+
+    def _add_unresolved_call(
+        self,
+        node: ast.Call,
+        callee: str,
+        reason: str,
+        inputs: list[str],
+        previous: str | None,
+    ) -> str:
+        node_id = self.add_node(
+            node,
+            label=f"未解析调用: {callee}",
+            kind="operation",
+            op="unresolved_call",
+            description=f"无法静态解析调用 {callee}：{reason}。",
+            metadata={
+                "component_symbol_id": None,
+                "expandable": False,
+                "external": True,
+            },
+        )
+        for source in inputs or ([previous] if previous else []):
+            self.add_edge(source, node_id)
+        return node_id
 
     def expression(self, node: ast.AST) -> str | None:
         if isinstance(node, ast.Name):
@@ -348,10 +495,10 @@ class ArchitectureGraphBuilder:
             inputs.extend(self.expression(argument) for argument in node.args)
             inputs.extend(self.expression(keyword.value) for keyword in node.keywords)
             inputs = list(dict.fromkeys(source for source in inputs if source))
-            callee = expression_name(node.func) or "dynamic_call"
+            callee = _static_callee_name(node.func) or "dynamic_call"
             field = self._field_for_callee(callee)
-            custom = self._custom_function(callee)
-            if field is None and not self._meaningful_function(callee, custom):
+            resolution = self.callables.resolve(self.execution, callee)
+            if field is None and not self._meaningful_function(callee, resolution):
                 return inputs[-1] if inputs else None
 
             if field is not None:
@@ -369,22 +516,55 @@ class ArchitectureGraphBuilder:
                         "external": component is None,
                     },
                 )
+            elif resolution.unresolved_reason is not None:
+                return self._add_unresolved_call(
+                    node,
+                    callee,
+                    resolution.unresolved_reason,
+                    inputs,
+                    previous,
+                )
+            elif resolution.target is not None:
+                target = resolution.target
+                node_id = self.add_node(
+                    node,
+                    label=_display_name(callee.rsplit(".", 1)[-1]),
+                    kind="component",
+                    op="function",
+                    description=f"调用项目函数 {target.root_label}。",
+                    metadata={
+                        "constructor": callee,
+                        "component_symbol_id": target.root_symbol,
+                        "expandable": target.root_symbol in self.callables.by_symbol,
+                        "external": False,
+                    },
+                )
             else:
                 label = _display_name(callee.rsplit(".", 1)[-1])
                 internal_method = (
-                    callee.startswith("self.") and callee.rsplit(".", 1)[-1] in self.spec.methods
+                    self.spec is not None
+                    and callee.startswith("self.")
+                    and callee.rsplit(".", 1)[-1] in self.spec.methods
                 )
                 node_id = self.add_node(
                     node,
                     label=label,
-                    kind="component",
-                    op="function",
-                    description=f"模型主路径中的关键函数调用：{callee}。",
+                    kind="operation" if self._is_torch_call(callee) else "component",
+                    op=(
+                        self.callables.canonical_callee(self.execution.path, callee)
+                        if self._is_torch_call(callee)
+                        else "function"
+                    ),
+                    description=(
+                        f"本地静态分析识别的张量操作：{callee}。"
+                        if self._is_torch_call(callee)
+                        else f"模型主路径中的关键外部调用：{callee}。"
+                    ),
                     metadata={
                         "constructor": callee,
                         "component_symbol_id": None,
                         "expandable": False,
-                        "external": custom is None and not internal_method,
+                        "external": not internal_method,
                     },
                 )
             for source in inputs or ([previous] if previous else []):
@@ -497,7 +677,7 @@ class ArchitectureGraphBuilder:
                     label="Output",
                     kind="output",
                     op="output",
-                    description=f"{self.spec.name} 的模型输出。",
+                    description=f"{self.execution.root_label} 的输出。",
                     metadata={"expandable": False, "external": False},
                 )
                 self.add_edge(source or previous, output)
@@ -520,7 +700,7 @@ class ArchitectureGraphBuilder:
                 label=_display_name(argument.arg),
                 kind="input",
                 op="input",
-                description=f"{self.spec.name} 的输入参数 {argument.arg}。",
+                description=f"{self.execution.root_label} 的输入参数 {argument.arg}。",
                 metadata={"expandable": False, "external": False},
             )
             self.environment[argument.arg] = input_node
@@ -532,15 +712,15 @@ class ArchitectureGraphBuilder:
                 label="Output",
                 kind="output",
                 op="output",
-                description=f"{self.spec.name} 的模型输出。",
+                description=f"{self.execution.root_label} 的输出。",
                 metadata={"expandable": False, "external": False},
             )
             self.add_edge(previous, output)
         return {
             "nodes": self.nodes,
             "edges": self.edges,
-            "root_symbol": self.spec.symbol_id,
-            "root_label": self.spec.name,
+            "root_symbol": self.execution.root_symbol,
+            "root_label": self.execution.root_label,
             "execution_symbol": self.execution_symbol,
         }
 
@@ -550,10 +730,51 @@ def build_architecture_index(
     symbols: list[dict[str, Any]],
 ) -> dict[str, Any]:
     classes = _collect_classes(sources)
-    function_symbols: dict[str, list[dict[str, Any]]] = {}
-    for symbol in symbols:
-        if symbol.get("kind") == "function":
-            function_symbols.setdefault(str(symbol.get("name", "")), []).append(symbol)
+    imports_by_path = {
+        path: _import_bindings(path, tree)
+        for path, _source, tree in sources
+    }
+    executions: list[ExecutionSpec] = []
+    for spec in classes.values():
+        delegated = _delegated_execution_method(spec)
+        executions.append(
+            ExecutionSpec(
+                root_symbol=spec.symbol_id,
+                execution_symbol=f"{spec.path}::{spec.name}.{delegated.name}",
+                root_label=spec.name,
+                path=spec.path,
+                function=delegated,
+                owner=spec,
+            )
+        )
+        for method_name, method in spec.methods.items():
+            if method_name == "__init__":
+                continue
+            executions.append(
+                ExecutionSpec(
+                    root_symbol=f"{spec.path}::{spec.name}.{method_name}",
+                    execution_symbol=f"{spec.path}::{spec.name}.{method_name}",
+                    root_label=f"{spec.name}.{method_name}",
+                    path=spec.path,
+                    function=method,
+                    owner=spec,
+                )
+            )
+    for path, _source, tree in sources:
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            symbol_id = f"{path}::{node.name}"
+            executions.append(
+                ExecutionSpec(
+                    root_symbol=symbol_id,
+                    execution_symbol=symbol_id,
+                    root_label=node.name,
+                    path=path,
+                    function=node,
+                )
+            )
+    callables = ProjectCallableIndex(executions, imports_by_path)
 
     referenced = {
         field.component_symbol_id
@@ -577,8 +798,8 @@ def build_architecture_index(
         if _root_score(spec, referenced) > -20
     ]
     graphs = {
-        symbol_id: ArchitectureGraphBuilder(spec, classes, function_symbols).build()
-        for symbol_id, spec in classes.items()
+        execution.root_symbol: ArchitectureGraphBuilder(execution, classes, callables).build()
+        for execution in executions
     }
     return {
         "default_root": roots[0]["symbol_id"] if roots else None,
