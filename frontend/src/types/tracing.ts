@@ -15,6 +15,20 @@ export interface TraceEvidence {
   path?: string
   line_start?: number
   line_end?: number
+  // Fragment-level anchoring (V1) used for precise hover highlighting.
+  target_id?: string
+  target_type?: string
+  role?: string
+  occurrence?: number
+  char_start?: number | null
+  char_end?: number | null
+  column_start?: number | null
+  column_end?: number | null
+  match_line_start?: number | null
+  match_line_end?: number | null
+  quote_hash?: string
+  code_quote_hash?: string
+  salience?: number | null
 }
 
 export interface TraceLink {
@@ -27,9 +41,12 @@ export interface TraceLink {
   code_symbol_id: string
   relation_type: string
   confidence: number
+  relevance: number
   static_confidence: number
   llm_confidence: number | null
   source: string
+  paper_target_id?: string | null
+  code_target_id?: string | null
   evidence: TraceEvidence[]
   rationale: string
   uncertainty: { level: 'low' | 'medium' | 'high'; reasons: string[] }

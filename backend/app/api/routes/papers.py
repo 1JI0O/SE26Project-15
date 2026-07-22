@@ -33,6 +33,14 @@ from app.storage.file_store import save_upload
 router = APIRouter(prefix="/projects/{project_id}", tags=["papers"])
 
 
+def _trigger_auto_trace(project_id: int) -> None:
+    """Best-effort: start background trace once paper + code + provider are ready."""
+
+    from app.services.tracing.coordinator import maybe_start_trace
+
+    maybe_start_trace(project_id)
+
+
 def _paper_read(document: PaperDocument) -> PaperDocumentRead:
     return PaperDocumentRead(
         id=document.id or 0,
@@ -90,6 +98,7 @@ def _document_for_job(
     )
     session.commit()
     session.refresh(document)
+    _trigger_auto_trace(job.project_id)
     return document
 
 
@@ -136,6 +145,7 @@ async def upload_paper(
     )
     session.commit()
     session.refresh(document)
+    _trigger_auto_trace(project_id)
     return _paper_read(document)
 
 

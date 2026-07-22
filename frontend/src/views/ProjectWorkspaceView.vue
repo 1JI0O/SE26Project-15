@@ -282,8 +282,14 @@
               :error="paper.error.value"
               :source="paper.paperDocument.value?.source || ''"
               :blocks="paper.paperDocument.value?.blocks || []"
+              :trace-targets="paperMarks"
+              :active-target-ids="traceIndex.activePaperTargetIds.value"
+              :reveal-active="traceIndex.activeSide.value === 'code'"
               @select-section="paper.selectSection"
               @retry="paper.loadPaperPages"
+              @trace-hover="traceIndex.hoverPaper"
+              @trace-leave="traceIndex.clearHover"
+              @trace-pin="(id: string) => traceIndex.pin('paper', id)"
             />
           </article>
 
@@ -321,8 +327,14 @@
               :content="code.editorContent.value"
               :is-dirty="code.isEditorDirty.value"
               :saving="code.saving.value"
+              :trace-targets="codeTargetList"
+              :active-target-ids="traceIndex.activeCodeTargetIds.value"
+              :reveal-active="traceIndex.activeSide.value === 'paper'"
               @change="code.handleEditorInput"
               @save="onSaveCode"
+              @trace-hover="traceIndex.hoverCode"
+              @trace-leave="traceIndex.clearHover"
+              @trace-pin="(id: string) => traceIndex.pin('code', id)"
             />
           </article>
         </section>
@@ -380,6 +392,8 @@
                 @select-row="onTraceRowSelect"
                 @open-paper="jumpToTracePaper"
                 @open-code="jumpToTraceCode"
+                @hover-row="hoverTraceRow"
+                @leave-row="traceIndex.clearHover"
               />
               <aside class="trace-summary">
                 <strong>Agent 分析</strong>
@@ -500,6 +514,41 @@
       @open-paper="jumpToTracePaper"
       @open-code="jumpToTraceCode"
     />
+
+    <!-- Bidirectional hover/pin popover: counterpart targets ranked by relevance. -->
+    <div v-if="traceCounterparts.length" class="trace-hover-popover">
+      <header class="trace-hover-head">
+        <span>{{ traceIndex.activeSide.value === 'paper' ? '对应代码片段' : '对应论文片段' }}</span>
+        <span class="trace-hover-count">
+          {{ traceCounterparts.length }} 条 · 按相关度
+          <button
+            v-if="traceIndex.pinned.value"
+            class="trace-hover-unpin"
+            title="取消固定 (Esc)"
+            @click="traceIndex.unpin()"
+          >
+            取消固定
+          </button>
+        </span>
+      </header>
+      <ul class="trace-hover-list">
+        <li
+          v-for="item in traceCounterparts"
+          :key="item.targetId + item.relationType"
+          class="trace-hover-item"
+          @click="onCounterpartClick(item)"
+        >
+          <div class="trace-hover-title">{{ item.title }}</div>
+          <div v-if="item.subtitle" class="trace-hover-sub">{{ item.subtitle }}</div>
+          <div class="trace-hover-scores">
+            <span class="trace-hover-relation">{{ item.relationType }}</span>
+            <span>相关度 {{ item.relevance }}%</span>
+            <span>置信 {{ item.confidence }}%</span>
+          </div>
+          <div v-if="item.rationale" class="trace-hover-rationale">{{ item.rationale }}</div>
+        </li>
+      </ul>
+    </div>
     <el-dialog v-model="artifactVersionsVisible" title="本机保留的云端文件版本" width="760px">
       <el-table :data="artifactVersions">
         <el-table-column prop="entity_type" label="类型" width="150" />
@@ -547,7 +596,9 @@ import { useInsights } from '@/composables/useInsights'
 import { usePaper } from '@/composables/usePaper'
 import { useTensorFlow } from '@/composables/useTensorFlow'
 import { useTrace } from '@/composables/useTrace'
+import { useTraceIndex } from '@/composables/useTraceIndex'
 import { useWorkspace } from '@/composables/useWorkspace'
+import type { PaperMark } from '@/features/papers/trace-decorations'
 import AgentPanel from '@/features/agent/AgentPanel.vue'
 import PaperOutlineTree from '@/features/papers/PaperOutlineTree.vue'
 import PaperReader from '@/features/papers/PaperReader.vue'
@@ -603,6 +654,17 @@ const paper = usePaper(() => workspace.projectId.value)
 const code = useCode(() => workspace.projectId.value)
 const tensorFlow = useTensorFlow(() => workspace.projectId.value)
 const trace = useTrace(() => workspace.projectId.value)
+const traceIndex = useTraceIndex(trace.traceLinks)
+const paperMarks = computed<PaperMark[]>(() =>
+  [...traceIndex.paperTargets.value.values()].map((target) => ({
+    targetId: target.targetId,
+    blockId: target.blockId,
+    quote: target.quote,
+    occurrence: target.occurrence,
+    status: target.status,
+  })),
+)
+const codeTargetList = computed(() => [...traceIndex.codeTargets.value.values()])
 const insights = useInsights(() => workspace.projectId.value)
 const desktop = useDesktop()
 const { importSteps } = useImport(
@@ -678,8 +740,13 @@ async function selectArtifactVersion(row: LocalArtifactVersionRow) {
   await Promise.allSettled([paper.loadPaperPages(), code.loadCodeTree()])
 }
 
+function onGlobalKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && traceIndex.pinned.value) traceIndex.unpin()
+}
+
 onMounted(async () => {
   window.addEventListener('resize', clampAgentWidth)
+  window.addEventListener('keydown', onGlobalKeydown)
   await nextTick()
   clampAgentWidth()
   if (!workspace.projectId.value || Number.isNaN(workspace.projectId.value)) return
@@ -703,6 +770,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', clampAgentWidth)
+  window.removeEventListener('keydown', onGlobalKeydown)
   stopResize()
 })
 
@@ -879,6 +947,15 @@ function onTraceRowSelect(row: TraceRowView): void {
   evidenceDrawerVisible.value = true
 }
 
+// Hovering a matrix row lights up the same relation on both panes via the shared index.
+function hoverTraceRow(row: TraceRowView): void {
+  if (!row.id) return
+  const link = trace.traceLinks.value.find((item) => item.id === row.id)
+  const paperTargetId =
+    link?.paper_target_id || link?.evidence.find((item) => item.side === 'paper')?.target_id
+  if (paperTargetId) traceIndex.hoverPaper(paperTargetId)
+}
+
 async function jumpToTracePaper(row: TraceRowView): Promise<void> {
   const evidence = row.evidence.find((item) => item.side === 'paper')
   await nextTick()
@@ -892,6 +969,68 @@ async function jumpToTraceCode(row: TraceRowView): Promise<void> {
   if (!path) return
   await jumpToCode(path, evidence?.line_start || 1)
 }
+
+interface TraceCounterpart {
+  targetId: string
+  title: string
+  subtitle: string
+  relationType: string
+  relevance: number
+  confidence: number
+  rationale: string
+  path?: string
+  line?: number
+}
+
+// Counterpart targets of the active trace target, ranked by relevance, for the hover popover.
+const traceCounterparts = computed<TraceCounterpart[]>(() => {
+  const side = traceIndex.activeSide.value
+  if (!side) return []
+  return traceIndex.activeLinks.value.map((link) => {
+    if (side === 'paper') {
+      const code = link.evidence.find((item) => item.side === 'code')
+      return {
+        targetId: link.code_target_id || code?.target_id || link.id,
+        title: link.code_symbol_id,
+        subtitle: code?.path || '',
+        relationType: link.relation_type,
+        relevance: Math.round(link.relevance * 100),
+        confidence: Math.round(link.confidence * 100),
+        rationale: link.rationale,
+        path: code?.path,
+        line: code?.match_line_start ?? code?.line_start ?? 1,
+      }
+    }
+    const paper = link.evidence.find((item) => item.side === 'paper')
+    return {
+      targetId: link.paper_target_id || paper?.target_id || link.id,
+      title: paper?.quote || link.paper_block_id,
+      subtitle: `${link.paper_block_id}${paper?.target_type ? ` · ${paper.target_type}` : ''}`,
+      relationType: link.relation_type,
+      relevance: Math.round(link.relevance * 100),
+      confidence: Math.round(link.confidence * 100),
+      rationale: link.rationale,
+    }
+  })
+})
+
+async function onCounterpartClick(item: TraceCounterpart): Promise<void> {
+  if (traceIndex.activeSide.value === 'paper' && item.path) {
+    await jumpToCode(item.path, item.line || 1)
+  }
+}
+
+// When a paper target is pinned, open the top counterpart file so its code highlight shows.
+watch(
+  () => [traceIndex.pinned.value, traceIndex.activeSide.value, traceIndex.activeTargetId.value],
+  async () => {
+    if (!traceIndex.pinned.value || traceIndex.activeSide.value !== 'paper') return
+    const codeEv = traceIndex.activeLinks.value[0]?.evidence.find((item) => item.side === 'code')
+    if (codeEv?.path) {
+      await jumpToCode(codeEv.path, codeEv.match_line_start ?? codeEv.line_start ?? 1)
+    }
+  },
+)
 
 async function onEvidenceConfirm(row: TraceRowView): Promise<void> {
   if (!row.id) {
@@ -1823,5 +1962,113 @@ watch(activeBottomPanel, (tab) => {
   .status-bar span:nth-of-type(3) {
     display: none;
   }
+}
+
+.trace-hover-popover {
+  position: fixed;
+  right: 18px;
+  bottom: 46px;
+  z-index: 2200;
+  width: 340px;
+  max-height: 52vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #cdd6df;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 12px 34px rgba(19, 35, 47, 0.18);
+}
+
+.trace-hover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid #e6ebf0;
+  background: #f7f9fb;
+  font-size: 12px;
+  font-weight: 600;
+  color: #26323d;
+}
+
+.trace-hover-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+  color: #7a8794;
+  font-size: 11px;
+}
+
+.trace-hover-unpin {
+  border: 1px solid #d8dee6;
+  border-radius: 4px;
+  background: #fff;
+  padding: 1px 7px;
+  cursor: pointer;
+  color: #586675;
+  font: inherit;
+  font-size: 11px;
+}
+
+.trace-hover-list {
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.trace-hover-item {
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.trace-hover-item:hover {
+  background: #eef4ff;
+}
+
+.trace-hover-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1c2b38;
+  word-break: break-word;
+}
+
+.trace-hover-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #7a8794;
+  word-break: break-all;
+}
+
+.trace-hover-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: #55636f;
+}
+
+.trace-hover-relation {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #e6efff;
+  color: #3061c2;
+  font-weight: 600;
+}
+
+.trace-hover-rationale {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #6b7785;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 </style>

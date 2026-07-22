@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.core.config import settings
-from app.models.entities import CodeRepository, PaperDocument, TraceLink, utc_now
+from app.models.entities import CodeRepository, PaperDocument, TraceLink
 from app.schemas.traces import TraceLinkRead
 from app.services.integration_settings import get_effective_integration_config
 from app.services.tracing.context import build_contexts
@@ -17,7 +17,7 @@ from app.services.tracing.provider import (
     ProviderFailure,
     TraceExplanationProvider,
 )
-from app.services.tracing.static_candidates import StaticCandidate, generate_static_candidates
+from app.services.tracing.static_candidates import StaticCandidate
 
 PROMPT_VERSION = "trace-v1"
 UNCERTAINTY_PENALTY = {"low": 0.0, "medium": 0.05, "high": 0.15}
@@ -34,9 +34,12 @@ def trace_to_read(link: TraceLink) -> TraceLinkRead:
         code_symbol_id=link.code_ref,
         relation_type=link.relation_type,
         confidence=link.confidence,
+        relevance=link.relevance,
         static_confidence=link.static_confidence,
         llm_confidence=link.llm_confidence,
         source=link.source,
+        paper_target_id=link.paper_target_id,
+        code_target_id=link.code_target_id,
         evidence=link.evidence_json,
         rationale=link.rationale,
         uncertainty=link.uncertainty_json,
@@ -184,78 +187,15 @@ def suggest_and_persist(
     use_llm: bool,
     provider: TraceExplanationProvider | None = None,
 ) -> tuple[list[TraceLinkRead], str, bool, str | None]:
-    mark_noncurrent_traces_stale(session, project_id, paper.id or 0, code.id or 0, code.revision)
-    candidates = generate_static_candidates(
-        paper.sections_json,
-        paper.paragraphs_json,
-        code.symbols_json,
-        code.pytorch_candidates_json,
-        code.tensor_graph_json,
-    )
-    degraded_reason: str | None = None
-    actual_provider = provider
-    if use_llm and actual_provider is None:
-        actual_provider, degraded_reason = _provider_from_settings(session)
-    explanations: dict[str, LLMExplanation] = {}
-    if use_llm and actual_provider is not None and candidates:
-        explanations, validation_reason = _enhance_candidates(candidates, actual_provider)
-        degraded_reason = degraded_reason or validation_reason
-    elif use_llm and not candidates:
-        degraded_reason = degraded_reason or "no_static_candidates"
+    """Retired local candidate path (architecture doc §15).
 
-    persisted: list[TraceLink] = []
-    for candidate in candidates:
-        values = _values_for_candidate(
-            candidate,
-            explanations.get(candidate.candidate_id),
-            actual_provider,
-        )
-        fingerprint = trace_fingerprint(
-            paper.id or 0,
-            code.id or 0,
-            code.revision,
-            candidate.paper_block_id,
-            candidate.code_symbol_id,
-            values["relation_type"],
-        )
-        link = session.exec(select(TraceLink).where(TraceLink.fingerprint == fingerprint)).first()
-        if link is None:
-            link = TraceLink(
-                project_id=project_id,
-                paper_document_id=paper.id,
-                paper_ref=candidate.paper_block_id,
-                code_repository_id=code.id,
-                code_revision=code.revision,
-                code_ref=candidate.code_symbol_id,
-                relation_type=values["relation_type"],
-                confidence=values["confidence"],
-                static_confidence=candidate.confidence,
-                llm_confidence=values["llm_confidence"],
-                source=values["source"],
-                evidence_json=values["evidence_json"],
-                rationale=values["rationale"],
-                uncertainty_json=values["uncertainty_json"],
-                model_info_json=values["model_info_json"],
-                fingerprint=fingerprint,
-            )
-            session.add(link)
-        elif link.status == "proposed":
-            link.confidence = values["confidence"]
-            link.static_confidence = candidate.confidence
-            link.llm_confidence = values["llm_confidence"]
-            link.source = values["source"]
-            link.evidence_json = values["evidence_json"]
-            link.rationale = values["rationale"]
-            link.uncertainty_json = values["uncertainty_json"]
-            link.model_info_json = values["model_info_json"]
-            link.updated_at = utc_now()
-        persisted.append(link)
+    Candidate discovery is now Agent-only: the token-overlap keyword pipeline must never
+    write ``TraceLink`` rows, otherwise "no provider ⇒ no results" would be contradicted by
+    static rules masquerading as Agent output. Staleness bookkeeping is preserved, but this
+    endpoint no longer generates or persists candidates. Callers should create an Agent
+    ``trace`` analysis job instead.
+    """
+
+    mark_noncurrent_traces_stale(session, project_id, paper.id or 0, code.id or 0, code.revision)
     session.commit()
-    for link in persisted:
-        session.refresh(link)
-    enhanced = any(link.source == "static+llm" for link in persisted)
-    mode = "static+llm" if enhanced else "static"
-    degraded = bool(use_llm and (degraded_reason or not enhanced))
-    if degraded and degraded_reason is None:
-        degraded_reason = "llm_no_valid_explanations"
-    return [trace_to_read(link) for link in persisted], mode, degraded, degraded_reason
+    return [], "static", True, "static_candidates_retired"

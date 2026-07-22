@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlmodel import Session, select
 
 from app.models.entities import AgentAnalysisArtifact, CodeRepository, PaperDocument
 from app.services.analysis_jobs import repository_edits_root
 from app.services.code_analysis.editor import FileAccessError, read_repository_file
+from app.services.tracing.anchoring import AnchorError, resolve_anchor
 
 
 class StrictModel(BaseModel):
@@ -104,30 +105,106 @@ class PublishArchitectureArguments(StrictModel):
     payload: ArchitecturePayload
 
 
-class TracePaperEvidence(StrictModel):
+class TolerantModel(BaseModel):
+    """Publish models tolerate unknown keys and coerce enum-like fields.
+
+    DeepSeek-class models frequently add stray keys or slightly-off enum values. Rejecting
+    the whole payload for that wastes the run; instead we ignore extras and coerce unknown
+    enum values to a safe default, while still hard-validating the evidence (quote/occurrence/
+    hash) that hover correctness depends on.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+
+_PAPER_TARGET_TYPES = {"formula", "variable", "constraint", "algorithm", "figure", "method_text"}
+_CODE_TARGET_ROLES = {
+    "model_component",
+    "loss",
+    "tensor_transform",
+    "update_rule",
+    "constraint",
+    "algorithm_step",
+    "config",
+    "invocation",
+}
+_RELATION_TYPES = {
+    "implements",
+    "computes",
+    "defines",
+    "constrains",
+    "updates",
+    "configures",
+    "invokes",
+    "mentions",
+}
+
+
+class TracePaperEvidence(TolerantModel):
     block_id: str = Field(min_length=1, max_length=255)
     quote: str = Field(min_length=1, max_length=3000)
+    # Which occurrence of ``quote`` inside the block this target refers to (1-based).
+    occurrence: int = Field(default=1, ge=1, le=200)
+    target_type: str = Field(default="method_text", max_length=32)
+
+    @field_validator("target_type", mode="before")
+    @classmethod
+    def _coerce_target_type(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return text if text in _PAPER_TARGET_TYPES else "method_text"
 
 
-class TraceCodeEvidence(CodeEvidence):
+class TraceCodeEvidence(TolerantModel):
+    path: str = Field(min_length=1, max_length=1000)
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    quote: str = Field(min_length=1, max_length=3000)
     symbol_id: str | None = Field(default=None, max_length=500)
+    # Which occurrence of ``quote`` inside the cited line range this target refers to.
+    occurrence: int = Field(default=1, ge=1, le=200)
+    role: str = Field(default="model_component", max_length=64)
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _coerce_role(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return text if text in _CODE_TARGET_ROLES else "model_component"
 
 
-class TraceCandidate(StrictModel):
+class TraceCandidate(TolerantModel):
     paper_block_id: str = Field(min_length=1, max_length=255)
     code_symbol_id: str = Field(min_length=1, max_length=255)
-    relation_type: Literal["implements", "invokes", "configures", "tests", "mentions"]
-    confidence: float = Field(ge=0, le=1)
+    relation_type: str = Field(default="implements", max_length=32)
+    # Three independent scores (see architecture doc §8.2):
+    #   salience   = how important the paper target is (target-level)
+    #   relevance  = how much this code fragment implements the target (edge-level)
+    #   confidence = how sure the agent is the relation is correct (edge-level)
+    salience: float = Field(default=0.6, ge=0, le=1)
+    relevance: float = Field(default=0.6, ge=0, le=1)
+    confidence: float = Field(default=0.6, ge=0, le=1)
+    salience_reason: str = Field(default="", max_length=600)
     rationale: str = Field(min_length=1, max_length=5000)
-    uncertainty_level: Literal["low", "medium", "high"]
+    uncertainty_level: str = Field(default="medium", max_length=16)
     uncertainty_reasons: list[str] = Field(default_factory=list, max_length=8)
     paper_evidence: TracePaperEvidence
     code_evidence: TraceCodeEvidence
     graph_node_ids: list[str] = Field(default_factory=list, max_length=20)
 
+    @field_validator("relation_type", mode="before")
+    @classmethod
+    def _coerce_relation(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return text if text in _RELATION_TYPES else "implements"
 
-class TracePayload(StrictModel):
-    schema_version: Literal["trace-agent-v1"] = "trace-agent-v1"
+    @field_validator("uncertainty_level", mode="before")
+    @classmethod
+    def _coerce_uncertainty(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return text if text in {"low", "medium", "high"} else "medium"
+
+
+class TracePayload(TolerantModel):
+    schema_version: str = Field(default="trace-agent-v2", max_length=64)
     candidates: list[TraceCandidate] = Field(default_factory=list, max_length=100)
     unresolved: list[str] = Field(default_factory=list, max_length=100)
 
@@ -177,7 +254,13 @@ TOOL_DESCRIPTIONS = {
     ),
     "publish_trace_candidates": (
         "Publish all evidence-backed proposed paper-code trace candidates. This must be called "
-        "to complete trace analysis."
+        "to complete trace analysis. Each candidate needs: paper_evidence (block_id, exact quote, "
+        "occurrence = which match inside the block when the quote repeats, target_type), "
+        "code_evidence (path, line_start, line_end, exact quote, occurrence, role), a "
+        "relation_type, and three separate scores in [0,1]: salience (importance of the target), "
+        "relevance (how much this code implements it), confidence (certainty the relation is "
+        "correct). Quotes are re-verified against real content at the declared occurrence; a "
+        "mismatch is rejected."
     ),
 }
 
@@ -248,7 +331,10 @@ def _symbol(repository: CodeRepository, symbol_id: str) -> dict[str, Any]:
     for symbol in repository.symbols_json:
         if str(symbol.get("id")) == symbol_id:
             return symbol
-    raise ValueError("code_symbol_not_found")
+    raise ValueError(
+        "code_symbol_not_found: use an exact id from list_code_symbols (page through it), "
+        "or cite a file path + line range directly instead of a symbol id"
+    )
 
 
 def _paper_blocks(paper: PaperDocument) -> list[dict[str, Any]]:
@@ -299,20 +385,103 @@ def _validate_architecture(
             raise ValueError("architecture_edge_endpoint_invalid")
 
 
+def _offset_to_linecol(content: str, offset: int) -> tuple[int, int]:
+    prefix = content[:offset]
+    line = prefix.count("\n") + 1
+    col = offset - (prefix.rfind("\n") + 1)
+    return line, col
+
+
+def _resolve_paper_anchor(block_text: str, evidence: TracePaperEvidence) -> dict[str, Any]:
+    try:
+        anchor = resolve_anchor(block_text, evidence.quote, evidence.occurrence)
+    except AnchorError as exc:
+        raise ValueError(
+            f"paper_evidence_quote_invalid: quote not found in block {evidence.block_id} "
+            f"at occurrence {evidence.occurrence}; copy the quote verbatim from get_paper_block"
+        ) from exc
+    anchor["target_type"] = evidence.target_type
+    return anchor
+
+
+def _resolve_code_anchor(repository: CodeRepository, evidence: TraceCodeEvidence) -> dict[str, Any]:
+    content = _read_file(repository, evidence.path)
+    lines = content.splitlines(keepends=True)
+    total = len(lines)
+    line_ok = 1 <= evidence.line_start <= evidence.line_end <= total
+    slice_start = sum(len(line) for line in lines[: evidence.line_start - 1]) if line_ok else 0
+    anchor: dict[str, Any] | None = None
+    if line_ok:
+        raw_slice = "".join(lines[evidence.line_start - 1 : evidence.line_end])
+        try:
+            anchor = resolve_anchor(raw_slice, evidence.quote, evidence.occurrence)
+        except AnchorError:
+            anchor = None
+    if anchor is None:
+        # The cited line range may be slightly off; verify the quote exists anywhere in the
+        # file and correct the range from the real match instead of rejecting the relation.
+        try:
+            anchor = resolve_anchor(content, evidence.quote, evidence.occurrence)
+        except AnchorError as exc:
+            raise ValueError(
+                f"code_evidence_quote_invalid: quote not found anywhere in {evidence.path}; "
+                "copy it verbatim from get_symbol_source or search_repository_text"
+            ) from exc
+        slice_start = 0  # anchor char offsets are already file-relative here
+    default_start = evidence.line_start if line_ok else 1
+    default_end = evidence.line_end if line_ok else min(total, default_start)
+    result: dict[str, Any] = {
+        "occurrence": anchor["occurrence"],
+        "code_quote_hash": anchor["quote_hash"],
+        "role": evidence.role,
+        "level": anchor.get("level", "normalized"),
+        "line_start": default_start,
+        "line_end": default_end,
+        "char_start": None,
+        "char_end": None,
+        "match_line_start": default_start,
+        "match_line_end": default_end,
+        "column_start": None,
+        "column_end": None,
+    }
+    if anchor.get("char_start") is not None:
+        file_start = slice_start + int(anchor["char_start"])
+        file_end = slice_start + int(anchor["char_end"])
+        line_start, col_start = _offset_to_linecol(content, file_start)
+        line_end, col_end = _offset_to_linecol(content, file_end)
+        result.update(
+            char_start=file_start,
+            char_end=file_end,
+            line_start=line_start,
+            line_end=line_end,
+            match_line_start=line_start,
+            match_line_end=line_end,
+            column_start=col_start,
+            column_end=col_end,
+        )
+    return result
+
+
 def _validate_traces(
     repository: CodeRepository,
     paper: PaperDocument,
     payload: TracePayload,
-) -> None:
+) -> list[dict[str, Any]]:
+    """Validate every candidate against real evidence and return per-candidate anchors.
+
+    Each returned entry is ``{"paper": <anchor>, "code": <anchor>}`` with resolved
+    occurrence, char range, and content hash so persistence can build precise targets.
+    """
+
     blocks = {str(item.get("id")): item for item in _paper_blocks(paper)}
     symbols = {str(item.get("id")) for item in repository.symbols_json if item.get("id")}
     paths = {str(item.get("path")) for item in repository.file_tree_json if item.get("path")}
+    anchors: list[dict[str, Any]] = []
     for candidate in payload.candidates:
         block = blocks.get(candidate.paper_block_id)
         if block is None or candidate.paper_evidence.block_id != candidate.paper_block_id:
             raise ValueError("paper_evidence_ref_invalid")
-        if _normalize(candidate.paper_evidence.quote) not in _normalize(str(block.get("text", ""))):
-            raise ValueError("paper_evidence_quote_invalid")
+        paper_anchor = _resolve_paper_anchor(str(block.get("text", "")), candidate.paper_evidence)
         if candidate.code_symbol_id not in symbols and candidate.code_symbol_id not in paths:
             raise ValueError("code_reference_invalid")
         if (
@@ -320,7 +489,9 @@ def _validate_traces(
             and candidate.code_evidence.symbol_id != candidate.code_symbol_id
         ):
             raise ValueError("code_evidence_ref_invalid")
-        _validate_code_evidence(repository, candidate.code_evidence)
+        code_anchor = _resolve_code_anchor(repository, candidate.code_evidence)
+        anchors.append({"paper": paper_anchor, "code": code_anchor})
+    return anchors
 
 
 def execute_tool(
@@ -465,6 +636,10 @@ def execute_tool(
         return {"published": True, "payload": validated.payload.model_dump()}
     if isinstance(validated, PublishTraceArguments):
         paper = _paper(session, project_id, paper_id)
-        _validate_traces(repository, paper, validated.payload)
-        return {"published": True, "payload": validated.payload.model_dump()}
+        anchors = _validate_traces(repository, paper, validated.payload)
+        payload = validated.payload.model_dump()
+        for candidate, anchor in zip(payload["candidates"], anchors, strict=True):
+            candidate["paper_anchor"] = anchor["paper"]
+            candidate["code_anchor"] = anchor["code"]
+        return {"published": True, "payload": payload}
     raise ValueError("unsupported_analysis_tool")

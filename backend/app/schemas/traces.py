@@ -13,8 +13,13 @@ class TraceStatus(StrEnum):
 
 class TraceRelationType(StrEnum):
     IMPLEMENTS = "implements"
-    INVOKES = "invokes"
+    COMPUTES = "computes"
+    DEFINES = "defines"
+    CONSTRAINS = "constrains"
+    UPDATES = "updates"
     CONFIGURES = "configures"
+    INVOKES = "invokes"
+    # Retained for backward compatibility with legacy/manual links.
     TESTS = "tests"
     MENTIONS = "mentions"
 
@@ -22,10 +27,22 @@ class TraceRelationType(StrEnum):
 class TraceEvidence(BaseModel):
     side: str = Field(pattern="^(paper|code)$")
     ref: str = Field(min_length=1, max_length=500)
-    quote: str = Field(min_length=1, max_length=2000)
+    quote: str = Field(min_length=1, max_length=3000)
     path: str | None = Field(default=None, max_length=1000)
     line_start: int | None = Field(default=None, ge=1)
     line_end: int | None = Field(default=None, ge=1)
+    # Fragment-level anchoring (V1): pinpoints the exact occurrence for hover highlighting.
+    target_id: str | None = Field(default=None, max_length=72)
+    target_type: str | None = Field(default=None, max_length=32)
+    role: str | None = Field(default=None, max_length=64)
+    occurrence: int | None = Field(default=None, ge=1)
+    char_start: int | None = Field(default=None, ge=0)
+    char_end: int | None = Field(default=None, ge=0)
+    column_start: int | None = Field(default=None, ge=0)
+    column_end: int | None = Field(default=None, ge=0)
+    quote_hash: str | None = Field(default=None, max_length=64)
+    code_quote_hash: str | None = Field(default=None, max_length=64)
+    salience: float | None = Field(default=None, ge=0, le=1)
 
 
 class TraceUncertainty(BaseModel):
@@ -58,9 +75,12 @@ class TraceLinkRead(BaseModel):
     code_symbol_id: str
     relation_type: TraceRelationType
     confidence: float = Field(ge=0, le=1)
+    relevance: float = Field(default=0, ge=0, le=1)
     static_confidence: float = Field(ge=0, le=1)
     llm_confidence: float | None = Field(default=None, ge=0, le=1)
     source: str
+    paper_target_id: str | None = None
+    code_target_id: str | None = None
     evidence: list[TraceEvidence]
     rationale: str
     uncertainty: TraceUncertainty

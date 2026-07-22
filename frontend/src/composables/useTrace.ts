@@ -59,6 +59,8 @@ function fromWorkspaceRow(row: WorkspaceTraceRow): TraceRowView {
 
 export function useTrace(projectId: () => number) {
   const traceRows = ref<TraceRowView[]>([])
+  // Raw links power the bidirectional hover index (fragment anchoring + relevance).
+  const traceLinks = ref<TraceLink[]>([])
   const loading = ref(false)
   const generating = ref(false)
   const error = ref<string | null>(null)
@@ -73,12 +75,15 @@ export function useTrace(projectId: () => number) {
     try {
       const links = await listTraceLinks(projectId())
       if (links.length) {
+        traceLinks.value = links
         traceRows.value = links.map(fromTraceLink)
       } else {
+        traceLinks.value = []
         const rows = await getWorkspaceTraceMatrix(projectId())
         traceRows.value = rows.map(fromWorkspaceRow)
       }
     } catch (cause) {
+      traceLinks.value = []
       traceRows.value = []
       error.value = '追溯矩阵加载失败'
       console.error(cause)
@@ -132,6 +137,8 @@ export function useTrace(projectId: () => number) {
       const updated = await updateTraceStatus(projectId(), traceId, status)
       const index = traceRows.value.findIndex((row) => row.id === traceId)
       if (index >= 0) traceRows.value[index] = fromTraceLink(updated)
+      const linkIndex = traceLinks.value.findIndex((link) => link.id === traceId)
+      if (linkIndex >= 0) traceLinks.value[linkIndex] = updated
       ElMessage.success(status === 'accepted' ? '追溯关系已接受' : '追溯关系已拒绝')
     } catch (cause) {
       ElMessage.error('追溯审阅状态更新失败')
@@ -141,6 +148,7 @@ export function useTrace(projectId: () => number) {
 
   return {
     traceRows,
+    traceLinks,
     loading,
     generating,
     error,

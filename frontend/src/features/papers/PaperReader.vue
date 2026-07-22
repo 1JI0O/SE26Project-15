@@ -22,6 +22,9 @@
           :style="{ fontSize: `${zoom}%` }"
           aria-label="只读论文 Markdown"
           v-html="renderedMarkdown"
+          @mouseover="onTraceOver"
+          @mouseout="onTraceOut"
+          @click="onTraceClick"
         />
       </div>
     </template>
@@ -33,6 +36,11 @@ import 'katex/dist/katex.min.css'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { getPaperAssetBlob, resolvePaperAssetUrl } from '@/api/paper-api'
 import { renderPaperMarkdown } from './markdown-renderer'
+import {
+  decoratePaperTargets,
+  setActivePaperTargets,
+  type PaperMark,
+} from './trace-decorations'
 import type { WorkspacePaperBlock } from '@/types/papers'
 
 const props = defineProps<{
@@ -44,11 +52,17 @@ const props = defineProps<{
   error: string | null
   source: string
   blocks: WorkspacePaperBlock[]
+  traceTargets?: PaperMark[]
+  activeTargetIds?: Set<string>
+  revealActive?: boolean
 }>()
 
 const emit = defineEmits<{
   selectSection: [sectionId: string]
   retry: []
+  traceHover: [targetId: string]
+  traceLeave: []
+  tracePin: [targetId: string]
 }>()
 
 const scrollRef = ref<HTMLElement | null>(null)
@@ -135,6 +149,42 @@ function scrollToBlock(blockId: string, quote = ''): boolean {
   return true
 }
 
+function applyTraceDecorations(): void {
+  const root = markdownRef.value
+  if (!root) return
+  decoratePaperTargets(root, props.traceTargets ?? [])
+  setActivePaperTargets(root, props.activeTargetIds ?? new Set())
+}
+
+function revealActiveTarget(): void {
+  const root = scrollRef.value
+  const body = markdownRef.value
+  if (!root || !body || !props.revealActive) return
+  const active = body.querySelector<HTMLElement>('[data-trace-target].trace-target-active')
+  if (!active) return
+  const top = active.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
+  root.scrollTo({ top: Math.max(0, top - root.clientHeight * 0.35), behavior: 'smooth' })
+}
+
+function traceTargetId(event: Event): string | null {
+  const el = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-trace-target]')
+  return el?.dataset.traceTarget ?? null
+}
+
+function onTraceOver(event: MouseEvent): void {
+  const id = traceTargetId(event)
+  if (id) emit('traceHover', id)
+}
+
+function onTraceOut(event: MouseEvent): void {
+  if (traceTargetId(event)) emit('traceLeave')
+}
+
+function onTraceClick(event: MouseEvent): void {
+  const id = traceTargetId(event)
+  if (id) emit('tracePin', id)
+}
+
 function updateActiveSection(): void {
   if (Date.now() < suppressScrollTrackingUntil) return
   window.cancelAnimationFrame(scrollFrame)
@@ -164,8 +214,29 @@ watch(
     await nextTick()
     scrollRef.value?.scrollTo({ top: 0 })
     await hydrateDesktopImages()
+    applyTraceDecorations()
   },
   { immediate: true },
+)
+
+watch(
+  () => props.traceTargets,
+  async () => {
+    await nextTick()
+    applyTraceDecorations()
+  },
+  { deep: true },
+)
+
+watch(
+  () => props.activeTargetIds,
+  async () => {
+    const root = markdownRef.value
+    if (root) setActivePaperTargets(root, props.activeTargetIds ?? new Set())
+    await nextTick()
+    revealActiveTarget()
+  },
+  { deep: true },
 )
 
 onBeforeUnmount(revokeImageObjectUrls)
@@ -298,6 +369,42 @@ defineExpose({ scrollToSection, scrollToBlock })
   outline: 2px solid #e6b94f;
   outline-offset: 3px;
   transition: background 180ms ease;
+}
+
+/* Resting decoration for traceable paper fragments. */
+.markdown-body :deep(.trace-mark) {
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.markdown-body :deep(.trace-mark-proposed) {
+  background: rgba(88, 133, 255, 0.16);
+  box-shadow: inset 0 -2px 0 rgba(88, 133, 255, 0.45);
+  color: inherit;
+}
+
+.markdown-body :deep(.trace-mark-accepted) {
+  background: rgba(46, 168, 118, 0.2);
+  box-shadow: inset 0 -2px 0 rgba(46, 168, 118, 0.6);
+  color: inherit;
+}
+
+.markdown-body :deep(.trace-block-target) {
+  cursor: pointer;
+  border-left: 3px solid rgba(88, 133, 255, 0.5);
+  padding-left: 8px;
+  margin-left: -11px;
+}
+
+.markdown-body :deep(.trace-block-accepted) {
+  border-left-color: rgba(46, 168, 118, 0.65);
+}
+
+.markdown-body :deep(.trace-target-active) {
+  background: #ffe8a3 !important;
+  box-shadow: inset 0 -2px 0 #e0a83a, 0 0 0 2px rgba(224, 168, 58, 0.4) !important;
+  border-left-color: #e0a83a !important;
 }
 
 .markdown-body :deep(table) {

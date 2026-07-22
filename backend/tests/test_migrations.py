@@ -48,7 +48,7 @@ def test_desktop_schema_created_at_revision_four_but_stamped_one_upgrades_lossle
         project = connection.execute(
             text("SELECT name, description, sync_mode FROM project")
         ).one()
-    assert revision == "0009_agent_analysis"
+    assert revision == "0010_trace_targets"
     assert project == ("preserved", "legacy data", "local_only")
     tables = set(inspect(engine).get_table_names())
     assert {
@@ -56,5 +56,8 @@ def test_desktop_schema_created_at_revision_four_but_stamped_one_upgrades_lossle
         "local_artifact_version",
         "agent_analysis_job",
         "agent_analysis_artifact",
+        "paper_target",
+        "code_target",
+        "trace_review_event",
     } <= tables
     assert "user_account" not in tables

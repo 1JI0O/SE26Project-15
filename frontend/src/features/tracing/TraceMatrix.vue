@@ -43,6 +43,8 @@
         :key="`${row.paper}-${row.code}`"
         class="trace-row clickable"
         @click="$emit('selectRow', row, index)"
+        @mouseenter="$emit('hoverRow', row)"
+        @mouseleave="$emit('leaveRow')"
       >
         <button class="location-link" :title="row.rationale" @click.stop="$emit('openPaper', row)">
           {{ row.paper }}
@@ -94,6 +96,8 @@ defineEmits<{
   selectRow: [row: TraceRowView, index: number]
   openPaper: [row: TraceRowView]
   openCode: [row: TraceRowView]
+  hoverRow: [row: TraceRowView]
+  leaveRow: []
 }>()
 
 function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'info' | 'danger' {

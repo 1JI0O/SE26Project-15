@@ -17,7 +17,9 @@ from app.models.entities import (
     AgentConversation,
     AgentRun,
     CodeRepository,
+    CodeTarget,
     PaperDocument,
+    PaperTarget,
     TraceLink,
     utc_now,
 )
@@ -181,11 +183,40 @@ def _system_prompt(job: AgentAnalysisJob) -> tuple[str, str]:
         )
     else:
         request = (
-            f"Analyze paper document {job.paper_document_id} against repository revision "
-            f"{job.code_revision}. Browse paper blocks and code autonomously; do not use keyword "
-            "overlap as a semantic verdict. Every candidate needs exact paper and code quotes. "
-            "Read the current architecture artifact when useful. Call publish_trace_candidates "
-            "exactly once, including an empty candidates list if no defensible relation exists."
+            f"Trace paper document {job.paper_document_id} against repository revision "
+            f"{job.code_revision}. Work in four stages inside this single run, then publish "
+            "once.\n\n"
+            "STAGE 1 — SCOUT (paper focus). Read the abstract and section structure first "
+            "(list_paper_blocks, get_paper_block). Identify 3-8 core contributions / method "
+            "components and the sections that implement them. Mark method-chapter formulas, "
+            "algorithms/pseudocode, and figures as must-inspect. Deliberately EXCLUDE background, "
+            "related work, and experiment/result tables from tracing.\n\n"
+            "STAGE 2 — MAP (code responsibilities). Skim the repository (list_repository_files, "
+            "list_code_symbols, get_symbol_source) to locate where the model, losses, tensor "
+            "transforms, main train/inference loops, constraints, and update rules live. Treat "
+            "this as navigation only, not a conclusion.\n\n"
+            "STAGE 3 — REGION EVIDENCE. For each core paper target, turn its meaning into a code "
+            "search intent (what computation must happen), then read the actual source. Do a "
+            "counter-check: is a same-named symbol merely config, a wrapper, or a test? Only keep "
+            "a relation when the real computation happens. A paper target implemented across "
+            "several places yields several candidates (one-to-many).\n\n"
+            "STAGE 4 — MERGE & SELF-CHECK. Keep only targets that matter: a core contribution, a "
+            "must-inspect formula/algorithm, a defining variable/constraint, or something with a "
+            "direct important implementation. Merge adjacent synonymous targets; do not stack "
+            "overlapping highlights. For every candidate give THREE separate scores: salience "
+            "(target importance), relevance (how much the code implements it), confidence "
+            "(certainty). Set paper_evidence.occurrence and code_evidence.occurrence correctly "
+            "when a quote repeats.\n\n"
+            "Tooling rules: only call get_symbol_source with an exact id returned by "
+            "list_code_symbols (page through it to discover ids) — do not guess ids; you may also "
+            "set code_symbol_id to a file path and cite a line range directly. Copy every paper "
+            "and code quote VERBATIM from get_paper_block / get_symbol_source (exact characters) "
+            "so it can be located; set occurrence when the quote repeats.\n"
+            "Rules: never let keyword overlap be the verdict; read real code before publishing; if "
+            "a must-inspect target has no defensible implementation, list it in unresolved with "
+            "code regions you searched. Read the current architecture artifact when useful. Prefer "
+            "few high-value relations over dense low-value ones. Call publish_trace_candidates "
+            "exactly once (an empty candidates list is valid if nothing is defensible)."
         )
     return common, request
 
@@ -211,6 +242,107 @@ def _safe_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
     return safe
 
 
+def _upsert_paper_target(
+    session: Session,
+    job: AgentAnalysisJob,
+    artifact: AgentAnalysisArtifact,
+    candidate: dict[str, Any],
+    section_path: list[str],
+) -> PaperTarget:
+    evidence = candidate["paper_evidence"]
+    anchor = candidate["paper_anchor"]
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            [
+                job.project_id,
+                job.paper_document_id,
+                candidate["paper_block_id"],
+                anchor["quote_hash"],
+                anchor["occurrence"],
+            ]
+        ).encode()
+    ).hexdigest()
+    target = session.exec(
+        select(PaperTarget).where(PaperTarget.fingerprint == fingerprint)
+    ).first()
+    values = {
+        "artifact_id": artifact.artifact_id,
+        "paper_document_id": job.paper_document_id,
+        "target_type": anchor.get("target_type", evidence.get("target_type", "method_text")),
+        "block_id": candidate["paper_block_id"],
+        "section_path_json": section_path,
+        "quote": evidence["quote"],
+        "occurrence": anchor["occurrence"],
+        "char_start": anchor.get("char_start"),
+        "char_end": anchor.get("char_end"),
+        "quote_hash": anchor["quote_hash"],
+        "salience": candidate.get("salience", 0.0),
+        "salience_reason": candidate.get("salience_reason", ""),
+        "anchor_status": anchor.get("level", "normalized"),
+    }
+    if target is None:
+        target = PaperTarget(project_id=job.project_id, fingerprint=fingerprint, **values)
+    else:
+        for key, value in values.items():
+            setattr(target, key, value)
+        target.version += 1
+    session.add(target)
+    session.flush()
+    return target
+
+
+def _upsert_code_target(
+    session: Session,
+    job: AgentAnalysisJob,
+    artifact: AgentAnalysisArtifact,
+    candidate: dict[str, Any],
+) -> CodeTarget:
+    evidence = candidate["code_evidence"]
+    anchor = candidate["code_anchor"]
+    symbol_id = candidate["code_symbol_id"] if "::" in candidate["code_symbol_id"] else None
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            [
+                job.project_id,
+                job.code_repository_id,
+                job.code_revision,
+                evidence["path"],
+                anchor["code_quote_hash"],
+                anchor["occurrence"],
+            ]
+        ).encode()
+    ).hexdigest()
+    target = session.exec(
+        select(CodeTarget).where(CodeTarget.fingerprint == fingerprint)
+    ).first()
+    values = {
+        "artifact_id": artifact.artifact_id,
+        "code_repository_id": job.code_repository_id,
+        "code_revision": job.code_revision,
+        "path": evidence["path"],
+        "symbol_id": symbol_id,
+        "line_start": anchor.get("match_line_start", evidence["line_start"]),
+        "line_end": anchor.get("match_line_end", evidence["line_end"]),
+        "column_start": anchor.get("column_start"),
+        "column_end": anchor.get("column_end"),
+        "quote": evidence["quote"],
+        "occurrence": anchor["occurrence"],
+        "code_quote_hash": anchor["code_quote_hash"],
+        "role": anchor.get("role", evidence.get("role", "model_component")),
+        "salience": candidate.get("salience", 0.0),
+        "anchor_status": anchor.get("level", "normalized"),
+    }
+    if target is None:
+        target = CodeTarget(project_id=job.project_id, fingerprint=fingerprint, **values)
+    else:
+        for key, value in values.items():
+            setattr(target, key, value)
+        target.version += 1
+    session.add(target)
+    session.flush()
+    return target
+
+
 def _persist_trace_links(
     session: Session,
     job: AgentAnalysisJob,
@@ -219,7 +351,21 @@ def _persist_trace_links(
 ) -> None:
     if job.paper_document_id is None:
         raise ValueError("paper_document_not_found")
+    paper = session.get(PaperDocument, job.paper_document_id)
+    section_paths: dict[str, list[str]] = {}
+    if paper is not None:
+        for page in paper.pages_json:
+            for block in page.get("blocks", []):
+                if isinstance(block, dict) and block.get("id"):
+                    section_paths[str(block["id"])] = list(block.get("section_path", []))
     for candidate in payload.get("candidates", []):
+        if "paper_anchor" not in candidate or "code_anchor" not in candidate:
+            # Only anchored candidates (validated by publish_trace_candidates) are persisted.
+            continue
+        paper_target = _upsert_paper_target(
+            session, job, artifact, candidate, section_paths.get(candidate["paper_block_id"], [])
+        )
+        code_target = _upsert_code_target(session, job, artifact, candidate)
         fingerprint = trace_fingerprint(
             job.paper_document_id,
             job.code_repository_id,
@@ -233,6 +379,8 @@ def _persist_trace_links(
             continue
         paper_evidence = candidate["paper_evidence"]
         code_evidence = candidate["code_evidence"]
+        paper_anchor = candidate["paper_anchor"]
+        code_anchor = candidate["code_anchor"]
         values = {
             "project_id": job.project_id,
             "paper_document_id": job.paper_document_id,
@@ -242,22 +390,45 @@ def _persist_trace_links(
             "code_ref": candidate["code_symbol_id"],
             "relation_type": candidate["relation_type"],
             "confidence": candidate["confidence"],
+            "relevance": candidate.get("relevance", 0.0),
             "static_confidence": 0.0,
             "llm_confidence": candidate["confidence"],
             "source": "agent",
+            "artifact_id": artifact.artifact_id,
+            "paper_target_id": paper_target.target_id,
+            "code_target_id": code_target.target_id,
             "evidence_json": [
                 {
                     "side": "paper",
                     "ref": candidate["paper_block_id"],
                     "quote": paper_evidence["quote"],
+                    "target_id": paper_target.target_id,
+                    "target_type": paper_target.target_type,
+                    "occurrence": paper_anchor["occurrence"],
+                    "char_start": paper_anchor.get("char_start"),
+                    "char_end": paper_anchor.get("char_end"),
+                    "quote_hash": paper_anchor["quote_hash"],
+                    "salience": paper_target.salience,
                 },
                 {
                     "side": "code",
                     "ref": candidate["code_symbol_id"],
                     "quote": code_evidence["quote"],
                     "path": code_evidence["path"],
+                    # Declared symbol/citation range (context) ...
                     "line_start": code_evidence["line_start"],
                     "line_end": code_evidence["line_end"],
+                    # ... plus the precise matched range for decoration.
+                    "match_line_start": code_anchor.get("match_line_start"),
+                    "match_line_end": code_anchor.get("match_line_end"),
+                    "target_id": code_target.target_id,
+                    "role": code_target.role,
+                    "occurrence": code_anchor["occurrence"],
+                    "char_start": code_anchor.get("char_start"),
+                    "char_end": code_anchor.get("char_end"),
+                    "column_start": code_anchor.get("column_start"),
+                    "column_end": code_anchor.get("column_end"),
+                    "code_quote_hash": code_anchor["code_quote_hash"],
                 },
             ],
             "rationale": candidate["rationale"],
@@ -265,12 +436,24 @@ def _persist_trace_links(
                 "level": candidate["uncertainty_level"],
                 "reasons": candidate.get("uncertainty_reasons", []),
             },
-            "model_info_json": {
-                **artifact.model_info_json,
-                "prompt_version": "trace-agent-v1",
+            "score_basis_json": {
+                "salience": candidate.get("salience", 0.0),
+                "relevance": candidate.get("relevance", 0.0),
+                "confidence": candidate["confidence"],
+                "salience_reason": candidate.get("salience_reason", ""),
+            },
+            "provenance_json": {
+                "job_id": job.job_id,
                 "run_id": artifact.agent_run_id,
                 "artifact_id": artifact.artifact_id,
+                "prompt_version": "trace-agent-v2",
                 "graph_node_ids": candidate.get("graph_node_ids", []),
+            },
+            "model_info_json": {
+                **artifact.model_info_json,
+                "prompt_version": "trace-agent-v2",
+                "run_id": artifact.agent_run_id,
+                "artifact_id": artifact.artifact_id,
             },
             "fingerprint": fingerprint,
             "status": "proposed",
@@ -421,7 +604,7 @@ def _execute_job(job_id: str) -> None:
                 "tool_definitions": tool_definitions(job.kind),
             }
             tool_results: list[dict[str, Any]] = []
-            budget = 48 if job.kind == "architecture" else 64
+            budget = 48 if job.kind == "architecture" else 110
             publish_name = (
                 "publish_architecture_graph"
                 if job.kind == "architecture"
@@ -472,14 +655,22 @@ def _execute_job(job_id: str) -> None:
                         tool_name,
                         step.arguments,
                     )
-                except ValidationError:
+                except ValidationError as exc:
                     error = "invalid_tool_arguments"
+                    details = "; ".join(
+                        f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
+                        for item in exc.errors()[:8]
+                    )
                     feedback = {
                         "tool": tool_name,
                         "ok": False,
                         "error": error,
+                        "details": details[:600],
                         "instruction": (
-                            "Correct the evidence or arguments and retry without guessing."
+                            "Fix only the fields named in details and retry. Do not add fields "
+                            "outside the schema; required fields per candidate are paper_block_id, "
+                            "code_symbol_id, rationale, paper_evidence{block_id,quote}, "
+                            "code_evidence{path,line_start,line_end,quote}."
                         ),
                     }
                     tool_results.append(feedback)
@@ -487,7 +678,7 @@ def _execute_job(job_id: str) -> None:
                     emitter.emit("analysis.tool.failed", {"tool_name": tool_name, "code": error})
                     continue
                 except ValueError as exc:
-                    error = str(exc)[:128] or "analysis_evidence_invalid"
+                    error = str(exc)[:240] or "analysis_evidence_invalid"
                     feedback = {
                         "tool": tool_name,
                         "ok": False,
@@ -580,5 +771,8 @@ def recover_analysis_jobs() -> None:
             job.updated_at = utc_now()
             session.add(job)
         session.commit()
-    for job in jobs:
-        _submit(job.job_id)
+        # Capture ids before the session closes; committed instances expire and would
+        # raise DetachedInstanceError if their attributes were read outside the session.
+        job_ids = [job.job_id for job in jobs]
+    for job_id in job_ids:
+        _submit(job_id)

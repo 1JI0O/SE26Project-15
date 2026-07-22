@@ -4,63 +4,28 @@ import httpx
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel
+from sqlmodel import Session, SQLModel, select
 
 from app.db.migration_runner import upgrade_database
 from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
 from app.services.tracing.lifecycle import record_artifact_revision_change
-from app.services.tracing.provider import (
-    CompatibleRESTProvider,
-    LLMExplanation,
-    LLMUncertainty,
-    ProviderFailure,
-)
+from app.services.tracing.provider import CompatibleRESTProvider, ProviderFailure
 from app.services.tracing.service import suggest_and_persist
 
 
-class ValidProvider:
-    provider_name = "fake"
-    model_name = "fake-trace-model"
-
-    def explain(self, contexts: list[dict[str, object]]) -> list[LLMExplanation]:
-        context = contexts[0]
-        paper = context["paper"]
-        code = context["code"]
-        assert isinstance(paper, dict)
-        assert isinstance(code, dict)
-        return [
-            LLMExplanation(
-                candidate_id=str(context["candidate_id"]),
-                relation_type="implements",
-                confidence=0.9,
-                rationale="The code implements the residual block described by the paper.",
-                evidence=[
-                    {
-                        "side": "paper",
-                        "ref": str(paper["ref"]),
-                        "quote": str(paper["text"]),
-                    },
-                    {
-                        "side": "code",
-                        "ref": str(code["ref"]),
-                        "quote": str(code["text"]),
-                    },
-                ],
-                uncertainty=LLMUncertainty(level="low", reasons=[]),
-            )
-        ]
-
-
-class InvalidEvidenceProvider(ValidProvider):
-    def explain(self, contexts: list[dict[str, object]]) -> list[LLMExplanation]:
-        result = super().explain(contexts)
-        result[0].evidence[0]["quote"] = "hallucinated paper quote"
-        return result
-
-
-class FailingProvider(ValidProvider):
-    def explain(self, contexts: list[dict[str, object]]) -> list[LLMExplanation]:
-        raise ProviderFailure("llm_timeout")
+def _accepted_link(project: Project, paper: PaperDocument, code: CodeRepository) -> TraceLink:
+    return TraceLink(
+        project_id=project.id or 0,
+        paper_document_id=paper.id,
+        paper_ref="p3-b12",
+        code_repository_id=code.id,
+        code_revision=code.revision,
+        code_ref="models/resnet.py::BasicBlock.forward",
+        relation_type="implements",
+        source="agent",
+        status="accepted",
+        fingerprint="fixed-accepted-fp",
+    )
 
 
 def _session() -> Session:
@@ -132,7 +97,9 @@ def _artifacts(session: Session) -> tuple[Project, PaperDocument, CodeRepository
     return project, paper, code
 
 
-def test_static_pipeline_persists_double_sided_evidence() -> None:
+def test_static_pipeline_is_retired_and_persists_nothing() -> None:
+    """The local keyword-overlap path must never write TraceLinks (architecture doc §15)."""
+
     with _session() as session:
         project, paper, code = _artifacts(session)
         items, mode, degraded, reason = suggest_and_persist(
@@ -143,66 +110,24 @@ def test_static_pipeline_persists_double_sided_evidence() -> None:
             use_llm=False,
         )
 
-    assert items
-    assert mode == "static"
-    assert not degraded
-    assert reason is None
-    assert {evidence.side for evidence in items[0].evidence} == {"paper", "code"}
-    assert items[0].status == "proposed"
+        assert items == []
+        assert mode == "static"
+        assert degraded
+        assert reason == "static_candidates_retired"
+        assert session.exec(select(TraceLink)).all() == []
 
 
-def test_valid_llm_explanation_is_fused_and_manual_status_is_preserved() -> None:
+def test_retired_suggest_preserves_existing_accepted_link() -> None:
     with _session() as session:
         project, paper, code = _artifacts(session)
-        items, mode, degraded, _ = suggest_and_persist(
-            session,
-            project.id or 0,
-            paper,
-            code,
-            use_llm=True,
-            provider=ValidProvider(),
-        )
-        assert mode == "static+llm"
-        assert not degraded
-        assert items[0].model is not None
-        link = session.get(TraceLink, 1)
-        assert link is not None
-        link.status = "accepted"
+        link = _accepted_link(project, paper, code)
         session.add(link)
         session.commit()
 
-        rerun, _, _, _ = suggest_and_persist(
-            session,
-            project.id or 0,
-            paper,
-            code,
-            use_llm=True,
-            provider=ValidProvider(),
-        )
+        suggest_and_persist(session, project.id or 0, paper, code, use_llm=True, provider=None)
 
-    assert rerun[0].status == "accepted"
-
-
-def test_invalid_or_failed_llm_output_degrades_without_persisting_it() -> None:
-    for provider, expected_reason in [
-        (InvalidEvidenceProvider(), "llm_evidence_invalid"),
-        (FailingProvider(), "llm_timeout"),
-    ]:
-        with _session() as session:
-            project, paper, code = _artifacts(session)
-            items, mode, degraded, reason = suggest_and_persist(
-                session,
-                project.id or 0,
-                paper,
-                code,
-                use_llm=True,
-                provider=provider,
-            )
-            assert items[0].source == "static"
-            assert "hallucinated" not in str(items[0].evidence)
-        assert mode == "static"
-        assert degraded
-        assert reason == expected_reason
+        session.refresh(link)
+        assert link.status == "accepted"
 
 
 @pytest.mark.parametrize(
@@ -250,16 +175,7 @@ def test_compatible_provider_maps_timeout_without_exposing_request(
 def test_code_revision_marks_accepted_trace_stale() -> None:
     with _session() as session:
         project, paper, code = _artifacts(session)
-        suggest_and_persist(
-            session,
-            project.id or 0,
-            paper,
-            code,
-            use_llm=False,
-        )
-        link = session.get(TraceLink, 1)
-        assert link is not None
-        link.status = "accepted"
+        link = _accepted_link(project, paper, code)
         session.add(link)
         session.commit()
 
