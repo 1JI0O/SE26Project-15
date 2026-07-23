@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Any
@@ -29,6 +31,8 @@ from app.services.agent.provider import AgentProviderFailure
 from app.services.agent.run_events import RunEventEmitter
 from app.services.agent.service import _provider_from_settings
 from app.services.tracing.service import trace_fingerprint
+
+logger = logging.getLogger("tracelab.agent.analysis")
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tracelab-agent-analysis")
 _lock = Lock()
@@ -1119,11 +1123,25 @@ def _execute_job(job_id: str) -> None:
             emitter.emit("analysis.failed", {"code": "agent_output_incomplete"})
             _fail(session, job, run, "agent_output_incomplete", trace_entries=trace_entries)
     except Exception as exc:
+        # Preserve the full traceback and the underlying error detail. The bare class
+        # name (e.g. "OperationalError") is useless for diagnosis; capture the message
+        # (SQLite locks vs. disk errors vs. malformed statements all raise the same class).
+        detail = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+        logger.error(
+            "analysis job %s crashed: %s: %s\n%s",
+            job_id,
+            exc.__class__.__name__,
+            detail,
+            traceback.format_exc(),
+        )
+        code = f"analysis_internal_error:{exc.__class__.__name__}"
+        if detail:
+            code = f"{code}:{detail}"
         with Session(engine) as session:
             job = session.get(AgentAnalysisJob, job_id)
             if job is not None:
                 run = session.get(AgentRun, job.agent_run_id) if job.agent_run_id else None
-                _fail(session, job, run, f"analysis_internal_error:{exc.__class__.__name__}")
+                _fail(session, job, run, code)
     finally:
         with _lock:
             _submitted.discard(job_id)
