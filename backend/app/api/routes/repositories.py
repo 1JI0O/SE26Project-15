@@ -155,6 +155,8 @@ async def upload_code(
     )
     if not should_inline:
         enqueue_repository_analysis(project_id, ["all"], "automatic-upload")
+    else:  # inline analysis is already current; the background completion hook won't fire.
+        _trigger_auto_trace(project_id)
     return _code_read(repository, analyzed)
 
 
@@ -188,7 +190,17 @@ def import_code_from_github(
     )
     if not should_inline:
         enqueue_repository_analysis(project_id, ["all"], "automatic-github-import")
+    else:
+        _trigger_auto_trace(project_id)
     return _code_read(repository, analyzed)
+
+
+def _trigger_auto_trace(project_id: int) -> None:
+    """Best-effort: start background trace once paper + code + provider are ready."""
+
+    from app.services.tracing.coordinator import maybe_start_trace
+
+    maybe_start_trace(project_id)
 
 
 @router.get("/code", response_model=CodeRepositoryRead)

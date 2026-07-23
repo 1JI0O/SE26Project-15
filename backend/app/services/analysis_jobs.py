@@ -117,12 +117,19 @@ def _execute_job(job_id: str) -> None:
             session.add(job)
             session.add(repository)
             session.commit()
+            project_id = repository.project_id
+            analysis_ready = not revision_changed
             if revision_changed:
                 enqueue_repository_analysis(
                     repository.project_id,
                     ["all"],
                     f"revision-{repository.revision}",
                 )
+        if analysis_ready:
+            # Code analysis just became current; kick the auto trace coordinator.
+            from app.services.tracing.coordinator import maybe_start_trace
+
+            maybe_start_trace(project_id)
     except Exception as exc:
         with Session(engine) as session:
             job = session.get(RepositoryAnalysisJob, job_id)

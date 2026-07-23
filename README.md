@@ -9,7 +9,7 @@ TraceLab 是面向论文复现与代码审阅的本地工作台。当前技术�
 - 后端：FastAPI、Pydantic v2、SQLModel/SQLAlchemy、SQLite
 - 论文解析：MinerU 本地服务或 MinerU 官方 API，异步任务与本地缓存
 - 代码分析：安全 ZIP/GitHub 导入、`.gitignore`/macOS 元数据过滤、Python AST、语义张量图
-- 智能能力：静态追溯基线、可选 OpenAI-compatible LLM、流式 Agent Run、持久化会话/记忆、AgentSkills/MCP 能力注册表、人工确认
+- 智能能力：Agent 双向追溯、可选 OpenAI-compatible provider、流式 Agent Run、持久化会话/记忆、AgentSkills/MCP 能力注册表、人工确认
 
 ## 目录
 
@@ -52,7 +52,7 @@ TRACELAB_MINERU_PROVIDER=official
 TRACELAB_MINERU_API_TOKEN=<your-token>
 ```
 
-LLM 默认关闭；静态追溯仍可运行。无前端部署启用 OpenAI-compatible 服务时配置：
+Agent 默认关闭；未配置时追溯任务保持等待，不生成静态替代关系。无前端部署启用 OpenAI-compatible 服务时配置：
 
 ```dotenv
 TRACELAB_LLM_ENABLED=true
@@ -230,7 +230,7 @@ MinerU 官方 API 可直接在设置窗口配置。选择“本地 MinerU”时�
 3. 上传 ZIP 或输入公开 GitHub 仓库地址；检查过滤后的完整文件树与分析摘要。
 4. 打开并编辑文本代码文件；保存后仓库修订号递增，旧追溯关系自动标记 stale。
 5. 查看主模型的分层架构图，双击自定义模块下钻；需要排查时切换算子调试图，点击节点可跳转到对应代码。
-6. 生成追溯候选并人工接受或拒绝；未配置 LLM 时自动降级为静态结果。
+6. 论文与代码就绪后自动启动 Agent 追溯；未配置 provider 时保持等待，结果可人工接受或拒绝。悬停论文核心片段（公式/变量/约束/算法/方法句）高亮对应核心代码并按相关度列出，反向悬停代码亦然，点击可固定、Esc 取消。
 7. 在 Agent 侧栏连续对话；可新建、重命名和归档会话，并管理项目/跨项目记忆。Agent 可读取当前论文、代码、架构图和追溯证据，定位代码或聚焦架构图。
 8. Agent 回答通过 SSE 逐步显示，同时展示可审计的进度摘要和工具交互；重复的成功读取会复用证据，达到预算后强制收敛为结论。
 9. Agent“能力”页可查看和开关内置/外部 Skill 与 Tool。外部能力默认关闭且不受信任；保存代码、重跑分析、创建/更新追溯关系仍须人工确认。

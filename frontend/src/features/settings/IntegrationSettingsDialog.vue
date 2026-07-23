@@ -35,7 +35,13 @@
               <el-form-item label="模型">
                 <el-input
                   v-model.trim="form.agent.model"
-                  placeholder="deepseek-chat"
+                  placeholder="deepseek-v4-flash"
+                />
+              </el-form-item>
+              <el-form-item label="追溯分析模型" class="wide-field">
+                <el-input
+                  v-model.trim="form.agent.analysis_model"
+                  placeholder="留空则与对话模型相同；重要追溯可填更强模型，如 deepseek-v4-pro"
                 />
               </el-form-item>
               <el-form-item label="思考模式">
@@ -305,6 +311,7 @@ async function saveSettings() {
       enabled: form.value.agent.enabled,
       base_url: form.value.agent.base_url,
       model: form.value.agent.model,
+      analysis_model: form.value.agent.analysis_model,
       thinking_mode: form.value.agent.thinking_mode,
       timeout_seconds: form.value.agent.timeout_seconds,
       clear_api_key: clearAgentKey.value,

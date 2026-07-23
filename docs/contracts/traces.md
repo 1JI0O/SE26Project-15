@@ -13,7 +13,7 @@ All endpoints use the `/api/v1/projects/{project_id}/trace-links` prefix.
 
 ## Generate suggestions
 
-新工作台不再调用本地静态候选流水线。它先创建 `architecture` Agent analysis job，再创建 `trace` job；完成后通过 list endpoint 读取 `source=agent` 的 proposed links。
+追溯由 Agent 独占。论文解析成功、代码分析就绪且 provider 可用后，**协调器自动**在后台创建 `architecture` 与 `trace` 两个 Agent analysis job（无需点击按钮，见 `services/tracing/coordinator.py`；`create_analysis_job` 按 fingerprint 幂等，重复触发不会重复建任务）。手动重跑仍可显式创建 job。完成后通过 list endpoint 读取 `source=agent` 的 proposed links。
 
 ```text
 POST /api/v1/projects/{project_id}/agent/analysis-jobs
@@ -21,11 +21,25 @@ GET  /api/v1/projects/{project_id}/agent/analysis-jobs/{job_id}/events
 GET  /api/v1/projects/{project_id}/trace-links
 ```
 
-分析失败时不生成静态或规则降级候选。旧 revision 结果保留为 stale 供审计。Agent 新结果使用 `source: "agent"`、`static_confidence: 0`，代码 evidence 还包含 `path/line_start/line_end`；所有 quote 在持久化前与当前 artifact 原文精确校验。
+分析失败时不生成静态或规则降级候选。旧 revision 结果保留为 stale 供审计。Agent 新结果使用 `source: "agent"`、`static_confidence: 0`。
 
-### Legacy endpoint
+### 片段级锚点与评分（V1）
+
+每条 link 现在携带独立的 `PaperTarget` / `CodeTarget`（表 `paper_target` / `code_target`），并在 `TraceLink` 上新增 `paper_target_id`、`code_target_id`、`relevance` 列，以及 `score_basis_json` / `provenance_json`。`evidence` 每一侧新增：
+
+- `occurrence`：quote 在所属 block（论文）或引用行范围（代码）内的第几次出现，从 1 计；
+- `char_start` / `char_end`：能精确定位时的字符范围（论文为 block 文本内偏移，代码为文件内偏移）；
+- 代码侧还有 `match_line_start` / `match_line_end`、`column_start` / `column_end`；
+- `quote_hash` / `code_quote_hash`：`sha256(规范化 quote)`，用于跨 revision 的内容一致性；
+- 论文侧 `target_type`（formula/variable/constraint/algorithm/figure/method_text）、`salience`；代码侧 `role`。
+
+发布前，`publish_trace_candidates` 在指定 occurrence 处校验 quote 命中并计算上述锚点；命中失败即拒绝，不静默通过。三个分数含义不同：`salience`（目标重要性）、`relevance`（该代码承担实现的程度，边级）、`confidence`（关系判断正确的把握，边级）。一对多列表按 `relevance` 排序。
+
+### Legacy endpoint (retired keyword path)
 
 `POST /api/v1/projects/{project_id}/trace-links/suggest`
+
+**该端点的关键词候选写入已下线**（架构文档 §15）。它仍返回 `200`，但只做 staleness 记账，不再生成或写入任何 `TraceLink`，响应恒为 `degraded=true`、`degraded_reason="static_candidates_retired"`、`items=[]`。候选发现完全交给 Agent（见上）。以下为历史形状，仅供兼容参考：
 
 Request body is optional:
 

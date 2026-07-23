@@ -67,19 +67,41 @@ def test_trace_api_generation_and_review_contract() -> None:
     app.include_router(router, prefix="/api/v1")
     app.dependency_overrides[get_session] = session_override
     with TestClient(app) as client:
+        # The legacy /suggest keyword path is retired: it never generates candidates.
         generated = client.post(
             f"/api/v1/projects/{project_id}/trace-links/suggest",
             json={"use_llm": False},
         )
         assert generated.status_code == 200
         payload = generated.json()
-        assert payload["mode"] == "static"
-        assert not payload["degraded"]
-        assert {item["side"] for item in payload["items"][0]["evidence"]} == {
-            "paper",
-            "code",
-        }
-        trace_id = payload["items"][0]["id"]
+        assert payload["degraded"]
+        assert payload["degraded_reason"] == "static_candidates_retired"
+        assert payload["items"] == []
+
+        # The review contract is exercised against a directly-created proposed link.
+        created = client.post(
+            f"/api/v1/projects/{project_id}/trace-links",
+            json={
+                "paper_ref": "p1",
+                "code_ref": "models/net.py::BasicBlock",
+                "relation_type": "implements",
+                "confidence": 0.8,
+                "rationale": "BasicBlock implements the residual shortcut.",
+                "evidence": [
+                    {"side": "paper", "ref": "p1", "quote": "residual shortcut"},
+                    {
+                        "side": "code",
+                        "ref": "models/net.py::BasicBlock",
+                        "quote": "class BasicBlock",
+                        "path": "models/net.py",
+                        "line_start": 1,
+                        "line_end": 1,
+                    },
+                ],
+            },
+        )
+        assert created.status_code == 201
+        trace_id = created.json()["id"]
 
         accepted = client.patch(
             f"/api/v1/projects/{project_id}/trace-links/{trace_id}/status",

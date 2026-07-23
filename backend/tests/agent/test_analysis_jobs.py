@@ -11,7 +11,9 @@ from app.models.entities import (
     AgentConversation,
     AgentRun,
     CodeRepository,
+    CodeTarget,
     PaperDocument,
+    PaperTarget,
     Project,
     TraceLink,
 )
@@ -282,23 +284,33 @@ def test_agent_trace_publish_creates_only_proposed_evidence_backed_link(tmp_path
     with _session() as session:
         project, paper, code = _artifacts(session, tmp_path)
         trace_payload = {
-            "schema_version": "trace-agent-v1",
+            "schema_version": "trace-agent-v2",
             "candidates": [
                 {
                     "paper_block_id": "p1-b1",
                     "code_symbol_id": "models/net.py::Model.encode",
                     "relation_type": "implements",
+                    "salience": 0.8,
+                    "relevance": 0.85,
                     "confidence": 0.91,
+                    "salience_reason": "Core encoder projection contribution.",
                     "rationale": "The encoder projection is implemented by Model.encode.",
                     "uncertainty_level": "low",
                     "uncertainty_reasons": [],
-                    "paper_evidence": {"block_id": "p1-b1", "quote": "uses an encoder projection"},
+                    "paper_evidence": {
+                        "block_id": "p1-b1",
+                        "quote": "uses an encoder projection",
+                        "occurrence": 1,
+                        "target_type": "method_text",
+                    },
                     "code_evidence": {
                         "symbol_id": "models/net.py::Model.encode",
                         "path": "models/net.py",
                         "line_start": 5,
                         "line_end": 6,
                         "quote": "return self.proj(x)",
+                        "occurrence": 1,
+                        "role": "tensor_transform",
                     },
                     "graph_node_ids": ["encode", "proj"],
                 }
@@ -340,11 +352,24 @@ def test_agent_trace_publish_creates_only_proposed_evidence_backed_link(tmp_path
         _persist_artifact(session, job, run, published["payload"])
         session.commit()
         link = session.exec(select(TraceLink)).one()
+        paper_target = session.exec(select(PaperTarget)).one()
+        code_target = session.exec(select(CodeTarget)).one()
 
     assert link.status == "proposed"
     assert link.source == "agent"
     assert {item["side"] for item in link.evidence_json} == {"paper", "code"}
     assert link.evidence_json[1]["line_start"] == 5
+    # Fragment-level anchoring is persisted on both the link and the target rows.
+    assert link.relevance == 0.85
+    assert link.paper_target_id == paper_target.target_id
+    assert link.code_target_id == code_target.target_id
+    assert paper_target.occurrence == 1
+    assert paper_target.quote_hash
+    assert paper_target.salience == 0.8
+    assert code_target.code_quote_hash
+    assert code_target.role == "tensor_transform"
+    # "return self.proj(x)" lives on line 6 inside the declared 5-6 symbol range.
+    assert code_target.line_start == 6
 
 
 def test_analysis_job_is_idempotent_and_paper_markdown_gets_block_anchor(

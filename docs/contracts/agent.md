@@ -14,9 +14,19 @@ Agent 路由注册在 `/api/v1/projects/{project_id}/agent`。运行时由会话
 | GET | `/analysis-jobs/{job_id}/artifact` | 读取通过证据校验的结构化结果 |
 | POST | `/analysis-jobs/{job_id}/retry` | 基于相同 artifact revision 强制重试 |
 
-`architecture` 默认深度为 2：入口函数、直接项目调用、项目调用内部的 `torch/nn/外部` 算子；硬上限为 3。`trace` 必须发布论文 block 与代码行范围的精确双侧 quote。LLM 不可用、预算耗尽、schema 无效或证据无法在当前 revision 精确匹配时，任务失败且不产生 artifact。
+`architecture` 默认深度为 2：入口函数、直接项目调用、项目调用内部的 `torch/nn/外部` 算子；硬上限为 3。`trace` 在单 Run 内按四阶段执行（侦察 → 代码制图 → 区域取证 → 归并自校，见 `analysis_jobs._system_prompt` 与 `builtin_skills/trace-analysis`），发布 schema 为 `trace-agent-v2`：每个候选含双侧精确 quote、`occurrence`（quote 在 block/行范围内的第几次出现）、论文 `target_type` 与代码 `role`，以及三个独立分数 `salience`/`relevance`/`confidence`。`publish_trace_candidates` 在指定 occurrence 处校验 quote 命中并计算字符范围与内容 hash，写入 `PaperTarget`/`CodeTarget` 与带 target 引用的 `TraceLink`。LLM 不可用、预算耗尽、schema 无效或证据无法在指定 occurrence 精确匹配时，任务失败且不产生 artifact。
+
+论文解析成功、代码分析就绪且 provider 可用后，追溯协调器（`services/tracing/coordinator.py`）自动创建 architecture+trace 任务，无需手动触发；`create_analysis_job` 按 fingerprint 幂等。
 
 分析任务复用现有 Agent provider、Run、Run Event、重试和能力快照，但使用 `kind=analysis` 的隐藏会话，不出现在普通聊天历史。`publish_architecture_graph` 与 `publish_trace_candidates` 只在对应分析任务中可见；它们只能保存可重算 artifact 和 proposed trace，不能修改代码或代替用户接受追溯。
+
+导入完成后的**自动后台追溯只创建 `trace` 任务**：架构 Agent 任务是可选上下文（流程图由本地静态分析生成，不消费该 artifact），成本高且在小模型上不稳定，因此不自动运行、也绝不阻塞或延迟双向追溯交付。手动“重新生成”同样只跑 `trace`。
+
+分析任务可选使用比对话模型更强的模型：设置项 `agent.analysis_model`（或 `TRACELAB_LLM_ANALYSIS_MODEL`）留空时复用对话模型，填入（如 `deepseek-v4-pro`）后仅对 `trace`/`architecture` 分析任务生效，用于少量重要追溯的质量提升与成本控制。
+
+分析任务的进度事件（`analysis.tool.started`/`analysis.tool.completed`/`analysis.tool.failed`）携带可审计的 `activity`（如“阅读论文片段 p3-b44”“检索代码 …”“发布 N 条追溯候选并校验证据”）、`step` 与 `budget`，供前端展示实时活动与步数进度，不暴露模型隐式思维链。
+
+`trace` 任务支持**渐进发布**：`publish_trace_candidates` 可被多次调用（每批立即校验、落库、并发 `analysis.published` 事件，携带 `new_links`/`total_links`/`artifact_id`/`code_revision`），前端据此**边分析边渲染**，不必等整轮结束；同一次 run 复用一个 artifact，links 按内容指纹幂等累加。终止不再靠固定步数：模型在发布完所有可辩护候选、且每个 must-inspect 目标 linked 或列入 unresolved 后调用 `finish_analysis` 显式结束；步数只有**启发式软目标**（由论文公式/算法对象数推断，仅用于提醒收敛）与**硬上限**（安全兜底，耗尽时若已产出则定稿为成功、否则失败）。空 payload 的 publish 一律拒绝。`architecture` 仍为单次 publish 即终止。
 
 ## 会话
 

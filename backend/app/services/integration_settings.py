@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from sqlalchemy.exc import OperationalError
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.entities import IntegrationConfig, utc_now
@@ -34,6 +34,7 @@ def _environment_defaults() -> IntegrationConfig:
         agent_base_url=settings.tracelab_llm_base_url.rstrip("/"),
         agent_api_key=settings.tracelab_llm_api_key.get_secret_value(),
         agent_model=settings.tracelab_llm_model,
+        agent_analysis_model=os.getenv("TRACELAB_LLM_ANALYSIS_MODEL", ""),
         agent_thinking_mode=settings.tracelab_llm_thinking_mode,
         agent_timeout_seconds=settings.tracelab_llm_timeout_seconds,
         mineru_provider=provider,
@@ -72,6 +73,7 @@ def integration_config_to_read(config: IntegrationConfig, source: str) -> Integr
             enabled=config.agent_enabled,
             base_url=config.agent_base_url,
             model=config.agent_model,
+            analysis_model=config.agent_analysis_model,
             thinking_mode=config.agent_thinking_mode,
             timeout_seconds=config.agent_timeout_seconds,
             api_key_configured=bool(config.agent_api_key),
@@ -105,6 +107,7 @@ def save_integration_config(
     config.agent_enabled = payload.agent.enabled
     config.agent_base_url = payload.agent.base_url
     config.agent_model = payload.agent.model.strip()
+    config.agent_analysis_model = payload.agent.analysis_model.strip()
     config.agent_thinking_mode = payload.agent.thinking_mode
     config.agent_timeout_seconds = payload.agent.timeout_seconds
     if payload.agent.clear_api_key:
@@ -136,4 +139,22 @@ def save_integration_config(
     session.add(config)
     session.commit()
     session.refresh(config)
+    _kick_auto_trace_if_provider_ready(session, config)
     return config
+
+
+def _kick_auto_trace_if_provider_ready(session: Session, config: IntegrationConfig) -> None:
+    """When the Agent provider just became usable, resume auto trace for ready projects."""
+
+    if not (config.agent_enabled and config.agent_base_url and config.agent_model):
+        return
+    if not config.agent_api_key:
+        return
+    from app.models.entities import PaperDocument
+    from app.services.tracing.coordinator import maybe_start_trace
+
+    project_ids = {
+        row for row in session.exec(select(PaperDocument.project_id)).all() if row is not None
+    }
+    for project_id in project_ids:
+        maybe_start_trace(int(project_id))

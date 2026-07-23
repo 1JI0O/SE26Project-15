@@ -39,29 +39,155 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
-import { EditorState, type Extension } from '@codemirror/state'
+import {
+  Decoration,
+  EditorView,
+  keymap,
+  lineNumbers,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  type DecorationSet,
+} from '@codemirror/view'
+import { EditorState, RangeSetBuilder, StateEffect, StateField, type Extension } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching, foldGutter } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import type { CodeFile } from '@/composables/useCode'
+import type { CodeTargetView } from '@/composables/useTraceIndex'
 
 const props = defineProps<{
   file: CodeFile | undefined
   content: string
   isDirty: boolean
   saving: boolean
+  traceTargets?: CodeTargetView[]
+  activeTargetIds?: Set<string>
+  hoverTargetIds?: Set<string>
+  revealActive?: boolean
 }>()
 
 const emit = defineEmits<{
   save: []
   change: [content: string]
+  traceHover: [targetId: string]
+  traceLeave: []
+  tracePin: [targetId: string]
 }>()
 
 const editorContainer = ref<HTMLDivElement | null>(null)
 let editorView: EditorView | null = null
 let ignoreUpdate = false
+
+const setTraceDecorations = StateEffect.define<DecorationSet>()
+const traceField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes)
+    for (const effect of tr.effects) {
+      if (effect.is(setTraceDecorations)) value = effect.value
+    }
+    return value
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
+
+function currentFileTargets(): CodeTargetView[] {
+  const path = props.file?.path
+  if (!path) return []
+  return (props.traceTargets ?? []).filter((target) => target.path === path)
+}
+
+function targetRange(doc: EditorState['doc'], target: CodeTargetView): { from: number; to: number } | null {
+  if (
+    target.charStart != null &&
+    target.charEnd != null &&
+    target.charStart >= 0 &&
+    target.charEnd > target.charStart &&
+    target.charEnd <= doc.length
+  ) {
+    return { from: target.charStart, to: target.charEnd }
+  }
+  const lineStart = target.matchLineStart ?? target.lineStart
+  const lineEnd = target.matchLineEnd ?? target.lineEnd
+  if (lineStart >= 1 && lineEnd >= lineStart && lineEnd <= doc.lines) {
+    return { from: doc.line(lineStart).from, to: doc.line(lineEnd).to }
+  }
+  return null
+}
+
+function buildTraceDecorations(state: EditorState): DecorationSet {
+  const active = props.activeTargetIds ?? new Set<string>()
+  const hover = props.hoverTargetIds ?? new Set<string>()
+  const ranged = currentFileTargets()
+    .map((target) => ({ target, range: targetRange(state.doc, target) }))
+    .filter((entry): entry is { target: CodeTargetView; range: { from: number; to: number } } =>
+      entry.range !== null,
+    )
+    .sort((a, b) => a.range.from - b.range.from || a.range.to - b.range.to)
+  const builder = new RangeSetBuilder<Decoration>()
+  for (const { target, range } of ranged) {
+    const classes = ['trace-code-mark', `trace-code-${target.status}`]
+    if (active.has(target.targetId)) classes.push('trace-code-active')
+    else if (hover.has(target.targetId)) classes.push('trace-code-hover')
+    builder.add(
+      range.from,
+      range.to,
+      Decoration.mark({
+        class: classes.join(' '),
+        attributes: { 'data-trace-target': target.targetId },
+      }),
+    )
+  }
+  return builder.finish()
+}
+
+function refreshTraceDecorations(): void {
+  if (!editorView) return
+  editorView.dispatch({ effects: setTraceDecorations.of(buildTraceDecorations(editorView.state)) })
+}
+
+function revealActiveCodeTarget(): void {
+  if (!editorView) return
+  const active = props.activeTargetIds ?? new Set<string>()
+  const hit = currentFileTargets().find((target) => active.has(target.targetId))
+  if (!hit) return
+  const range = targetRange(editorView.state.doc, hit)
+  if (!range) return
+  editorView.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: 'center' }) })
+}
+
+function traceTargetFromEvent(event: Event): string | null {
+  const el = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-trace-target]')
+  return el?.dataset.traceTarget ?? null
+}
+
+// Track the last target the pointer reported so a single hover over one highlight span doesn't
+// re-emit `traceHover` for every glyph the mouse crosses (CodeMirror splits marks per line/token).
+let lastHoveredTarget: string | null = null
+
+const traceDomHandlers = EditorView.domEventHandlers({
+  mouseover: (event) => {
+    const id = traceTargetFromEvent(event)
+    if (id === lastHoveredTarget) return
+    lastHoveredTarget = id
+    if (id) emit('traceHover', id)
+    else emit('traceLeave')
+  },
+  mouseout: (event) => {
+    // Only clear when the pointer actually leaves the current target for non-target space.
+    const to = (event as MouseEvent).relatedTarget as HTMLElement | null
+    const stillInTarget = to?.closest?.('[data-trace-target]')
+    if (!stillInTarget && lastHoveredTarget !== null) {
+      lastHoveredTarget = null
+      emit('traceLeave')
+    }
+  },
+  mousedown: (event) => {
+    const id = traceTargetFromEvent(event)
+    if (id) emit('tracePin', id)
+  },
+})
 
 async function getLanguageExtension(path: string): Promise<Extension> {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
@@ -176,6 +302,8 @@ function createExtensions(langExt: Extension): Extension[] {
         emit('change', value)
       }
     }),
+    traceField,
+    traceDomHandlers,
     langExt,
   ]
 }
@@ -195,6 +323,7 @@ async function mountEditor(): Promise<void> {
     state,
     parent: editorContainer.value,
   })
+  refreshTraceDecorations()
 }
 
 function destroyEditor(): void {
@@ -229,6 +358,29 @@ watch(() => props.content, (newContent) => {
     ignoreUpdate = false
   }
 })
+
+watch(
+  () => props.traceTargets,
+  () => refreshTraceDecorations(),
+  { deep: true },
+)
+
+// Selection change → refresh strong highlight + one-time reveal scroll (only when this pane is
+// the counterpart, i.e. revealActive). Hover change → weak highlight only, never scrolls.
+watch(
+  () => props.activeTargetIds,
+  () => {
+    refreshTraceDecorations()
+    if (props.revealActive) nextTick(() => revealActiveCodeTarget())
+  },
+  { deep: true },
+)
+
+watch(
+  () => props.hoverTargetIds,
+  () => refreshTraceDecorations(),
+  { deep: true },
+)
 
 // Expose method to get current editor content
 function getEditorContent(): string {
@@ -340,6 +492,33 @@ defineExpose({ getEditorContent, goToLine })
 
 .editor-body :deep(.cm-cursor) {
   border-left-color: #1f8f78;
+}
+
+/* Trace target decorations (bidirectional hover). */
+.editor-body :deep(.trace-code-mark) {
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.editor-body :deep(.trace-code-proposed) {
+  background: rgba(88, 133, 255, 0.16);
+  box-shadow: inset 0 -2px 0 rgba(88, 133, 255, 0.45);
+}
+
+.editor-body :deep(.trace-code-accepted) {
+  background: rgba(46, 168, 118, 0.2);
+  box-shadow: inset 0 -2px 0 rgba(46, 168, 118, 0.6);
+}
+
+.editor-body :deep(.trace-code-active) {
+  background: rgba(224, 168, 58, 0.32) !important;
+  box-shadow: inset 0 -2px 0 #e0a83a, 0 0 0 1px rgba(224, 168, 58, 0.5) !important;
+}
+
+/* Weak highlight for the relation currently under the pointer (preview only, not selected). */
+.editor-body :deep(.trace-code-hover) {
+  background: rgba(224, 168, 58, 0.16);
+  box-shadow: 0 0 0 1px rgba(224, 168, 58, 0.45);
 }
 
 @media (max-width: 820px) {

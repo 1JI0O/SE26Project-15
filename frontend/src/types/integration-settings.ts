@@ -5,6 +5,7 @@ export interface AgentIntegrationSettings {
   enabled: boolean
   base_url: string
   model: string
+  analysis_model: string
   thinking_mode: AgentThinkingMode
   timeout_seconds: number
   api_key_configured: boolean

@@ -3,10 +3,10 @@
     <header>
       <div>
         <h2>双向追溯矩阵</h2>
-        <p>论文段落、公式、图表与代码文件/符号的关联审阅队列。点击行查看证据详情。</p>
+        <p>论文段落、公式、图表与代码文件/符号的关联审阅队列。点击任意行选中该关系并两侧联动定位。</p>
       </div>
       <el-button type="primary" :loading="generating" @click="$emit('suggest')">
-        生成候选
+        {{ generating ? 'Agent 追溯中…' : hasGenerated ? '重新生成' : '生成追溯' }}
       </el-button>
     </header>
 
@@ -39,17 +39,15 @@
         <span>审阅</span>
       </div>
       <div
-        v-for="(row, index) in rows"
+        v-for="row in rows"
         :key="`${row.paper}-${row.code}`"
-        class="trace-row clickable"
-        @click="$emit('selectRow', row, index)"
+        :class="['trace-row', 'clickable', { selected: !!row.id && row.id === selectedId }]"
+        @click="$emit('selectRow', row)"
+        @mouseenter="$emit('hoverRow', row)"
+        @mouseleave="$emit('leaveRow')"
       >
-        <button class="location-link" :title="row.rationale" @click.stop="$emit('openPaper', row)">
-          {{ row.paper }}
-        </button>
-        <button class="location-link" :title="row.rationale" @click.stop="$emit('openCode', row)">
-          {{ row.code }}
-        </button>
+        <span class="location-cell" :title="row.rationale">{{ row.paper }}</span>
+        <span class="location-cell" :title="row.rationale">{{ row.code }}</span>
         <span>{{ row.type }} · {{ row.evidenceCount }} 证据</span>
         <el-progress :percentage="row.confidence" />
         <span class="trace-status">
@@ -79,21 +77,26 @@
 import type { TraceRowView } from '@/composables/useTrace'
 import type { TraceStatus } from '@/types/tracing'
 
-defineProps<{
-  rows: TraceRowView[]
-  loading: boolean
-  generating: boolean
-  error: string | null
-  mode: string
-  degraded: boolean
-}>()
+withDefaults(
+  defineProps<{
+    rows: TraceRowView[]
+    loading: boolean
+    generating: boolean
+    error: string | null
+    mode: string
+    degraded: boolean
+    hasGenerated?: boolean
+    selectedId?: string | null
+  }>(),
+  { hasGenerated: false, selectedId: null },
+)
 
 defineEmits<{
   suggest: []
   review: [traceId: string, status: Extract<TraceStatus, 'accepted' | 'rejected'>]
-  selectRow: [row: TraceRowView, index: number]
-  openPaper: [row: TraceRowView]
-  openCode: [row: TraceRowView]
+  selectRow: [row: TraceRowView]
+  hoverRow: [row: TraceRowView]
+  leaveRow: []
 }>()
 
 function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'info' | 'danger' {
@@ -122,21 +125,13 @@ function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'in
   line-height: 1.6;
 }
 
-.location-link {
+.location-cell {
   min-width: 0;
   overflow: hidden;
-  border: 0;
-  background: transparent;
   color: #176b87;
-  cursor: pointer;
-  font: inherit;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.location-link:hover {
-  text-decoration: underline;
 }
 
 .trace-matrix header {
@@ -199,6 +194,11 @@ function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'in
 
 .trace-row.clickable:hover {
   background: #f0faf7;
+}
+
+.trace-row.clickable.selected {
+  background: #fff5df;
+  box-shadow: inset 3px 0 0 #e0a83a;
 }
 
 .trace-head {

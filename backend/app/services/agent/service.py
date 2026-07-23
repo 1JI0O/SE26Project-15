@@ -142,17 +142,23 @@ def _create_confirmation(
     return request
 
 
-def _provider_from_settings(session: Session) -> tuple[AgentProvider | None, str | None]:
+def _provider_from_settings(
+    session: Session, *, for_analysis: bool = False
+) -> tuple[AgentProvider | None, str | None]:
     config, _ = get_effective_integration_config(session)
     if not config.agent_enabled:
         return None, "llm_disabled"
     if not config.agent_base_url or not config.agent_api_key or not config.agent_model:
         return None, "llm_not_configured"
+    # Analysis jobs (trace/architecture) may opt into a stronger, costlier model configured
+    # separately from the chat model. Falls back to the chat model when unset.
+    analysis_model = (getattr(config, "agent_analysis_model", "") or "").strip()
+    model = analysis_model if (for_analysis and analysis_model) else config.agent_model
     return (
         CompatibleAgentProvider(
             config.agent_base_url,
             config.agent_api_key,
-            config.agent_model,
+            model,
             config.agent_timeout_seconds,
             config.agent_thinking_mode,
         ),

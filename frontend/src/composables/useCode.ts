@@ -191,6 +191,48 @@ export function useCode(projectId: () => number) {
     return null
   }
 
+  function findReadmeAmong(nodes: WorkspaceCodeTreeNode[]): WorkspaceCodeTreeNode | null {
+    const files = nodes.filter((node) => node.kind === 'file' && isEditableFile(node.path))
+    return (
+      files.find((node) => /^readme\.md$/i.test(baseName(node.path))) ??
+      files.find((node) => /^readme(\.|$)/i.test(baseName(node.path))) ??
+      null
+    )
+  }
+
+  // Prefer a root README as the default open file so users land on the repo overview. ZIP/GitHub
+  // imports usually unpack into a single wrapper folder (e.g. `repo/README.md`), so the top level
+  // is all folders and a top-level scan misses it — dive into the lone wrapper folder, then fall
+  // back to any README anywhere in the tree, and finally to the first editable file.
+  function findDefaultFile(nodes: WorkspaceCodeTreeNode[]): WorkspaceCodeTreeNode | null {
+    const topReadme = findReadmeAmong(nodes)
+    if (topReadme) return topReadme
+
+    const folders = nodes.filter((node) => node.kind === 'folder')
+    if (nodes.every((node) => node.kind === 'folder') && folders.length === 1) {
+      const wrappedReadme = findReadmeAmong(folders[0].children ?? [])
+      if (wrappedReadme) return wrappedReadme
+    }
+
+    const deepReadme = findReadmeInTree(nodes)
+    return deepReadme ?? findFirstEditableFile(nodes)
+  }
+
+  function findReadmeInTree(nodes: WorkspaceCodeTreeNode[]): WorkspaceCodeTreeNode | null {
+    for (const node of nodes) {
+      if (node.kind === 'file' && isEditableFile(node.path) && /^readme(\.|$)/i.test(baseName(node.path))) {
+        return node
+      }
+      const child = findReadmeInTree(node.children ?? [])
+      if (child) return child
+    }
+    return null
+  }
+
+  function baseName(path: string): string {
+    return path.split('/').pop() ?? path
+  }
+
   async function loadCodeTree(): Promise<void> {
     loading.value = true
     error.value = null
@@ -208,8 +250,8 @@ export function useCode(projectId: () => number) {
       ignoreSummary.value = repository.summary
         ? `已忽略 ${repository.summary.ignored_count} 个规则匹配文件。`
         : '已应用 .gitignore 与 macOS 元数据过滤规则。'
-      const firstFile = findFirstEditableFile(tree)
-      if (firstFile) await openCodeFile(firstFile.path)
+      const defaultFile = findDefaultFile(tree)
+      if (defaultFile) await openCodeFile(defaultFile.path)
     } catch (cause) {
       codeTree.value = []
       codeFilename.value = ''

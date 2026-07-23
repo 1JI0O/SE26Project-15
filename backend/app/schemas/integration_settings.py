@@ -15,6 +15,7 @@ class AgentIntegrationRead(BaseModel):
     enabled: bool
     base_url: str
     model: str
+    analysis_model: str
     thinking_mode: Literal["", "enabled", "disabled"]
     timeout_seconds: float
     api_key_configured: bool
@@ -26,6 +27,7 @@ class AgentIntegrationUpdate(BaseModel):
     api_key: SecretStr | None = None
     clear_api_key: bool = False
     model: str = Field(default="", max_length=160)
+    analysis_model: str = Field(default="", max_length=160)
     thinking_mode: Literal["", "enabled", "disabled"] = ""
     timeout_seconds: float = Field(default=20.0, gt=0, le=120)
 

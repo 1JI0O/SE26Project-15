@@ -155,6 +155,17 @@ class TraceLink(SQLModel, table=True):
         sa_column=Column(JSON, nullable=False),
     )
     model_info_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    artifact_id: str | None = Field(default=None, index=True, max_length=72)
+    paper_target_id: str | None = Field(default=None, index=True, max_length=72)
+    code_target_id: str | None = Field(default=None, index=True, max_length=72)
+    relevance: float = Field(default=0)
+    score_basis_json: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False)
+    )
+    provenance_json: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False)
+    )
+    supersedes_trace_id: str | None = Field(default=None, index=True, max_length=64)
     fingerprint: str = Field(default_factory=lambda: f"manual-{uuid4().hex}", max_length=64)
     status: str = Field(default="proposed", max_length=32, index=True)
     stale_reason: str | None = Field(default=None, max_length=128)
@@ -473,6 +484,7 @@ class IntegrationConfig(SQLModel, table=True):
     agent_base_url: str = Field(default="", max_length=500)
     agent_api_key: str = Field(default="", sa_column=Column(Text, nullable=False), repr=False)
     agent_model: str = Field(default="", max_length=160)
+    agent_analysis_model: str = Field(default="", max_length=160)
     agent_thinking_mode: str = Field(default="", max_length=16)
     agent_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
     mineru_provider: str = Field(default="local", max_length=16)
@@ -493,3 +505,113 @@ class IntegrationConfig(SQLModel, table=True):
     mineru_task_timeout_seconds: float = Field(default=600.0, gt=0, le=7200)
     mineru_poll_interval_seconds: float = Field(default=2.0, gt=0, le=30)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class PaperTarget(SQLModel, table=True):
+    """A precise, hoverable anchor inside the paper (formula/variable/algorithm/etc.).
+
+    Identity is (section_path + quote + occurrence + quote_hash); ``block_id`` is only a
+    navigation hint because MinerU block IDs can drift across re-parses.
+    """
+
+    __tablename__ = "paper_target"
+    __table_args__ = (UniqueConstraint("fingerprint", name="uq_paper_target_fingerprint"),)
+
+    target_id: str = Field(
+        default_factory=lambda: f"ptarget-{uuid4().hex}", primary_key=True, max_length=72
+    )
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    artifact_id: str = Field(
+        foreign_key="agent_analysis_artifact.artifact_id", index=True, max_length=72
+    )
+    paper_document_id: int = Field(foreign_key="paper_document.id", index=True)
+    target_type: str = Field(max_length=32, index=True)
+    block_id: str = Field(max_length=255, index=True)
+    section_path_json: list[str] = Field(
+        default_factory=list, sa_column=Column(JSON, nullable=False)
+    )
+    quote: str = Field(sa_column=Column(Text, nullable=False))
+    occurrence: int = Field(default=1, ge=1)
+    char_start: int | None = Field(default=None)
+    char_end: int | None = Field(default=None)
+    quote_hash: str = Field(max_length=64, index=True)
+    bbox_json: list[float] | None = Field(default=None, sa_column=Column(JSON))
+    asset_path: str | None = Field(default=None, max_length=1000)
+    salience: float = Field(default=0)
+    salience_reason: str = Field(default="", sa_column=Column(Text, nullable=False))
+    anchor_status: str = Field(default="validated", max_length=32, index=True)
+    fingerprint: str = Field(max_length=64, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class CodeTarget(SQLModel, table=True):
+    """A precise, hoverable anchor inside the repository at a pinned revision.
+
+    Identity is (path + code_quote_hash + occurrence); line numbers are only an initial
+    search window, not identity.
+    """
+
+    __tablename__ = "code_target"
+    __table_args__ = (UniqueConstraint("fingerprint", name="uq_code_target_fingerprint"),)
+
+    target_id: str = Field(
+        default_factory=lambda: f"ctarget-{uuid4().hex}", primary_key=True, max_length=72
+    )
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    artifact_id: str = Field(
+        foreign_key="agent_analysis_artifact.artifact_id", index=True, max_length=72
+    )
+    code_repository_id: int = Field(foreign_key="code_repository.id", index=True)
+    code_revision: int = Field(index=True)
+    path: str = Field(max_length=1000, index=True)
+    symbol_id: str | None = Field(default=None, max_length=500, index=True)
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    column_start: int | None = Field(default=None)
+    column_end: int | None = Field(default=None)
+    quote: str = Field(sa_column=Column(Text, nullable=False))
+    occurrence: int = Field(default=1, ge=1)
+    code_quote_hash: str = Field(max_length=64, index=True)
+    role: str = Field(max_length=64, index=True)
+    salience: float = Field(default=0)
+    salience_reason: str = Field(default="", sa_column=Column(Text, nullable=False))
+    anchor_status: str = Field(default="validated", max_length=32, index=True)
+    fingerprint: str = Field(max_length=64, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class TraceReviewEvent(SQLModel, table=True):
+    """Append-only human/agent decision log for trace links (accept/reject/modify/...)."""
+
+    __tablename__ = "trace_review_event"
+
+    event_id: str = Field(
+        default_factory=lambda: f"review-{uuid4().hex}", primary_key=True, max_length=72
+    )
+    public_id: str = Field(
+        default_factory=lambda: str(uuid4()), index=True, unique=True, max_length=36
+    )
+    version: int = Field(default=1, ge=1)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    trace_id: str = Field(max_length=64, index=True)
+    action: str = Field(max_length=32)
+    actor_type: str = Field(max_length=24)
+    actor_ref: str | None = Field(default=None, max_length=160)
+    before_json: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False)
+    )
+    after_json: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False)
+    )
+    reason: str = Field(default="", sa_column=Column(Text, nullable=False))
+    job_id: str | None = Field(default=None, max_length=72)
+    run_id: str | None = Field(default=None, max_length=72)
+    created_at: datetime = Field(default_factory=utc_now)

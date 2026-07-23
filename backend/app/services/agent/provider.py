@@ -114,6 +114,10 @@ class CompatibleAgentProvider:
             "model": self.model_name,
             "temperature": 0,
             "messages": messages,
+            # Publish payloads (many candidates with quotes/rationale) are large; the provider
+            # default output cap truncates them into invalid JSON. Request the max so a full
+            # publish call fits in one response.
+            "max_tokens": 8192,
         }
         if definitions:
             payload.update(tools=definitions, tool_choice="auto")
@@ -162,6 +166,7 @@ class CompatibleAgentProvider:
                 "temperature": 0,
                 "messages": fallback_messages,
                 "response_format": {"type": "json_object"},
+                "max_tokens": 8192,
             }
             response = post(fallback_payload)
             if response.status_code in {400, 422}:
