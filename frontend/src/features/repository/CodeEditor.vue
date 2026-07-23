@@ -63,6 +63,7 @@ const props = defineProps<{
   saving: boolean
   traceTargets?: CodeTargetView[]
   activeTargetIds?: Set<string>
+  hoverTargetIds?: Set<string>
   revealActive?: boolean
 }>()
 
@@ -117,6 +118,7 @@ function targetRange(doc: EditorState['doc'], target: CodeTargetView): { from: n
 
 function buildTraceDecorations(state: EditorState): DecorationSet {
   const active = props.activeTargetIds ?? new Set<string>()
+  const hover = props.hoverTargetIds ?? new Set<string>()
   const ranged = currentFileTargets()
     .map((target) => ({ target, range: targetRange(state.doc, target) }))
     .filter((entry): entry is { target: CodeTargetView; range: { from: number; to: number } } =>
@@ -127,6 +129,7 @@ function buildTraceDecorations(state: EditorState): DecorationSet {
   for (const { target, range } of ranged) {
     const classes = ['trace-code-mark', `trace-code-${target.status}`]
     if (active.has(target.targetId)) classes.push('trace-code-active')
+    else if (hover.has(target.targetId)) classes.push('trace-code-hover')
     builder.add(
       range.from,
       range.to,
@@ -142,7 +145,6 @@ function buildTraceDecorations(state: EditorState): DecorationSet {
 function refreshTraceDecorations(): void {
   if (!editorView) return
   editorView.dispatch({ effects: setTraceDecorations.of(buildTraceDecorations(editorView.state)) })
-  if (props.revealActive) revealActiveCodeTarget()
 }
 
 function revealActiveCodeTarget(): void {
@@ -160,13 +162,26 @@ function traceTargetFromEvent(event: Event): string | null {
   return el?.dataset.traceTarget ?? null
 }
 
+// Track the last target the pointer reported so a single hover over one highlight span doesn't
+// re-emit `traceHover` for every glyph the mouse crosses (CodeMirror splits marks per line/token).
+let lastHoveredTarget: string | null = null
+
 const traceDomHandlers = EditorView.domEventHandlers({
   mouseover: (event) => {
     const id = traceTargetFromEvent(event)
+    if (id === lastHoveredTarget) return
+    lastHoveredTarget = id
     if (id) emit('traceHover', id)
+    else emit('traceLeave')
   },
   mouseout: (event) => {
-    if (traceTargetFromEvent(event)) emit('traceLeave')
+    // Only clear when the pointer actually leaves the current target for non-target space.
+    const to = (event as MouseEvent).relatedTarget as HTMLElement | null
+    const stillInTarget = to?.closest?.('[data-trace-target]')
+    if (!stillInTarget && lastHoveredTarget !== null) {
+      lastHoveredTarget = null
+      emit('traceLeave')
+    }
   },
   mousedown: (event) => {
     const id = traceTargetFromEvent(event)
@@ -350,8 +365,19 @@ watch(
   { deep: true },
 )
 
+// Selection change → refresh strong highlight + one-time reveal scroll (only when this pane is
+// the counterpart, i.e. revealActive). Hover change → weak highlight only, never scrolls.
 watch(
   () => props.activeTargetIds,
+  () => {
+    refreshTraceDecorations()
+    if (props.revealActive) nextTick(() => revealActiveCodeTarget())
+  },
+  { deep: true },
+)
+
+watch(
+  () => props.hoverTargetIds,
   () => refreshTraceDecorations(),
   { deep: true },
 )
@@ -487,6 +513,12 @@ defineExpose({ getEditorContent, goToLine })
 .editor-body :deep(.trace-code-active) {
   background: rgba(224, 168, 58, 0.32) !important;
   box-shadow: inset 0 -2px 0 #e0a83a, 0 0 0 1px rgba(224, 168, 58, 0.5) !important;
+}
+
+/* Weak highlight for the relation currently under the pointer (preview only, not selected). */
+.editor-body :deep(.trace-code-hover) {
+  background: rgba(224, 168, 58, 0.16);
+  box-shadow: 0 0 0 1px rgba(224, 168, 58, 0.45);
 }
 
 @media (max-width: 820px) {

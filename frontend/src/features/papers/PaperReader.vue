@@ -23,7 +23,7 @@
           <button aria-label="放大论文" @click="zoom = Math.min(150, zoom + 10)">＋</button>
         </div>
       </div>
-      <div ref="scrollRef" class="paper-scroll" @scroll="updateActiveSection">
+      <div ref="scrollRef" class="paper-scroll">
         <article
           ref="markdownRef"
           class="markdown-body"
@@ -47,6 +47,7 @@ import { getPaperAssetBlob, resolvePaperAssetUrl } from '@/api/paper-api'
 import { renderPaperMarkdown } from './markdown-renderer'
 import {
   decoratePaperTargets,
+  resolveVisualBlock,
   setActivePaperTargets,
   type PaperMark,
 } from './trace-decorations'
@@ -64,11 +65,12 @@ const props = defineProps<{
   blocks: WorkspacePaperBlock[]
   traceTargets?: PaperMark[]
   activeTargetIds?: Set<string>
-  revealActive?: boolean
+  hoverTargetIds?: Set<string>
 }>()
 
 const emit = defineEmits<{
   selectSection: [sectionId: string]
+  observeSection: [sectionId: string]
   retry: []
   traceHover: [targetId: string]
   traceLeave: []
@@ -80,9 +82,48 @@ const markdownRef = ref<HTMLElement | null>(null)
 const zoom = ref(100)
 const desktopRuntime = '__TAURI_INTERNALS__' in window
 const imageObjectUrls = new Set<string>()
-let scrollFrame = 0
-let suppressScrollTrackingUntil = 0
+// While a programmatic block/target jump is animating we must fully own the scroll: the section
+// observer's highlight updates are harmless (they never scroll), but a TOC re-scroll must not snap
+// over the jump. blockJumpActive gates scrollToSection. Settle is detected by watching scrollTop.
+let blockJumpActive = false
+let settleTimer = 0
+let settleRaf = 0
 let highlightedElement: HTMLElement | null = null
+// Observes which heading is at the top of the viewport (TOC highlight only, never scrolls).
+let sectionObserver: IntersectionObserver | null = null
+const headingVisibility = new Map<string, number>()
+
+// Hold scroll-tracking suppression open until the smooth scroll actually stops (scrollTop
+// stable for a few frames), instead of a fixed 900ms that can expire mid-animation.
+function holdSuppressionUntilSettled(): void {
+  blockJumpActive = true
+  window.clearTimeout(settleTimer)
+  window.cancelAnimationFrame(settleRaf)
+  const root = scrollRef.value
+  if (!root) return
+  let last = root.scrollTop
+  let stableFrames = 0
+  const tick = (): void => {
+    const current = root.scrollTop
+    if (Math.abs(current - last) < 1) {
+      stableFrames += 1
+    } else {
+      stableFrames = 0
+    }
+    last = current
+    if (stableFrames >= 4) {
+      blockJumpActive = false
+      return
+    }
+    settleRaf = window.requestAnimationFrame(tick)
+  }
+  settleRaf = window.requestAnimationFrame(tick)
+  // Hard safety cap: never stay locked longer than 2.5s.
+  settleTimer = window.setTimeout(() => {
+    window.cancelAnimationFrame(settleRaf)
+    blockJumpActive = false
+  }, 2500)
+}
 
 const renderedMarkdown = computed(() =>
   renderPaperMarkdown(props.markdown, (path) => resolvePaperAssetUrl(props.assetBaseUrl, path)),
@@ -118,15 +159,15 @@ async function hydrateDesktopImages(): Promise<void> {
 }
 
 function scrollToSection(sectionId: string): void {
+  // A trace/target jump owns the scroll; don't let a TOC re-scroll snap over it.
+  if (blockJumpActive) return
   const root = scrollRef.value
   const section = root?.querySelector<HTMLElement>(`#${CSS.escape(sectionId)}`)
   if (!root || !section) return
   const top =
-    sectionId === 'section-1'
-      ? 0
-      : section.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - 18
-  suppressScrollTrackingUntil = Date.now() + 150
-  root.scrollTo({ top, behavior: 'auto' })
+    section.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - 18
+  holdSuppressionUntilSettled()
+  root.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
 }
 
 function scrollToBlock(blockId: string, quote = ''): boolean {
@@ -147,40 +188,34 @@ function scrollToBlock(blockId: string, quote = ''): boolean {
   }
   if (!target) return false
   highlightedElement?.classList.remove('paper-block-highlight')
-  const visualTarget = target.matches('span')
-    ? target.closest<HTMLElement>('h1, h2, h3, h4, h5, h6, p, li, pre, blockquote, td')
-      || target.nextElementSibling as HTMLElement | null
-    : target
+  // Resolve the element that visually represents the block: for a math block the anchor is an
+  // empty <span> inside an empty <p>, so highlight the following .math-display instead of the
+  // zero-height wrapper (which showed as a thin strip on top).
+  const visualTarget = target.matches('span') ? resolveVisualBlock(target) : target
   highlightedElement = visualTarget || target
   highlightedElement.classList.add('paper-block-highlight')
-  const top = target.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
-  // Suppress scroll-tracking for the duration of the smooth animation, otherwise the
-  // intermediate scroll events flip the active section to section-1 and snap to the top.
-  suppressScrollTrackingUntil = Date.now() + 900
+  const anchorForScroll = highlightedElement
+  const top =
+    anchorForScroll.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
+  holdSuppressionUntilSettled()
   root.scrollTo({ top: Math.max(0, top - root.clientHeight * 0.2), behavior: 'smooth' })
   window.setTimeout(() => {
     highlightedElement?.classList.remove('paper-block-highlight')
     highlightedElement = null
-  }, 1500)
+  }, 1800)
   return true
 }
+
+// Targets the backend never anchored and quote-search couldn't place either. Exposed so the fixed
+// box can show "论文锚点不可用" instead of a silent blank.
+const unresolvedTargetIds = ref<Set<string>>(new Set())
 
 function applyTraceDecorations(): void {
   const root = markdownRef.value
   if (!root) return
-  decoratePaperTargets(root, props.traceTargets ?? [])
-  setActivePaperTargets(root, props.activeTargetIds ?? new Set())
-}
-
-function revealActiveTarget(): void {
-  const root = scrollRef.value
-  const body = markdownRef.value
-  if (!root || !body || !props.revealActive) return
-  const active = body.querySelector<HTMLElement>('[data-trace-target].trace-target-active')
-  if (!active) return
-  const top = active.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
-  suppressScrollTrackingUntil = Date.now() + 900
-  root.scrollTo({ top: Math.max(0, top - root.clientHeight * 0.35), behavior: 'smooth' })
+  const { unresolved } = decoratePaperTargets(root, props.traceTargets ?? [])
+  unresolvedTargetIds.value = unresolved
+  setActivePaperTargets(root, props.activeTargetIds ?? new Set(), props.hoverTargetIds ?? new Set())
 }
 
 function traceTargetId(event: Event): string | null {
@@ -202,26 +237,60 @@ function onTraceClick(event: MouseEvent): void {
   if (id) emit('tracePin', id)
 }
 
-function updateActiveSection(): void {
-  if (Date.now() < suppressScrollTrackingUntil) return
-  window.cancelAnimationFrame(scrollFrame)
-  scrollFrame = window.requestAnimationFrame(() => {
-    const root = scrollRef.value
-    if (!root) return
-    const headings = [...root.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')]
-    // Start from null (NOT headings[0]); otherwise any sample above the first heading — which
-    // every smooth programmatic jump passes through — would emit section-1 and snap to the top.
-    const active = headings.reduce<HTMLElement | null>((current, heading) => {
-      return heading.offsetTop <= root.scrollTop + 70 ? heading : current
-    }, null)
-    if (active?.id && active.id !== props.activeSectionId) emit('selectSection', active.id)
-  })
+// One-way section observation: whenever the set of visible headings changes, report the topmost
+// visible one as the observed section for the TOC to highlight. This NEVER scrolls — decoupling
+// "what section am I looking at" (observe) from "where the user asked to go" (jump) is what stops
+// the wheel-scroll-jumps-randomly loop the previous @scroll handler caused.
+function reportObservedSection(): void {
+  const root = scrollRef.value
+  if (!root) return
+  const headings = [...root.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')]
+  // Prefer the last heading whose top is at/above the tracking line; fall back to the first
+  // heading still intersecting, so a section taller than the viewport keeps its own highlight.
+  const rootTop = root.getBoundingClientRect().top
+  let candidate: HTMLElement | null = null
+  for (const heading of headings) {
+    if (heading.getBoundingClientRect().top - rootTop <= 80) candidate = heading
+    else break
+  }
+  if (!candidate) {
+    candidate = headings.find((h) => (headingVisibility.get(h.id) ?? 0) > 0) ?? null
+  }
+  if (candidate?.id) emit('observeSection', candidate.id)
+}
+
+function setupSectionObserver(): void {
+  teardownSectionObserver()
+  const root = scrollRef.value
+  const body = markdownRef.value
+  if (!root || !body) return
+  headingVisibility.clear()
+  sectionObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).id
+        if (id) headingVisibility.set(id, entry.intersectionRatio)
+      }
+      reportObservedSection()
+    },
+    { root, threshold: [0, 1], rootMargin: '-72px 0px -70% 0px' },
+  )
+  body
+    .querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')
+    .forEach((heading) => sectionObserver?.observe(heading))
+}
+
+function teardownSectionObserver(): void {
+  sectionObserver?.disconnect()
+  sectionObserver = null
 }
 
 watch(
   () => props.activeSectionId,
   async (sectionId, previous) => {
     if (!sectionId || sectionId === previous) return
+    // A trace/target jump owns the scroll; the TOC highlight can move but must not re-scroll.
+    if (blockJumpActive) return
     await nextTick()
     scrollToSection(sectionId)
   },
@@ -234,6 +303,7 @@ watch(
     scrollRef.value?.scrollTo({ top: 0 })
     await hydrateDesktopImages()
     applyTraceDecorations()
+    setupSectionObserver()
   },
   { immediate: true },
 )
@@ -247,20 +317,47 @@ watch(
   { deep: true },
 )
 
+// Selection/hover change only refreshes decorations (strong vs weak highlight). It never scrolls —
+// the one-time reveal scroll lives in the parent's selectedLinkId watch (scrollToBlock), so hover
+// can't move the pane.
 watch(
   () => props.activeTargetIds,
-  async () => {
+  () => {
     const root = markdownRef.value
-    if (root) setActivePaperTargets(root, props.activeTargetIds ?? new Set())
-    await nextTick()
-    revealActiveTarget()
+    if (root) {
+      setActivePaperTargets(
+        root,
+        props.activeTargetIds ?? new Set(),
+        props.hoverTargetIds ?? new Set(),
+      )
+    }
   },
   { deep: true },
 )
 
-onBeforeUnmount(revokeImageObjectUrls)
+watch(
+  () => props.hoverTargetIds,
+  () => {
+    const root = markdownRef.value
+    if (root) {
+      setActivePaperTargets(
+        root,
+        props.activeTargetIds ?? new Set(),
+        props.hoverTargetIds ?? new Set(),
+      )
+    }
+  },
+  { deep: true },
+)
 
-defineExpose({ scrollToSection, scrollToBlock })
+onBeforeUnmount(() => {
+  revokeImageObjectUrls()
+  teardownSectionObserver()
+  window.clearTimeout(settleTimer)
+  window.cancelAnimationFrame(settleRaf)
+})
+
+defineExpose({ scrollToSection, scrollToBlock, unresolvedTargetIds })
 </script>
 
 <style scoped>
@@ -278,10 +375,19 @@ defineExpose({ scrollToSection, scrollToBlock })
   min-height: 220px;
   flex: 1;
   place-content: center;
+  justify-items: center;
   gap: 10px;
   color: #6b7785;
   font-size: 12px;
   text-align: center;
+}
+
+.parsing-spin {
+  display: block;
+  margin: 0 auto;
+  font-size: 22px;
+  color: #5885ff;
+  animation: paper-parsing-spin 1s linear infinite;
 }
 
 .state-error {
@@ -291,12 +397,6 @@ defineExpose({ scrollToSection, scrollToBlock })
 .state-placeholder small {
   color: #9aa5b1;
   font-size: 11px;
-}
-
-.parsing-spin {
-  font-size: 22px;
-  color: #5885ff;
-  animation: paper-parsing-spin 1s linear infinite;
 }
 
 @keyframes paper-parsing-spin {
@@ -445,6 +545,38 @@ defineExpose({ scrollToSection, scrollToBlock })
   background: #ffe8a3 !important;
   box-shadow: inset 0 -2px 0 #e0a83a, 0 0 0 2px rgba(224, 168, 58, 0.4) !important;
   border-left-color: #e0a83a !important;
+}
+
+/* Weak highlight for the relation currently under the pointer (preview only, not selected). */
+.markdown-body :deep(.trace-target-hover) {
+  background: rgba(224, 168, 58, 0.18);
+  box-shadow: 0 0 0 1px rgba(224, 168, 58, 0.5);
+}
+
+/* When the traceable block is a formula/table/etc., the whole block box gets the highlight.
+   KaTeX renders on a light background, so the coarse base tint is nearly invisible — give the
+   formula its own clearly-visible resting tint + outline so traced formulas are legible unselected. */
+.markdown-body :deep(.math-display.trace-block-target) {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin-left: 0;
+  border-left: 0;
+  background: rgba(88, 133, 255, 0.14);
+  outline: 1px solid rgba(88, 133, 255, 0.4);
+  outline-offset: 1px;
+}
+
+.markdown-body :deep(.math-display.trace-block-accepted) {
+  background: rgba(46, 168, 118, 0.16);
+  outline-color: rgba(46, 168, 118, 0.5);
+}
+
+.markdown-body :deep(.math-display.paper-block-highlight) {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin-left: 0;
 }
 
 .markdown-body :deep(table) {

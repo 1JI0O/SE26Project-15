@@ -4,7 +4,7 @@
     <template v-for="(section, index) in sections" :key="section.id">
       <div
         v-if="isVisible(index)"
-        :class="['outline-row', { active: section.id === activeSectionId }]"
+        :class="['outline-row', { active: section.id === highlightedSectionId }]"
         :style="{ paddingLeft: `${8 + Math.max(0, section.level - 1) * 12}px` }"
       >
         <button
@@ -26,15 +26,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { WorkspacePaperSection } from '@/types/papers'
 
 const props = defineProps<{
   sections: WorkspacePaperSection[]
   activeSectionId: string
+  // Section currently scrolled into view (IntersectionObserver). Drives the highlight when set;
+  // falls back to activeSectionId (the user's last TOC click) before any observation lands.
+  observedSectionId?: string
 }>()
 
 defineEmits<{ select: [sectionId: string] }>()
+
+const highlightedSectionId = computed(() => props.observedSectionId || props.activeSectionId)
 
 const collapsed = ref(new Set<string>())
 

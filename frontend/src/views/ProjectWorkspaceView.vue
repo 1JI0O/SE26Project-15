@@ -233,6 +233,7 @@
           <PaperOutlineTree
             :sections="paper.paperSections.value"
             :active-section-id="paper.activeSectionId.value"
+            :observed-section-id="paper.observedSectionId.value"
             @select="onOutlineSelect"
           />
         </div>
@@ -291,12 +292,13 @@
               :blocks="paper.paperDocument.value?.blocks || []"
               :trace-targets="paperMarks"
               :active-target-ids="traceIndex.activePaperTargetIds.value"
-              :reveal-active="traceIndex.activeSide.value === 'code'"
+              :hover-target-ids="traceIndex.hoverPaperTargetIds.value"
               @select-section="paper.selectSection"
+              @observe-section="paper.observeSection"
               @retry="paper.loadPaperPages"
-              @trace-hover="traceIndex.hoverPaper"
+              @trace-hover="(id: string) => traceIndex.hoverTarget('paper', id)"
               @trace-leave="traceIndex.clearHover"
-              @trace-pin="(id: string) => traceIndex.pin('paper', id)"
+              @trace-pin="(id: string) => traceIndex.selectTarget('paper', id)"
             />
           </article>
 
@@ -336,12 +338,13 @@
               :saving="code.saving.value"
               :trace-targets="codeTargetList"
               :active-target-ids="traceIndex.activeCodeTargetIds.value"
-              :reveal-active="traceIndex.activeSide.value === 'paper'"
+              :hover-target-ids="traceIndex.hoverCodeTargetIds.value"
+              :reveal-active="false"
               @change="code.handleEditorInput"
               @save="onSaveCode"
-              @trace-hover="traceIndex.hoverCode"
+              @trace-hover="(id: string) => traceIndex.hoverTarget('code', id)"
               @trace-leave="traceIndex.clearHover"
-              @trace-pin="(id: string) => traceIndex.pin('code', id)"
+              @trace-pin="(id: string) => traceIndex.selectTarget('code', id)"
             />
           </article>
         </section>
@@ -386,7 +389,11 @@
           </header>
 
           <div class="bottom-panel-content">
-            <div v-if="activeBottomPanel === 'trace'" class="trace-panel-layout">
+            <div
+              v-if="activeBottomPanel === 'trace'"
+              class="trace-panel-layout"
+              :style="{ '--trace-summary-width': `${traceSummaryWidth}px` }"
+            >
               <TraceMatrix
                 :rows="trace.traceRows.value"
                 :loading="trace.loading.value"
@@ -395,13 +402,19 @@
                 :mode="trace.mode.value"
                 :degraded="trace.degraded.value"
                 :has-generated="hasGeneratedTrace"
+                :selected-id="traceIndex.selectedLinkId.value"
                 @suggest="generateAgentAnalysis(hasGeneratedTrace)"
                 @review="trace.reviewTrace"
                 @select-row="onTraceRowSelect"
-                @open-paper="jumpToTracePaper"
-                @open-code="jumpToTraceCode"
                 @hover-row="hoverTraceRow"
                 @leave-row="traceIndex.clearHover"
+              />
+              <div
+                class="trace-summary-resize-handle"
+                role="separator"
+                aria-label="调整 Agent 摘要列宽度"
+                aria-orientation="vertical"
+                @pointerdown="startResize('traceSummary', $event)"
               />
               <aside class="trace-summary">
                 <strong>Agent 分析</strong>
@@ -413,12 +426,12 @@
                     <el-icon class="spin"><Loading /></el-icon>
                     <span class="agent-activity-text">{{ trace.analysisActivity.value || '启动中…' }}</span>
                   </div>
-                  <el-progress
-                    v-if="trace.analysisBudget.value"
-                    :percentage="Math.min(100, Math.round((trace.analysisStep.value / trace.analysisBudget.value) * 100))"
-                    :format="() => `步骤 ${trace.analysisStep.value}/${trace.analysisBudget.value}`"
-                    :stroke-width="10"
-                  />
+                  <!-- Steps are discrete with no reliable denominator (soft target + hard cap),
+                       so show the current step only and an indeterminate running bar, not N/100. -->
+                  <div v-if="trace.analysisStep.value" class="agent-step">
+                    <span>第 {{ trace.analysisStep.value }} 步</span>
+                    <span class="agent-step-bar"><i /></span>
+                  </div>
                   <ul v-if="trace.analysisLog.value.length" class="agent-log">
                     <li v-for="(entry, i) in trace.analysisLog.value.slice().reverse()" :key="i">
                       {{ entry }}
@@ -554,39 +567,69 @@
       @open-code="jumpToTraceCode"
     />
 
-    <!-- Bidirectional hover/pin popover: counterpart targets ranked by relevance. -->
-    <div v-if="traceCounterparts.length" class="trace-hover-popover">
-      <header class="trace-hover-head">
-        <span>{{ traceIndex.activeSide.value === 'paper' ? '对应代码片段' : '对应论文片段' }}</span>
-        <span class="trace-hover-count">
-          {{ traceCounterparts.length }} 条 · 按相关度
-          <button
-            v-if="traceIndex.pinned.value"
-            class="trace-hover-unpin"
-            title="取消固定 (Esc)"
-            @click="traceIndex.unpin()"
-          >
-            取消固定
-          </button>
-        </span>
-      </header>
-      <ul class="trace-hover-list">
-        <li
-          v-for="item in traceCounterparts"
-          :key="item.targetId + item.relationType"
-          class="trace-hover-item"
-          @click="onCounterpartClick(item)"
-        >
-          <div class="trace-hover-title">{{ item.title }}</div>
-          <div v-if="item.subtitle" class="trace-hover-sub">{{ item.subtitle }}</div>
-          <div class="trace-hover-scores">
-            <span class="trace-hover-relation">{{ item.relationType }}</span>
-            <span>相关度 {{ item.relevance }}%</span>
-            <span>置信 {{ item.confidence }}%</span>
+    <!-- Fixed box (selected relation, both sides) + optional hover preview stacked above it. -->
+    <div v-if="traceIndex.selectedSummary.value || traceIndex.hoveredSummary.value" class="trace-box-stack">
+      <div v-if="traceIndex.hoveredSummary.value" class="trace-box trace-box-hover">
+        <header class="trace-box-head">
+          <span>悬浮预览</span>
+          <span class="trace-box-badge">{{ traceIndex.hoveredSummary.value.relationType }}</span>
+        </header>
+        <div class="trace-box-body">
+          <section class="trace-box-side">
+            <span class="trace-box-side-label">论文</span>
+            <div class="trace-box-quote">{{ traceIndex.hoveredSummary.value.paper.quote || traceIndex.hoveredSummary.value.paper.blockId }}</div>
+            <div class="trace-box-meta">{{ traceIndex.hoveredSummary.value.paper.blockId }}<template v-if="traceIndex.hoveredSummary.value.paper.targetType"> · {{ traceIndex.hoveredSummary.value.paper.targetType }}</template></div>
+          </section>
+          <section class="trace-box-side">
+            <span class="trace-box-side-label">代码</span>
+            <div class="trace-box-quote">{{ traceIndex.hoveredSummary.value.code.symbol }}</div>
+            <div class="trace-box-meta">{{ traceIndex.hoveredSummary.value.code.path }}<template v-if="traceIndex.hoveredSummary.value.code.line"> :{{ traceIndex.hoveredSummary.value.code.line }}</template></div>
+          </section>
+          <div class="trace-box-scores">
+            <span>相关度 {{ traceIndex.hoveredSummary.value.relevance }}%</span>
+            <span>置信 {{ traceIndex.hoveredSummary.value.confidence }}%</span>
           </div>
-          <div v-if="item.rationale" class="trace-hover-rationale">{{ item.rationale }}</div>
-        </li>
-      </ul>
+        </div>
+      </div>
+
+      <div v-if="traceIndex.selectedSummary.value" class="trace-box trace-box-fixed">
+        <header class="trace-box-head">
+          <span>已选中关系</span>
+          <span class="trace-box-actions">
+            <span class="trace-box-badge">{{ traceIndex.selectedSummary.value.relationType }}</span>
+            <button class="trace-box-unpin" title="取消固定 (Esc)" @click="traceIndex.unselect()">
+              取消固定
+            </button>
+          </span>
+        </header>
+        <div class="trace-box-body">
+          <section class="trace-box-side">
+            <span class="trace-box-side-label">论文</span>
+            <div v-if="selectedPaperUnresolved" class="trace-box-unresolved">
+              论文锚点不可用（后端未解析该块）
+            </div>
+            <template v-else>
+              <div class="trace-box-quote">{{ traceIndex.selectedSummary.value.paper.quote || traceIndex.selectedSummary.value.paper.blockId }}</div>
+              <div class="trace-box-meta">{{ traceIndex.selectedSummary.value.paper.blockId }}<template v-if="traceIndex.selectedSummary.value.paper.targetType"> · {{ traceIndex.selectedSummary.value.paper.targetType }}</template></div>
+            </template>
+          </section>
+          <section class="trace-box-side">
+            <span class="trace-box-side-label">代码</span>
+            <div class="trace-box-quote">{{ traceIndex.selectedSummary.value.code.symbol }}</div>
+            <div class="trace-box-meta">{{ traceIndex.selectedSummary.value.code.path }}<template v-if="traceIndex.selectedSummary.value.code.line"> :{{ traceIndex.selectedSummary.value.code.line }}</template></div>
+          </section>
+          <div class="trace-box-scores">
+            <span>相关度 {{ traceIndex.selectedSummary.value.relevance }}%</span>
+            <span>置信 {{ traceIndex.selectedSummary.value.confidence }}%</span>
+          </div>
+          <p v-if="traceIndex.selectedSummary.value.otherLinkCount" class="trace-box-more">
+            另有 {{ traceIndex.selectedSummary.value.otherLinkCount }} 条更低相关度关系
+          </p>
+          <p v-if="traceIndex.selectedSummary.value.rationale" class="trace-box-rationale">
+            {{ traceIndex.selectedSummary.value.rationale }}
+          </p>
+        </div>
+      </div>
     </div>
     <el-dialog v-model="artifactVersionsVisible" title="本机保留的云端文件版本" width="760px">
       <el-table :data="artifactVersions">
@@ -656,7 +699,7 @@ import type { AgentUiAction } from '@/types/agent'
 
 type BottomPanelKey = 'trace' | 'flow' | 'conflict' | 'report'
 type PaneKey = 'paper' | 'code'
-type ResizeMode = 'explorer' | 'editor' | 'bottom' | 'agent'
+type ResizeMode = 'explorer' | 'editor' | 'bottom' | 'agent' | 'traceSummary'
 interface LocalArtifactVersionRow {
   local_version_id: number
   entity_type: 'paper_document' | 'code_repository'
@@ -705,6 +748,14 @@ const paperMarks = computed<PaperMark[]>(() =>
   })),
 )
 const codeTargetList = computed(() => [...traceIndex.codeTargets.value.values()])
+// True when the selected relation's paper side could not be anchored in the DOM (backend never
+// resolved the block anchor and quote fallback missed too) — the fixed box says so explicitly
+// instead of showing a paper quote that has no visible highlight.
+const selectedPaperUnresolved = computed(() => {
+  const paperTargetId = traceIndex.selectedSummary.value?.paper.targetId
+  if (!paperTargetId) return false
+  return paperReaderRef.value?.unresolvedTargetIds?.has(paperTargetId) ?? false
+})
 const insights = useInsights(() => workspace.projectId.value)
 const desktop = useDesktop()
 const { importSteps } = useImport(
@@ -741,6 +792,17 @@ const agentWidth = ref(
     : 420,
 )
 const resizeMode = ref<ResizeMode | null>(null)
+// Layout box captured at trace-summary drag start (measures from a stable right edge).
+let traceLayoutRect: DOMRect | null = null
+
+const TRACE_SUMMARY_MIN = 180
+const TRACE_SUMMARY_MAX = 480
+const storedTraceSummaryWidth = Number(window.localStorage.getItem('tracelab.traceSummary.width'))
+const traceSummaryWidth = ref(
+  Number.isFinite(storedTraceSummaryWidth) && storedTraceSummaryWidth >= TRACE_SUMMARY_MIN
+    ? Math.min(storedTraceSummaryWidth, TRACE_SUMMARY_MAX)
+    : 220,
+)
 
 const bottomTabs: Array<{ key: BottomPanelKey; label: string }> = [
   { key: 'trace', label: '追溯矩阵' },
@@ -781,7 +843,7 @@ async function selectArtifactVersion(row: LocalArtifactVersionRow) {
 }
 
 function onGlobalKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && traceIndex.pinned.value) traceIndex.unpin()
+  if (event.key === 'Escape' && traceIndex.pinned.value) traceIndex.unselect()
 }
 
 onMounted(async () => {
@@ -839,6 +901,11 @@ function startResize(mode: ResizeMode, event: PointerEvent): void {
   event.preventDefault()
   resizeMode.value = mode
   if (mode === 'bottom') bottomPanelMaximized.value = false
+  if (mode === 'traceSummary') {
+    // Capture the layout box once so per-move math measures from a stable right edge.
+    const handle = event.currentTarget as HTMLElement | null
+    traceLayoutRect = handle?.parentElement?.getBoundingClientRect() ?? null
+  }
   document.body.style.cursor = mode === 'bottom' ? 'row-resize' : 'col-resize'
   document.body.style.userSelect = 'none'
   window.addEventListener('pointermove', handleResize)
@@ -866,6 +933,14 @@ function handleResize(event: PointerEvent): void {
     if (!body) return
     const { min, max } = agentWidthBounds(body.width)
     agentWidth.value = Math.round(Math.min(Math.max(body.right - event.clientX, min), max))
+    return
+  }
+  if (resizeMode.value === 'traceSummary') {
+    const layout = traceLayoutRect
+    if (!layout) return
+    traceSummaryWidth.value = Math.round(
+      Math.min(Math.max(layout.right - event.clientX, TRACE_SUMMARY_MIN), TRACE_SUMMARY_MAX),
+    )
     return
   }
   if (resizeMode.value === 'bottom') {
@@ -897,6 +972,10 @@ function clampAgentWidth(): void {
 function stopResize(): void {
   if (resizeMode.value === 'agent') {
     window.localStorage.setItem('tracelab.agent.width', String(agentWidth.value))
+  }
+  if (resizeMode.value === 'traceSummary') {
+    window.localStorage.setItem('tracelab.traceSummary.width', String(traceSummaryWidth.value))
+    traceLayoutRect = null
   }
   resizeMode.value = null
   window.removeEventListener('pointermove', handleResize)
@@ -988,18 +1067,16 @@ async function jumpToCode(path: string, line: number): Promise<void> {
   codeEditorRef.value?.goToLine(line)
 }
 
+// Clicking a matrix row selects that relation (single source of truth = link id); the
+// selectedLinkId watch then drives the one-time dual jump. The drawer is no longer auto-opened.
 function onTraceRowSelect(row: TraceRowView): void {
   selectedTraceRow.value = row
-  evidenceDrawerVisible.value = true
+  if (row.id) traceIndex.select(row.id, 'paper')
 }
 
-// Hovering a matrix row lights up the same relation on both panes via the shared index.
+// Hovering a matrix row lights up the same relation on both panes (preview only, never jumps).
 function hoverTraceRow(row: TraceRowView): void {
-  if (!row.id) return
-  const link = trace.traceLinks.value.find((item) => item.id === row.id)
-  const paperTargetId =
-    link?.paper_target_id || link?.evidence.find((item) => item.side === 'paper')?.target_id
-  if (paperTargetId) traceIndex.hoverPaper(paperTargetId)
+  if (row.id) traceIndex.hover(row.id)
 }
 
 async function jumpToTracePaper(row: TraceRowView): Promise<void> {
@@ -1016,64 +1093,25 @@ async function jumpToTraceCode(row: TraceRowView): Promise<void> {
   await jumpToCode(path, evidence?.line_start || 1)
 }
 
-interface TraceCounterpart {
-  targetId: string
-  title: string
-  subtitle: string
-  relationType: string
-  relevance: number
-  confidence: number
-  rationale: string
-  path?: string
-  line?: number
-}
-
-// Counterpart targets of the active trace target, ranked by relevance, for the hover popover.
-const traceCounterparts = computed<TraceCounterpart[]>(() => {
-  const side = traceIndex.activeSide.value
-  if (!side) return []
-  return traceIndex.activeLinks.value.map((link) => {
-    if (side === 'paper') {
-      const code = link.evidence.find((item) => item.side === 'code')
-      return {
-        targetId: link.code_target_id || code?.target_id || link.id,
-        title: link.code_symbol_id,
-        subtitle: code?.path || '',
-        relationType: link.relation_type,
-        relevance: Math.round(link.relevance * 100),
-        confidence: Math.round(link.confidence * 100),
-        rationale: link.rationale,
-        path: code?.path,
-        line: code?.match_line_start ?? code?.line_start ?? 1,
-      }
-    }
-    const paper = link.evidence.find((item) => item.side === 'paper')
-    return {
-      targetId: link.paper_target_id || paper?.target_id || link.id,
-      title: paper?.quote || link.paper_block_id,
-      subtitle: `${link.paper_block_id}${paper?.target_type ? ` · ${paper.target_type}` : ''}`,
-      relationType: link.relation_type,
-      relevance: Math.round(link.relevance * 100),
-      confidence: Math.round(link.confidence * 100),
-      rationale: link.rationale,
-    }
-  })
-})
-
-async function onCounterpartClick(item: TraceCounterpart): Promise<void> {
-  if (traceIndex.activeSide.value === 'paper' && item.path) {
-    await jumpToCode(item.path, item.line || 1)
-  }
-}
-
-// When a paper target is pinned, open the top counterpart file so its code highlight shows.
+// Selection is the ONLY trigger for a jump, and it fires exactly once per change: selecting a
+// relation scrolls the paper to its highlight AND opens the code file at its line. Hover changes
+// never reach here, so sweeping the pointer across other relations can no longer move either pane.
 watch(
-  () => [traceIndex.pinned.value, traceIndex.activeSide.value, traceIndex.activeTargetId.value],
-  async () => {
-    if (!traceIndex.pinned.value || traceIndex.activeSide.value !== 'paper') return
-    const codeEv = traceIndex.activeLinks.value[0]?.evidence.find((item) => item.side === 'code')
-    if (codeEv?.path) {
-      await jumpToCode(codeEv.path, codeEv.match_line_start ?? codeEv.line_start ?? 1)
+  () => traceIndex.selectedLinkId.value,
+  async (linkId) => {
+    if (!linkId) return
+    const link = trace.traceLinks.value.find((item) => item.id === linkId)
+    if (!link) return
+    const paperEv = link.evidence.find((item) => item.side === 'paper')
+    const codeEv = link.evidence.find((item) => item.side === 'code')
+    // Paper side: scroll + highlight the traced block/formula.
+    await nextTick()
+    const paperBlock = paperEv?.ref || link.paper_block_id
+    if (paperBlock) paperReaderRef.value?.scrollToBlock(paperBlock, paperEv?.quote || '')
+    // Code side: open the file and reveal the line.
+    const codePath = codeEv?.path || link.code_symbol_id.split('::', 1)[0]
+    if (codePath) {
+      await jumpToCode(codePath, codeEv?.match_line_start ?? codeEv?.line_start ?? 1)
     }
   },
 )
@@ -1763,7 +1801,17 @@ watch(activeBottomPanel, (tab) => {
 .trace-panel-layout {
   display: grid;
   min-height: 100%;
-  grid-template-columns: minmax(700px, 1fr) 220px;
+  grid-template-columns: minmax(0, 1fr) 5px var(--trace-summary-width, 220px);
+}
+
+.trace-summary-resize-handle {
+  cursor: col-resize;
+  background: #e3e8ee;
+  transition: background 120ms ease;
+}
+
+.trace-summary-resize-handle:hover {
+  background: #b7c2ce;
 }
 
 .trace-panel-layout :deep(.trace-matrix) {
@@ -2056,13 +2104,19 @@ watch(activeBottomPanel, (tab) => {
   }
 }
 
-.trace-hover-popover {
+.trace-box-stack {
   position: fixed;
   right: 18px;
   bottom: 46px;
   z-index: 2200;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   width: 340px;
-  max-height: 52vh;
+  max-width: calc(100vw - 36px);
+}
+
+.trace-box {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2072,10 +2126,18 @@ watch(activeBottomPanel, (tab) => {
   box-shadow: 0 12px 34px rgba(19, 35, 47, 0.18);
 }
 
-.trace-hover-head {
+/* The transient preview sits above the fixed box and reads lighter. */
+.trace-box-hover {
+  border-color: #e0d0a6;
+  box-shadow: 0 8px 22px rgba(19, 35, 47, 0.14);
+  opacity: 0.97;
+}
+
+.trace-box-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 9px 12px;
   border-bottom: 1px solid #e6ebf0;
   background: #f7f9fb;
@@ -2084,16 +2146,22 @@ watch(activeBottomPanel, (tab) => {
   color: #26323d;
 }
 
-.trace-hover-count {
+.trace-box-actions {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-weight: 400;
-  color: #7a8794;
-  font-size: 11px;
 }
 
-.trace-hover-unpin {
+.trace-box-badge {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: #e6efff;
+  color: #3061c2;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.trace-box-unpin {
   border: 1px solid #d8dee6;
   border-radius: 4px;
   background: #fff;
@@ -2104,57 +2172,56 @@ watch(activeBottomPanel, (tab) => {
   font-size: 11px;
 }
 
-.trace-hover-list {
-  margin: 0;
-  padding: 6px;
+.trace-box-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  max-height: 44vh;
   overflow-y: auto;
-  list-style: none;
 }
 
-.trace-hover-item {
-  padding: 8px 10px;
-  border-radius: 7px;
-  cursor: pointer;
-  transition: background 120ms ease;
+.trace-box-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.trace-hover-item:hover {
-  background: #eef4ff;
+.trace-box-side-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #8a97a4;
+  text-transform: uppercase;
 }
 
-.trace-hover-title {
+.trace-box-quote {
   font-size: 12px;
   font-weight: 600;
   color: #1c2b38;
   word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.trace-hover-sub {
-  margin-top: 2px;
+.trace-box-meta {
   font-size: 11px;
   color: #7a8794;
   word-break: break-all;
 }
 
-.trace-hover-scores {
+.trace-box-scores {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 5px;
   font-size: 11px;
   color: #55636f;
 }
 
-.trace-hover-relation {
-  padding: 0 6px;
-  border-radius: 999px;
-  background: #e6efff;
-  color: #3061c2;
-  font-weight: 600;
-}
-
-.trace-hover-rationale {
-  margin-top: 5px;
+.trace-box-rationale {
+  margin: 0;
   font-size: 11px;
   line-height: 1.5;
   color: #6b7785;
@@ -2162,5 +2229,58 @@ watch(activeBottomPanel, (tab) => {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.trace-box-unresolved {
+  padding: 4px 6px;
+  border-radius: 3px;
+  background: rgba(182, 74, 60, 0.1);
+  color: #b64a3c;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.trace-box-more {
+  margin: 0;
+  font-size: 10px;
+  color: #8a95a1;
+}
+
+/* Discrete agent step + indeterminate running bar (no misleading N/100 denominator). */
+.agent-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #55636f;
+}
+
+.agent-step-bar {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e2e8ef;
+}
+
+.agent-step-bar i {
+  position: absolute;
+  top: 0;
+  left: -40%;
+  width: 40%;
+  height: 100%;
+  border-radius: 3px;
+  background: #1f8f78;
+  animation: agent-step-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes agent-step-slide {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
 }
 </style>

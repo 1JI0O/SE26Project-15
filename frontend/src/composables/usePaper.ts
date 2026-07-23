@@ -27,7 +27,11 @@ export function usePaper(projectId: () => number) {
   const paperAbstract = ref('')
   const parserName = ref('')
   const parseStatus = ref<PaperParseJob['status'] | 'idle'>('idle')
+  // `activeSectionId` = explicit user jump intent (TOC click) — the only thing allowed to scroll.
+  // `observedSectionId` = section currently scrolled into view (IntersectionObserver), for TOC
+  // highlight only; it never drives a scroll, so wheel scrolling can't fight a jump.
   const activeSectionId = ref('')
+  const observedSectionId = ref('')
   const uploading = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -86,6 +90,10 @@ export function usePaper(projectId: () => number) {
     activeSectionId.value = sectionId
   }
 
+  function observeSection(sectionId: string): void {
+    observedSectionId.value = sectionId
+  }
+
   async function handleUpload(file: File): Promise<boolean> {
     uploading.value = true
     error.value = null
@@ -126,6 +134,7 @@ export function usePaper(projectId: () => number) {
     parserName,
     parseStatus,
     activeSectionId,
+    observedSectionId,
     uploading,
     loading,
     error,
@@ -134,6 +143,7 @@ export function usePaper(projectId: () => number) {
     loadPaperPages,
     handleUpload,
     selectSection,
+    observeSection,
     cancelPolling,
   }
 }

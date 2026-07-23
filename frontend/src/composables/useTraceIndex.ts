@@ -7,8 +7,14 @@ import type { TraceEvidence, TraceLink, TraceStatus } from '@/types/tracing'
  *
  * Both panes read from the SAME derived index (architecture doc §13.3): paper→code and
  * code→paper are two views of one relation graph, never two model runs. Only current
- * `proposed`/`accepted` links participate; hovering a target on either side highlights the
- * counterpart targets on the other side, ranked by relevance, with an optional click-to-pin.
+ * `proposed`/`accepted` links participate.
+ *
+ * Selection model (iteration 5): the single source of truth for "which relation is the
+ * user looking at" is a **link id** (`selectedLinkId`), shared by the matrix, the paper pane
+ * and the code pane. Clicking anything that belongs to a relation SELECTS it (pins it) and
+ * drives a one-time dual jump. Hovering only sets `hoveredLinkId` for a lightweight preview
+ * and NEVER changes the selection or triggers a jump. Both panes highlight the selected
+ * relation strongly and the hovered relation weakly.
  */
 
 export interface PaperTargetView {
@@ -39,6 +45,19 @@ export interface CodeTargetView {
   links: TraceLink[]
 }
 
+/** Both-sides summary of one relation, rendered in the fixed box and the hover preview box. */
+export interface TraceLinkSummary {
+  linkId: string
+  relationType: string
+  relevance: number
+  confidence: number
+  rationale: string
+  paper: { targetId: string | null; blockId: string; quote: string; targetType: string }
+  code: { symbol: string; path: string; line: number | null }
+  /** How many other (lower-relevance) relations share this relation's paper target. */
+  otherLinkCount: number
+}
+
 const paperSide = (link: TraceLink): TraceEvidence | undefined =>
   link.evidence.find((item) => item.side === 'paper')
 
@@ -56,12 +75,30 @@ const mergeStatus = (current: TraceStatus, incoming: TraceStatus): TraceStatus =
   current === 'accepted' || incoming === 'accepted' ? 'accepted' : current
 
 export function useTraceIndex(links: Ref<TraceLink[]>) {
-  const activeSide = ref<'paper' | 'code' | null>(null)
-  const activeTargetId = ref<string | null>(null)
-  const pinned = ref(false)
+  // The pinned relation the user selected, and the transient relation under the pointer.
+  const selectedLinkId = ref<string | null>(null)
+  const hoveredLinkId = ref<string | null>(null)
+  // Which side the selection was triggered from (paper|code) — used to bias the popover layout.
+  const selectedSide = ref<'paper' | 'code' | null>(null)
+
+  const pinned = computed(() => selectedLinkId.value !== null)
 
   const visibleLinks = computed(() =>
     links.value.filter((link) => link.status === 'proposed' || link.status === 'accepted'),
+  )
+
+  const linkById = computed<Map<string, TraceLink>>(() => {
+    const map = new Map<string, TraceLink>()
+    for (const link of visibleLinks.value) map.set(link.id, link)
+    return map
+  })
+
+  const selectedLink = computed<TraceLink | null>(() =>
+    selectedLinkId.value ? linkById.value.get(selectedLinkId.value) ?? null : null,
+  )
+
+  const hoveredLink = computed<TraceLink | null>(() =>
+    hoveredLinkId.value ? linkById.value.get(hoveredLinkId.value) ?? null : null,
   )
 
   const paperTargets = computed<Map<string, PaperTargetView>>(() => {
@@ -127,94 +164,131 @@ export function useTraceIndex(links: Ref<TraceLink[]>) {
     return map
   })
 
-  /** Links attached to the currently active target, sorted by relevance. */
-  const activeLinks = computed<TraceLink[]>(() => {
-    if (!activeTargetId.value) return []
-    if (activeSide.value === 'paper') {
-      return paperTargets.value.get(activeTargetId.value)?.links ?? []
-    }
-    if (activeSide.value === 'code') {
-      return codeTargets.value.get(activeTargetId.value)?.links ?? []
-    }
-    return []
-  })
-
-  const activePaperTargetIds = computed<Set<string>>(() => {
-    const ids = new Set<string>()
-    if (activeSide.value === 'paper' && activeTargetId.value) {
-      ids.add(activeTargetId.value)
-    } else if (activeSide.value === 'code') {
-      for (const link of activeLinks.value) {
-        const id = paperTargetId(link)
-        if (id) ids.add(id)
-      }
-    }
-    return ids
-  })
-
-  const activeCodeTargetIds = computed<Set<string>>(() => {
-    const ids = new Set<string>()
-    if (activeSide.value === 'code' && activeTargetId.value) {
-      ids.add(activeTargetId.value)
-    } else if (activeSide.value === 'paper') {
-      for (const link of activeLinks.value) {
-        const id = codeTargetId(link)
-        if (id) ids.add(id)
-      }
-    }
-    return ids
-  })
-
-  function hoverPaper(targetId: string): void {
-    if (pinned.value) return
-    activeSide.value = 'paper'
-    activeTargetId.value = targetId
+  /**
+   * Resolve a target id (from a pane hover/click) to the best relation id.
+   * A target can back several relations; the highest-relevance one is the primary,
+   * the rest remain listed in the popover.
+   */
+  function linkIdForTarget(side: 'paper' | 'code', targetId: string): string | null {
+    const view =
+      side === 'paper' ? paperTargets.value.get(targetId) : codeTargets.value.get(targetId)
+    return view?.links[0]?.id ?? null
   }
 
-  function hoverCode(targetId: string): void {
-    if (pinned.value) return
-    activeSide.value = 'code'
-    activeTargetId.value = targetId
+  // Highlight the union of the selected relation's two targets (strong) — the hovered
+  // relation is decorated separately with a weaker class (see *HoverTargetIds below).
+  function targetIdsFor(link: TraceLink | null, side: 'paper' | 'code'): Set<string> {
+    const ids = new Set<string>()
+    if (!link) return ids
+    const id = side === 'paper' ? paperTargetId(link) : codeTargetId(link)
+    if (id) ids.add(id)
+    return ids
+  }
+
+  const activePaperTargetIds = computed(() => targetIdsFor(selectedLink.value, 'paper'))
+  const activeCodeTargetIds = computed(() => targetIdsFor(selectedLink.value, 'code'))
+  const hoverPaperTargetIds = computed(() => targetIdsFor(hoveredLink.value, 'paper'))
+  const hoverCodeTargetIds = computed(() => targetIdsFor(hoveredLink.value, 'code'))
+
+  // ---- summaries ----------------------------------------------------------
+  // Both the fixed box (selected relation) and the transient hover box show BOTH sides of a
+  // relation, so a single summary shape backs either box.
+  const summaryOf = (link: TraceLink | null): TraceLinkSummary | null => {
+    if (!link) return null
+    const paper = paperSide(link)
+    const code = codeSide(link)
+    const codeLine = code?.match_line_start ?? code?.line_start ?? null
+    const pTargetId = paperTargetId(link)
+    // Other relations that share this paper target (one code-segment ↔ many paper fragments, or
+    // vice versa). Only the highest-relevance one is shown; the rest are surfaced as a count.
+    const shared = pTargetId ? paperTargets.value.get(pTargetId)?.links.length ?? 1 : 1
+    return {
+      linkId: link.id,
+      relationType: link.relation_type,
+      relevance: Math.round((link.relevance ?? 0) * 100),
+      confidence: Math.round((link.confidence ?? 0) * 100),
+      rationale: link.rationale ?? '',
+      paper: {
+        targetId: pTargetId,
+        blockId: link.paper_block_id,
+        quote: paper?.quote ?? '',
+        targetType: paper?.target_type ?? '',
+      },
+      code: {
+        symbol: link.code_symbol_id,
+        path: code?.path ?? '',
+        line: codeLine,
+      },
+      otherLinkCount: Math.max(0, shared - 1),
+    }
+  }
+
+  const selectedSummary = computed<TraceLinkSummary | null>(() => summaryOf(selectedLink.value))
+  const hoveredSummary = computed<TraceLinkSummary | null>(() => {
+    // Only show the hover box when the pointer is on a DIFFERENT relation than the selected one.
+    if (!hoveredLink.value || hoveredLinkId.value === selectedLinkId.value) return null
+    return summaryOf(hoveredLink.value)
+  })
+
+
+  // ---- mutators -----------------------------------------------------------
+
+  function select(linkId: string, side: 'paper' | 'code'): void {
+    if (!linkId) return
+    // Re-selecting the same relation keeps it pinned (idempotent); Esc / the unpin
+    // button is the explicit way to clear, so a stray re-click never loses focus.
+    selectedLinkId.value = linkId
+    selectedSide.value = side
+  }
+
+  function selectTarget(side: 'paper' | 'code', targetId: string): void {
+    const linkId = linkIdForTarget(side, targetId)
+    if (linkId) select(linkId, side)
+  }
+
+  function hover(linkId: string): void {
+    hoveredLinkId.value = linkId || null
+  }
+
+  function hoverTarget(side: 'paper' | 'code', targetId: string): void {
+    hoveredLinkId.value = linkIdForTarget(side, targetId)
   }
 
   function clearHover(): void {
-    if (pinned.value) return
-    activeSide.value = null
-    activeTargetId.value = null
+    hoveredLinkId.value = null
   }
 
-  function pin(side: 'paper' | 'code', targetId: string): void {
-    if (pinned.value && activeSide.value === side && activeTargetId.value === targetId) {
-      pinned.value = false
-      activeSide.value = null
-      activeTargetId.value = null
-      return
-    }
-    activeSide.value = side
-    activeTargetId.value = targetId
-    pinned.value = true
-  }
-
-  function unpin(): void {
-    pinned.value = false
-    activeSide.value = null
-    activeTargetId.value = null
+  function unselect(): void {
+    selectedLinkId.value = null
+    selectedSide.value = null
   }
 
   return {
-    activeSide,
-    activeTargetId,
+    // state
+    selectedLinkId,
+    hoveredLinkId,
+    selectedSide,
     pinned,
+    // derived
+    selectedLink,
+    hoveredLink,
     paperTargets,
     codeTargets,
-    activeLinks,
     activePaperTargetIds,
     activeCodeTargetIds,
-    hoverPaper,
-    hoverCode,
+    hoverPaperTargetIds,
+    hoverCodeTargetIds,
+    selectedSummary,
+    hoveredSummary,
+    // resolvers
+    linkIdForTarget,
+    // mutators
+    select,
+    selectTarget,
+    hover,
+    hoverTarget,
     clearHover,
-    pin,
-    unpin,
+    unselect,
   }
 }
 
