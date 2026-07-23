@@ -53,9 +53,12 @@ _ = (
 )
 
 
-def _connect_args() -> dict[str, bool]:
+def _connect_args() -> dict:
     if settings.database_url.startswith("sqlite"):
-        return {"check_same_thread": False}
+        # Agent analysis workers share this SQLite file; a busy timeout +
+        # check_same_thread=False are required to avoid OperationalError under
+        # concurrent tool writes and progress updates.
+        return {"check_same_thread": False, "timeout": 30}
     return {}
 
 
@@ -66,8 +69,20 @@ def _ensure_sqlite_parent() -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
 
+def _configure_sqlite(dbapi_connection, _connection_record) -> None:  # noqa: ANN001
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
+
+
 _ensure_sqlite_parent()
 engine = create_engine(settings.database_url, connect_args=_connect_args(), echo=False)
+if settings.database_url.startswith("sqlite"):
+    from sqlalchemy import event
+
+    event.listen(engine, "connect", _configure_sqlite)
 
 
 def init_db() -> None:

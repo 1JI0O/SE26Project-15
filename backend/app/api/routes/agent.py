@@ -163,6 +163,7 @@ async def stream_analysis_job_events(
 
     async def events():
         cursor = after
+        last_progress = ""
         while True:
             if await request.is_disconnected():
                 break
@@ -170,15 +171,51 @@ async def stream_analysis_job_events(
             current = session.get(AgentAnalysisJob, job_id)
             if current is None:
                 break
-            batch = (
-                list_run_events(session, project_id, current.agent_run_id, after=cursor)
-                if current.agent_run_id
-                else []
-            )
+            progress = dict(current.progress_json or {})
+            message = str(progress.get("message") or "")
+            # Jobs stay in `queued` with no agent_run_id until a worker slot opens.
+            # Without this synthetic event the UI freezes on "等待 Agent 分析".
+            if not current.agent_run_id:
+                if current.status == "queued" and not message:
+                    message = "排队等待 Agent 分析"
+                if message and message != last_progress:
+                    last_progress = message
+                    payload = {
+                        "event_type": "analysis.progress",
+                        "sequence": cursor,
+                        "payload": {
+                            "message": message,
+                            "activity": message,
+                            "status": current.status,
+                        },
+                    }
+                    data = json.dumps(payload, ensure_ascii=False)
+                    yield f"event: analysis.progress\ndata: {data}\n\n"
+                elif not message:
+                    yield ": keep-alive\n\n"
+                if current.status in {"succeeded", "failed", "stale"}:
+                    break
+                await asyncio.sleep(0.5)
+                continue
+
+            batch = list_run_events(session, project_id, current.agent_run_id, after=cursor)
             for item in batch:
                 cursor = item.sequence
                 data = json.dumps(item.model_dump(mode="json"), ensure_ascii=False)
                 yield f"id: {cursor}\nevent: {item.event_type}\ndata: {data}\n\n"
+            if message and message != last_progress:
+                last_progress = message
+                payload = {
+                    "event_type": "analysis.progress",
+                    "sequence": cursor,
+                    "payload": {
+                        "message": message,
+                        "activity": message,
+                        "status": current.status,
+                    },
+                }
+                data = json.dumps(payload, ensure_ascii=False)
+                yield f"event: analysis.progress\ndata: {data}\n\n"
             if current.status in {"succeeded", "failed", "stale"} and not batch:
                 break
             if not batch:

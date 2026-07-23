@@ -2,11 +2,13 @@
 
 > 状态：唯一实施计划（本文件为该功能的权威计划，不依赖其他追溯文档）
 >
-> 编写日期：2026-07-21，修订日期：2026-07-22
+> 编写日期：2026-07-21，修订日期：2026-07-23
 >
 > 适用范围：Tauri 桌面端复用的 `frontend/src` 与 `backend/app`
 >
 > 实施状态（2026-07-22，V1 聚焦切片）：已落地——`PaperTarget`/`CodeTarget`/`TraceReviewEvent` 表与迁移 `0010_trace_targets`；`TraceLink` 新增 `paper_target_id`/`code_target_id`/`relevance`/`score_basis_json`/`provenance_json`/`supersedes_trace_id`；发布 schema 升级为 `trace-agent-v2`（occurrence + target_type/role + salience/relevance/confidence），校验升级为“指定 occurrence 处 quote 命中 + 内容 hash 计算”；单 Agent 四阶段 prompt 与对齐后的 `trace-analysis` skill；导入后自动后台协调器（`services/tracing/coordinator.py`）；下线 `static_candidates` 写入路径（`/suggest` 恒 `static_candidates_retired`）；前端双向 hover/高亮（论文 `<mark>` 锚点装饰 + CodeMirror6 Decoration + 共享双向索引 `useTraceIndex` + 相关度浮层 + 点击固定/Esc）。**暂缓**：§11.3 跨 reparse 重锚算法、§12 固定样例集/指标质量门、V2 并发 subagent、图内 bbox 热区与算法 step 级分解。
+>
+> 可靠性修订（2026-07-23，`analysis_jobs.py`）：修复并发 trace 时 `analysis_internal_error:OperationalError` 导致零输出的问题。此前 `_execute_job` 在**每个工具步**把持续增长的 `AgentRun.trace_json` 全量重写并 `commit`（约 O(n²) 字节、单步可达数 MB），两个 worker 争抢 SQLite 写锁超过 30s `busy_timeout` 即抛 `OperationalError`。现改为：模型步/工具结果的 trace 条目在内存累积（`trace_entries`），仅在 job 终结（成功/失败/预算耗尽）时一次性写回 `trace_json` + `step_count`；`RunEventEmitter` 仍逐事件 commit（小而 append-only，供 SSE 实时进度）。同时主循环每 5 步检测 job 是否被外部置为 `failed`（手动中止），若是则立即收尾、释放 `ThreadPoolExecutor` worker 槽，避免后续任务永久停在“等待 Agent 分析”。
 
 ## 1. 结论
 

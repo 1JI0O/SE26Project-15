@@ -125,6 +125,11 @@ export function useTrace(projectId: () => number) {
     analysisProgress.value = String(submitted.progress.message || '等待 Agent 分析')
     analysisActivity.value = analysisProgress.value
     analysisLog.value = []
+    if (submitted.status === 'queued') {
+      analysisActivity.value = '排队等待 Agent 分析（可能有其他任务占用分析线程）'
+      analysisProgress.value = analysisActivity.value
+      pushLog(analysisActivity.value)
+    }
     if (!['succeeded', 'failed'].includes(submitted.status)) {
       await streamAgentAnalysisJob(projectId(), submitted.job_id, (event) => {
         const p = event.payload as Record<string, unknown>
@@ -134,6 +139,10 @@ export function useTrace(projectId: () => number) {
         if (typeof activity === 'string' && activity) {
           analysisActivity.value = activity
           analysisProgress.value = activity
+        }
+        if (event.event_type === 'analysis.progress' && typeof activity === 'string') {
+          // Queued jobs have no run events yet; progress comes from job.progress_json.
+          return
         }
         if (event.event_type === 'analysis.tool.started' && typeof activity === 'string') {
           pushLog(`#${analysisStep.value} ${activity}`)
@@ -147,6 +156,10 @@ export function useTrace(projectId: () => number) {
           pushLog('✓ 追溯完成')
         } else if (event.event_type === 'analysis.validating') {
           analysisActivity.value = '正在校验并保存证据'
+        } else if (event.event_type === 'analysis.started') {
+          analysisActivity.value = 'Agent 正在检查证据'
+          analysisProgress.value = analysisActivity.value
+          pushLog('开始分析')
         }
       })
     }
@@ -160,10 +173,9 @@ export function useTrace(projectId: () => number) {
     generating.value = true
     error.value = null
     try {
-      // Trace only: the architecture Agent job is optional context (the flow graph is local
-      // static analysis) and must never block or fail the bidirectional trace deliverable.
-      // force=true (从“重新生成”) bypasses the succeeded-job dedup and runs a genuinely fresh pass.
-      await runAnalysis('trace', force)
+      // Always force a fresh job on explicit user click. Reusing a stuck
+      // queued/running fingerprint made the UI freeze on「等待 Agent 分析」.
+      await runAnalysis('trace', true)
       mode.value = 'agent'
       degraded.value = false
       degradedReason.value = null
