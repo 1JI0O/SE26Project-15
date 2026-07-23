@@ -41,6 +41,16 @@ export async function getAgentAnalysisJob(
   return data
 }
 
+export async function cancelAgentAnalysisJob(
+  projectId: number,
+  jobId: string,
+): Promise<AgentAnalysisJob> {
+  const { data } = await http.post<AgentAnalysisJob>(
+    `/projects/${projectId}/agent/analysis-jobs/${encodeURIComponent(jobId)}/cancel`,
+  )
+  return data
+}
+
 export async function streamAgentAnalysisJob(
   projectId: number,
   jobId: string,

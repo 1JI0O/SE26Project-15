@@ -168,6 +168,46 @@ def _submit(job_id: str) -> None:
     _executor.submit(_execute_job, job_id)
 
 
+def cancel_analysis_job(
+    session: Session, project_id: int, job_id: str
+) -> AgentAnalysisJob | None:
+    """Request early interruption of an analysis job, keeping already-published links.
+
+    A running worker sees ``status=cancelling`` at its next step boundary and finalizes the
+    run as ``succeeded`` with whatever it has published so far. A job that never started is
+    terminated directly here (no worker will run it — the start guard skips ``cancelling``).
+    Terminal jobs are returned unchanged (idempotent).
+    """
+
+    job = session.get(AgentAnalysisJob, job_id)
+    if job is None or job.project_id != project_id:
+        return None
+    if job.status in {"succeeded", "failed", "stale"}:
+        return job
+    now = utc_now()
+    if job.status == "queued" and job.agent_run_id is None:
+        # Never started; nothing was published. Finish cleanly instead of leaving a
+        # ``cancelling`` job that no worker will ever pick up.
+        job.status = "succeeded"
+        job.error_code = None
+        job.progress_json = {
+            "message": "追溯已中止（未发现可靠关系）",
+            "code": "analysis_cancelled",
+        }
+        job.completed_at = now
+    else:
+        job.status = "cancelling"
+        job.progress_json = {
+            "message": "正在中止追溯（保留已发现的关系）",
+            "code": "analysis_cancelling",
+        }
+    job.updated_at = now
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+    return job
+
+
 def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, str]:
     common = (
         "You are TraceLab's autonomous evidence analysis agent. You are the only semantic "
@@ -613,17 +653,32 @@ def _finalize_trace_run(
     artifact: AgentAnalysisArtifact | None,
     published_count: int,
     trace_entries: list[dict[str, Any]] | None = None,
+    cancelled: bool = False,
 ) -> None:
-    """Mark a (possibly multi-publish) trace run complete and emit terminal events."""
+    """Mark a (possibly multi-publish) trace run complete and emit terminal events.
+
+    When ``cancelled`` is set the run was interrupted early by the user; whatever was already
+    published is preserved and the job still finishes as ``succeeded`` so those links render.
+    """
 
     now = utc_now()
     job.status = "succeeded"
     job.error_code = None
     if artifact is not None:
         job.artifact_id = artifact.artifact_id
-    job.progress_json = {
-        "message": "Agent 分析完成" if published_count else "Agent 未发现可靠追溯关系"
-    }
+    if cancelled:
+        job.progress_json = {
+            "message": (
+                f"追溯已中止，保留 {published_count} 条已发现关系"
+                if published_count
+                else "追溯已中止（未发现可靠关系）"
+            ),
+            "code": "analysis_cancelled",
+        }
+    else:
+        job.progress_json = {
+            "message": "Agent 分析完成" if published_count else "Agent 未发现可靠追溯关系"
+        }
     job.updated_at = now
     job.completed_at = now
     run.status = "completed"
@@ -680,7 +735,9 @@ def _execute_job(job_id: str) -> None:
     try:
         with Session(engine) as session:
             job = session.get(AgentAnalysisJob, job_id)
-            if job is None or job.status == "succeeded":
+            if job is None or job.status in {"succeeded", "cancelling"}:
+                # ``cancelling`` on a not-yet-started job: the cancel endpoint already wrote a
+                # terminal state for the no-run case, so nothing to do here.
                 return
             repository = session.get(CodeRepository, job.code_repository_id)
             if repository is None or repository.revision != job.code_revision:
@@ -785,23 +842,31 @@ def _execute_job(job_id: str) -> None:
                 else "publish_trace_candidates"
             )
             for step_number in range(1, budget + 1):
-                # Check every 5 steps whether the job has been externally aborted
-                # (e.g., manually_aborted written to DB by the Electron client). This
-                # frees the worker slot promptly instead of running to completion.
-                if step_number % 5 == 1 and step_number > 1:
-                    session.expire(job)
-                    if job.status == "failed":
-                        run.status = "failed"
-                        run.degraded_reason = job.error_code or "externally_aborted"
-                        run.updated_at = utc_now()
-                        run.completed_at = utc_now()
-                        run.trace_json = trace_entries
-                        run.step_count = sum(
-                            e.get("type") == "model_step" for e in trace_entries
-                        )
-                        session.add(run)
-                        session.commit()
-                        return
+                # Check for an external stop signal at every step start. The cancel endpoint
+                # sets status=cancelling to interrupt early while KEEPING whatever was already
+                # published; a hard failure (manual abort) sets status=failed. Reloading the
+                # job is one cheap SELECT per step under WAL.
+                session.expire(job)
+                if job.status == "cancelling":
+                    emitter.emit(
+                        "analysis.progress",
+                        {"message": "正在中止追溯（保留已发现的关系）", "step": step_number},
+                    )
+                    _finalize_trace_run(
+                        session, job, run, emitter, run_artifact, published_count,
+                        trace_entries=trace_entries, cancelled=True,
+                    )
+                    return
+                if job.status == "failed":
+                    run.status = "failed"
+                    run.degraded_reason = job.error_code or "externally_aborted"
+                    run.updated_at = utc_now()
+                    run.completed_at = utc_now()
+                    run.trace_json = trace_entries
+                    run.step_count = sum(e.get("type") == "model_step" for e in trace_entries)
+                    session.add(run)
+                    session.commit()
+                    return
                 emitter.emit(
                     "analysis.progress",
                     {"message": "Agent 正在规划并核对证据", "step": step_number},

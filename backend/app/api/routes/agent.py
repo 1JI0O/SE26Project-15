@@ -30,7 +30,11 @@ from app.schemas.agent import (
     AgentTurnRequest,
     AgentTurnResponse,
 )
-from app.services.agent.analysis_jobs import create_analysis_job, job_to_read
+from app.services.agent.analysis_jobs import (
+    cancel_analysis_job,
+    create_analysis_job,
+    job_to_read,
+)
 from app.services.agent.capabilities import list_capabilities, update_capability
 from app.services.agent.conversations import (
     create_conversation,
@@ -111,6 +115,23 @@ def retry_analysis_job(
         force=True,
     )
     return job_to_read(create_analysis_job(session, project_id, payload))
+
+
+@router.post(
+    "/analysis-jobs/{job_id}/cancel",
+    response_model=AgentAnalysisJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def cancel_analysis_job_endpoint(
+    project_id: int,
+    job_id: str,
+    session: Session = Depends(get_session),
+) -> AgentAnalysisJobRead:
+    get_project_or_404(project_id, session)
+    job = cancel_analysis_job(session, project_id, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    return job_to_read(job)
 
 
 @router.get(

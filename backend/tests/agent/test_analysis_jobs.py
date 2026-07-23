@@ -1,3 +1,5 @@
+import threading
+import time
 import zipfile
 from pathlib import Path
 
@@ -5,6 +7,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, select
+
+from app.services.agent.provider import AgentProviderStep
 
 from app.models.entities import (
     AgentAnalysisJob,
@@ -19,7 +23,11 @@ from app.models.entities import (
 )
 from app.schemas.agent import AgentAnalysisJobCreate
 from app.services import workspace_service
-from app.services.agent.analysis_jobs import _persist_artifact, create_analysis_job
+from app.services.agent.analysis_jobs import (
+    _persist_artifact,
+    cancel_analysis_job,
+    create_analysis_job,
+)
 from app.services.agent.analysis_tools import execute_tool
 from app.services.analysis_jobs import ANALYZER_VERSION
 from app.services.code_analysis.analyzer import analyze_code_archive
@@ -391,3 +399,153 @@ def test_analysis_job_is_idempotent_and_paper_markdown_gets_block_anchor(
     assert code.revision == first.code_revision
     assert blocks[0]["anchor_resolved"] is True
     assert f'id="{blocks[0]["render_anchor"]}"' in markdown
+
+
+def test_cancel_never_started_job_finishes_without_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _session() as session:
+        project, _paper, _code = _artifacts(session, tmp_path)
+        monkeypatch.setattr("app.services.agent.analysis_jobs._submit", lambda _job_id: None)
+        job = create_analysis_job(session, project.id or 0, AgentAnalysisJobCreate(kind="trace"))
+        assert job.status == "queued" and job.agent_run_id is None
+
+        cancelled = cancel_analysis_job(session, project.id or 0, job.job_id)
+        assert cancelled is not None
+        # Never started → finishes directly (no worker will pick it up).
+        assert cancelled.status == "succeeded"
+        assert cancelled.progress_json.get("code") == "analysis_cancelled"
+
+        # Idempotent: cancelling a terminal job returns it unchanged.
+        again = cancel_analysis_job(session, project.id or 0, job.job_id)
+        assert again is not None and again.status == "succeeded"
+
+
+def test_cancel_running_job_marks_cancelling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _session() as session:
+        project, _paper, _code = _artifacts(session, tmp_path)
+        monkeypatch.setattr("app.services.agent.analysis_jobs._submit", lambda _job_id: None)
+        job = create_analysis_job(session, project.id or 0, AgentAnalysisJobCreate(kind="trace"))
+        # Simulate a worker that has started the run.
+        job.status = "running"
+        job.agent_run_id = "run-fake"
+        session.add(job)
+        session.commit()
+
+        cancelled = cancel_analysis_job(session, project.id or 0, job.job_id)
+        assert cancelled is not None
+        # A started run is signalled to stop; the worker finalizes it keeping published links.
+        assert cancelled.status == "cancelling"
+
+        assert cancel_analysis_job(session, project.id or 0, "missing-job") is None
+
+
+_CANCEL_TRACE_CANDIDATE = {
+    "paper_block_id": "p1-b1",
+    "code_symbol_id": "models/net.py::Model.encode",
+    "relation_type": "implements",
+    "salience": 0.8,
+    "relevance": 0.85,
+    "confidence": 0.9,
+    "rationale": "Model.encode implements the encoder projection.",
+    "uncertainty_level": "low",
+    "paper_evidence": {
+        "block_id": "p1-b1",
+        "quote": "uses an encoder projection",
+        "occurrence": 1,
+    },
+    "code_evidence": {
+        "path": "models/net.py",
+        "line_start": 5,
+        "line_end": 6,
+        "quote": "return self.proj(x)",
+        "occurrence": 1,
+    },
+}
+
+
+class _StubProvider:
+    """Publishes one candidate on the first step, then loops on a read forever.
+
+    The run never terminates on its own, so the test can interrupt it deterministically and
+    assert the already-published link is preserved.
+    """
+
+    provider_name = "stub"
+    model_name = "stub"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def next_step(self, message, context, tool_results):  # noqa: ANN001, ANN201
+        self.calls += 1
+        if self.calls == 1:
+            return AgentProviderStep(
+                action="tool",
+                tool_name="publish_trace_candidates",
+                arguments={"payload": {"candidates": [_CANCEL_TRACE_CANDIDATE]}},
+            )
+        return AgentProviderStep(action="tool", tool_name="list_paper_blocks", arguments={})
+
+
+def test_cancel_running_worker_keeps_published_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.agent import analysis_jobs as aj
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'cancel.db'}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        project, _paper, _code = _artifacts(session, tmp_path)
+        project_id = project.id or 0
+        monkeypatch.setattr(aj, "_submit", lambda _job_id: None)
+        job = create_analysis_job(session, project_id, AgentAnalysisJobCreate(kind="trace"))
+        job_id = job.job_id
+
+    # Point the worker at the test engine and a scripted provider.
+    monkeypatch.setattr(aj, "engine", engine)
+    monkeypatch.setattr(aj, "_provider_from_settings", lambda _session, for_analysis=False: (_StubProvider(), None))
+
+    worker = threading.Thread(target=aj._execute_job, args=(job_id,))
+    worker.start()
+    try:
+        # Wait until the first batch is published, then interrupt.
+        published = False
+        for _ in range(100):
+            with Session(engine) as session:
+                if session.exec(
+                    select(TraceLink).where(
+                        TraceLink.project_id == project_id, TraceLink.source == "agent"
+                    )
+                ).first():
+                    published = True
+                    break
+            time.sleep(0.1)
+        assert published, "worker never published the first batch"
+        with Session(engine) as session:
+            cancelled = cancel_analysis_job(session, project_id, job_id)
+            assert cancelled is not None and cancelled.status == "cancelling"
+    finally:
+        worker.join(timeout=30)
+    assert not worker.is_alive(), "worker did not stop after cancel"
+
+    with Session(engine) as session:
+        final = session.get(AgentAnalysisJob, job_id)
+        links = session.exec(
+            select(TraceLink).where(
+                TraceLink.project_id == project_id, TraceLink.source == "agent"
+            )
+        ).all()
+    # Finished by cancellation but marked succeeded, with the published link preserved.
+    assert final is not None and final.status == "succeeded"
+    assert final.progress_json.get("code") == "analysis_cancelled"
+    assert "中止" in final.progress_json.get("message", "")
+    assert len(links) >= 1

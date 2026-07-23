@@ -108,6 +108,19 @@ class TraceStatusUpdate(BaseModel):
     status: TraceStatus
 
 
+class TraceBatchStatusUpdate(BaseModel):
+    status: TraceStatus
+    # When omitted/empty, applies to every currently-proposed link in the project.
+    trace_ids: list[str] | None = Field(default=None, max_length=1000)
+
+
+class TraceBatchStatusResult(BaseModel):
+    status: TraceStatus
+    updated_count: int
+    skipped_count: int
+    updated: list[TraceLinkRead]
+
+
 class TraceLinkSuggestion(BaseModel):
     """Iteration 1 compatibility schema for workspace aggregation."""
 

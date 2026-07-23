@@ -1,11 +1,13 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
+  batchUpdateTraceStatus,
   getWorkspaceTraceMatrix,
   listTraceLinks,
   updateTraceStatus,
 } from '@/api/trace-api'
 import {
+  cancelAgentAnalysisJob,
   createAgentAnalysisJob,
   getAgentAnalysisJob,
   streamAgentAnalysisJob,
@@ -72,6 +74,10 @@ export function useTrace(projectId: () => number) {
   const analysisStep = ref(0)
   const analysisBudget = ref(0)
   const analysisLog = ref<string[]>([])
+  // Id of the in-flight analysis job, so the user can interrupt it and keep partial results.
+  const currentJobId = ref<string | null>(null)
+  const cancelling = ref(false)
+  let cancelledRun = false
 
   async function loadTraceRows(): Promise<void> {
     loading.value = true
@@ -122,6 +128,7 @@ export function useTrace(projectId: () => number) {
 
   async function runAnalysis(kind: 'architecture' | 'trace', force = false): Promise<void> {
     const submitted = await createAgentAnalysisJob(projectId(), { kind, depth: 2, force })
+    currentJobId.value = submitted.job_id
     analysisProgress.value = String(submitted.progress.message || '等待 Agent 分析')
     analysisActivity.value = analysisProgress.value
     analysisLog.value = []
@@ -171,6 +178,8 @@ export function useTrace(projectId: () => number) {
 
   async function generateSuggestions(force = false): Promise<void> {
     generating.value = true
+    cancelling.value = false
+    cancelledRun = false
     error.value = null
     try {
       // Always force a fresh job on explicit user click. Reusing a stuck
@@ -180,7 +189,11 @@ export function useTrace(projectId: () => number) {
       degraded.value = false
       degradedReason.value = null
       await loadTraceRows()
-      ElMessage.success(`Agent 已生成 ${traceRows.value.length} 条追溯候选`)
+      if (cancelledRun) {
+        ElMessage.success(`已中止追溯，保留 ${traceRows.value.length} 条已发现关系`)
+      } else {
+        ElMessage.success(`Agent 已生成 ${traceRows.value.length} 条追溯候选`)
+      }
     } catch (cause) {
       degraded.value = true
       degradedReason.value = cause instanceof Error ? cause.message : 'agent_analysis_failed'
@@ -188,7 +201,28 @@ export function useTrace(projectId: () => number) {
       console.error(cause)
     } finally {
       generating.value = false
+      cancelling.value = false
+      currentJobId.value = null
       analysisProgress.value = ''
+    }
+  }
+
+  // Interrupt the running trace early. Already-published links are kept; the backend
+  // finalizes the job as succeeded so loadTraceRows renders whatever was found.
+  async function cancelAnalysis(): Promise<void> {
+    const jobId = currentJobId.value
+    if (!jobId || cancelling.value) return
+    cancelling.value = true
+    cancelledRun = true
+    analysisActivity.value = '正在中止追溯（保留已发现的关系）'
+    pushLog('⏹ 中止追溯，保留已发现的关系')
+    try {
+      await cancelAgentAnalysisJob(projectId(), jobId)
+    } catch (cause) {
+      cancelling.value = false
+      cancelledRun = false
+      ElMessage.error('中止追溯失败')
+      console.error(cause)
     }
   }
 
@@ -209,11 +243,40 @@ export function useTrace(projectId: () => number) {
     }
   }
 
+  // Accept/reject many proposed links at once. Pass explicit ids for a selection, or omit
+  // them to review every currently-proposed link in the project.
+  async function reviewBatch(
+    status: Extract<TraceStatus, 'accepted' | 'rejected'>,
+    traceIds?: string[],
+  ): Promise<void> {
+    try {
+      const result = await batchUpdateTraceStatus(projectId(), status, traceIds)
+      const updatedById = new Map(result.updated.map((link) => [link.id, link]))
+      traceRows.value = traceRows.value.map((row) =>
+        row.id && updatedById.has(row.id) ? fromTraceLink(updatedById.get(row.id)!) : row,
+      )
+      traceLinks.value = traceLinks.value.map((link) =>
+        updatedById.has(link.id) ? updatedById.get(link.id)! : link,
+      )
+      if (result.updated_count) {
+        ElMessage.success(
+          `${status === 'accepted' ? '已接受' : '已拒绝'} ${result.updated_count} 条追溯关系`,
+        )
+      } else {
+        ElMessage.info('没有可审阅的候选关系')
+      }
+    } catch (cause) {
+      ElMessage.error('批量审阅失败')
+      console.error(cause)
+    }
+  }
+
   return {
     traceRows,
     traceLinks,
     loading,
     generating,
+    cancelling,
     error,
     mode,
     degraded,
@@ -223,8 +286,11 @@ export function useTrace(projectId: () => number) {
     analysisStep,
     analysisBudget,
     analysisLog,
+    currentJobId,
     loadTraceRows,
     generateSuggestions,
+    cancelAnalysis,
     reviewTrace,
+    reviewBatch,
   }
 }

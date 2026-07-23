@@ -101,9 +101,15 @@ Degraded reasons are stable machine-readable codes such as `llm_disabled`, `llm_
 
 - `GET /api/v1/projects/{project_id}/trace-links?status=proposed&source=static`
 - `PATCH /api/v1/projects/{project_id}/trace-links/{trace_id}/status`
+- `POST /api/v1/projects/{project_id}/trace-links/batch-status`
 
 The PATCH body accepts only `accepted` or `rejected`, and only a `proposed` trace can be reviewed.
 Repeated or invalid transitions return `409`. `stale` is system-owned.
+
+Batch review accepts `{ "status": "accepted"|"rejected", "trace_ids": [...] | null }`. `trace_ids`
+selects a subset; `null`/omitted applies to every currently-`proposed` link in the project. Only
+`proposed` links change (already-decided/stale are skipped), so it is idempotent. The response is
+`{ status, updated_count, skipped_count, updated: [TraceLinkRead...] }`.
 
 Manual creation through `POST /trace-links` remains available for compatibility, but requires both
 paper and code evidence and always creates a proposed relation.
