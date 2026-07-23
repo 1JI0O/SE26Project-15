@@ -23,6 +23,7 @@ LOCAL_REVISIONS = (
     "0009_agent_analysis",
     "0010_trace_targets",
     "0011_agent_analysis_model",
+    "0012_trace_link_repair",
 )
 
 
@@ -143,8 +144,17 @@ def _detect_local_revision(engine: Engine, tables: set[str]) -> str:
         detected = LOCAL_REVISIONS[9]
     else:
         return detected
-    if _has_columns(inspector, "integration_config", {"agent_analysis_model"}):
-        detected = LOCAL_REVISIONS[10]
+    if not _has_columns(inspector, "integration_config", {"agent_analysis_model"}):
+        return detected
+    detected = LOCAL_REVISIONS[10]
+    # 0012 repaired trace_link columns that early 0010 builds never created. A DB is only
+    # fully at 0012 once every agent-authored trace-link column exists.
+    if _has_columns(
+        inspector,
+        "trace_link",
+        {"artifact_id", "score_basis_json", "provenance_json", "supersedes_trace_id"},
+    ):
+        detected = LOCAL_REVISIONS[11]
     return detected
 
 
@@ -232,6 +242,28 @@ def _add_missing_columns(engine: Engine, table: str, definitions: dict[str, str]
         for name, definition in definitions.items():
             if name not in existing:
                 connection.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}'))
+
+
+# Trace-agent-v2 target tables from early 0010 builds used an incompatible prototype schema
+# (integer ``id`` PK) instead of the current string PK. They hold only regenerable analysis
+# output, so a drifted copy is dropped and left for ``metadata.create_all`` to recreate.
+_DRIFTED_TARGET_TABLES = {
+    "paper_target": "target_id",
+    "code_target": "target_id",
+    "trace_review_event": "event_id",
+}
+
+
+def _drop_drifted_target_tables(engine: Engine) -> None:
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    with engine.begin() as connection:
+        for table, pk_column in _DRIFTED_TARGET_TABLES.items():
+            if table not in tables:
+                continue
+            columns = {column["name"] for column in inspector.get_columns(table)}
+            if pk_column not in columns:
+                connection.execute(text(f'DROP TABLE "{table}"'))
 
 
 def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
@@ -382,6 +414,9 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
                 "ON trace_link(fingerprint)"
             )
         )
+    # Drop trace-target tables left in the incompatible early-0010 prototype schema so the
+    # create_all below recreates them correctly (mirrors Alembic migration 0012).
+    _drop_drifted_target_tables(engine)
     metadata.create_all(engine)
 
 

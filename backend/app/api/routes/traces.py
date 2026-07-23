@@ -8,6 +8,8 @@ from app.api.routes.projects import get_project_or_404
 from app.db.session import get_session
 from app.models.entities import CodeRepository, PaperDocument, TraceLink, utc_now
 from app.schemas.traces import (
+    TraceBatchStatusResult,
+    TraceBatchStatusUpdate,
     TraceLinkCreate,
     TraceLinkRead,
     TraceStatus,
@@ -195,6 +197,60 @@ def update_trace_status(
     session.commit()
     session.refresh(link)
     return trace_to_read(link)
+
+
+@router.post("/batch-status", response_model=TraceBatchStatusResult)
+def batch_update_trace_status(
+    project_id: int,
+    payload: TraceBatchStatusUpdate,
+    session: Session = Depends(get_session),
+) -> TraceBatchStatusResult:
+    """Accept or reject many proposed trace links at once.
+
+    ``trace_ids`` selects a subset; omit it to review every currently-proposed link in the
+    project. Only ``proposed`` links change — already-decided or stale links are skipped, so
+    the operation is idempotent and safe to retry.
+    """
+
+    project = get_project_or_404(project_id, session)
+    if payload.status not in {TraceStatus.ACCEPTED, TraceStatus.REJECTED}:
+        raise HTTPException(
+            status_code=422,
+            detail="Only accepted or rejected decisions are allowed",
+        )
+    statement = select(TraceLink).where(
+        TraceLink.project_id == project_id,
+        TraceLink.status == TraceStatus.PROPOSED.value,
+    )
+    requested_ids = [tid for tid in (payload.trace_ids or []) if tid]
+    if requested_ids:
+        statement = statement.where(TraceLink.trace_id.in_(requested_ids))
+    links = session.exec(statement).all()
+    now = utc_now()
+    for link in links:
+        link.status = payload.status.value
+        link.decided_at = now
+        link.updated_at = now
+        link.version += 1
+        session.add(link)
+        record_local_operation(
+            session,
+            project,
+            "trace_link",
+            link.public_id,
+            trace_payload(project, link),
+            base_version=link.version - 1,
+        )
+    session.commit()
+    for link in links:
+        session.refresh(link)
+    skipped = len(requested_ids) - len(links) if requested_ids else 0
+    return TraceBatchStatusResult(
+        status=payload.status,
+        updated_count=len(links),
+        skipped_count=max(skipped, 0),
+        updated=[trace_to_read(link) for link in links],
+    )
 
 
 @workspace_router.get("/trace-matrix", response_model=list[WorkspaceTraceRow])

@@ -30,7 +30,11 @@ from app.schemas.agent import (
     AgentTurnRequest,
     AgentTurnResponse,
 )
-from app.services.agent.analysis_jobs import create_analysis_job, job_to_read
+from app.services.agent.analysis_jobs import (
+    cancel_analysis_job,
+    create_analysis_job,
+    job_to_read,
+)
 from app.services.agent.capabilities import list_capabilities, update_capability
 from app.services.agent.conversations import (
     create_conversation,
@@ -113,6 +117,23 @@ def retry_analysis_job(
     return job_to_read(create_analysis_job(session, project_id, payload))
 
 
+@router.post(
+    "/analysis-jobs/{job_id}/cancel",
+    response_model=AgentAnalysisJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def cancel_analysis_job_endpoint(
+    project_id: int,
+    job_id: str,
+    session: Session = Depends(get_session),
+) -> AgentAnalysisJobRead:
+    get_project_or_404(project_id, session)
+    job = cancel_analysis_job(session, project_id, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    return job_to_read(job)
+
+
 @router.get(
     "/analysis-jobs/{job_id}/artifact",
     response_model=AgentAnalysisArtifactRead,
@@ -163,6 +184,7 @@ async def stream_analysis_job_events(
 
     async def events():
         cursor = after
+        last_progress = ""
         while True:
             if await request.is_disconnected():
                 break
@@ -170,15 +192,51 @@ async def stream_analysis_job_events(
             current = session.get(AgentAnalysisJob, job_id)
             if current is None:
                 break
-            batch = (
-                list_run_events(session, project_id, current.agent_run_id, after=cursor)
-                if current.agent_run_id
-                else []
-            )
+            progress = dict(current.progress_json or {})
+            message = str(progress.get("message") or "")
+            # Jobs stay in `queued` with no agent_run_id until a worker slot opens.
+            # Without this synthetic event the UI freezes on "等待 Agent 分析".
+            if not current.agent_run_id:
+                if current.status == "queued" and not message:
+                    message = "排队等待 Agent 分析"
+                if message and message != last_progress:
+                    last_progress = message
+                    payload = {
+                        "event_type": "analysis.progress",
+                        "sequence": cursor,
+                        "payload": {
+                            "message": message,
+                            "activity": message,
+                            "status": current.status,
+                        },
+                    }
+                    data = json.dumps(payload, ensure_ascii=False)
+                    yield f"event: analysis.progress\ndata: {data}\n\n"
+                elif not message:
+                    yield ": keep-alive\n\n"
+                if current.status in {"succeeded", "failed", "stale"}:
+                    break
+                await asyncio.sleep(0.5)
+                continue
+
+            batch = list_run_events(session, project_id, current.agent_run_id, after=cursor)
             for item in batch:
                 cursor = item.sequence
                 data = json.dumps(item.model_dump(mode="json"), ensure_ascii=False)
                 yield f"id: {cursor}\nevent: {item.event_type}\ndata: {data}\n\n"
+            if message and message != last_progress:
+                last_progress = message
+                payload = {
+                    "event_type": "analysis.progress",
+                    "sequence": cursor,
+                    "payload": {
+                        "message": message,
+                        "activity": message,
+                        "status": current.status,
+                    },
+                }
+                data = json.dumps(payload, ensure_ascii=False)
+                yield f"event: analysis.progress\ndata: {data}\n\n"
             if current.status in {"succeeded", "failed", "stale"} and not batch:
                 break
             if not batch:

@@ -2,11 +2,15 @@
 
 > 状态：唯一实施计划（本文件为该功能的权威计划，不依赖其他追溯文档）
 >
-> 编写日期：2026-07-21，修订日期：2026-07-22
+> 编写日期：2026-07-21，修订日期：2026-07-23
 >
 > 适用范围：Tauri 桌面端复用的 `frontend/src` 与 `backend/app`
 >
 > 实施状态（2026-07-22，V1 聚焦切片）：已落地——`PaperTarget`/`CodeTarget`/`TraceReviewEvent` 表与迁移 `0010_trace_targets`；`TraceLink` 新增 `paper_target_id`/`code_target_id`/`relevance`/`score_basis_json`/`provenance_json`/`supersedes_trace_id`；发布 schema 升级为 `trace-agent-v2`（occurrence + target_type/role + salience/relevance/confidence），校验升级为“指定 occurrence 处 quote 命中 + 内容 hash 计算”；单 Agent 四阶段 prompt 与对齐后的 `trace-analysis` skill；导入后自动后台协调器（`services/tracing/coordinator.py`）；下线 `static_candidates` 写入路径（`/suggest` 恒 `static_candidates_retired`）；前端双向 hover/高亮（论文 `<mark>` 锚点装饰 + CodeMirror6 Decoration + 共享双向索引 `useTraceIndex` + 相关度浮层 + 点击固定/Esc）。**暂缓**：§11.3 跨 reparse 重锚算法、§12 固定样例集/指标质量门、V2 并发 subagent、图内 bbox 热区与算法 step 级分解。
+>
+> 可靠性修订（2026-07-23，`analysis_jobs.py`）：主循环每 5 步检测 job 是否被外部置为 `failed`（手动中止），若是则立即收尾、释放 `ThreadPoolExecutor` worker 槽，避免后续任务永久停在“等待 Agent 分析”；`AgentRun.trace_json` 改为内存累积、仅在 job 终结时一次性写回（`trace_entries`），减少每步大 JSON 写入；`RunEventEmitter` 仍逐事件 commit 以驱动 SSE 实时进度。
+>
+> 根因修订（2026-07-23，迁移 `0012_trace_link_repair`）：`analysis_internal_error:OperationalError` 的真正根因是**迁移漂移**，不是 SQLite 锁。早期 `0010_trace_targets` 只给 `trace_link` 加了 `paper_target_id`/`code_target_id`/`relevance`，且用旧原型 schema（整型 `id` 主键 + `is_interactive`）建了 `paper_target`/`code_target`/`trace_review_event`；该脚本后来被扩写补齐列，但已 stamp 过 0010 的库不会重跑，导致 `trace_link` 缺 `artifact_id`/`score_basis_json`/`provenance_json`/`supersedes_trace_id`、target 表缺 `target_id`/`event_id` 等。首次 `publish_trace_candidates` 落库即抛 `no such column: trace_link.artifact_id` / `paper_target.target_id`，追溯“到中途”零输出。修复：新增幂等迁移 `0012_trace_link_repair` 补齐 `trace_link` 缺列并 drop+重建漂移的三张 target 表；无 Alembic 的打包后端走 `_run_sqlite_compatibility_upgrade` 兜底路径，同样在 `create_all` 前 drop 漂移 target 表。外层异常处理改为记录完整 traceback + 底层错误消息（类名不足以定位）。NeRF/HaMeR 用真实 DeepSeek key 实测端到端成功，分别产出 16/11 条 `proposed` agent 追溯关系，平均置信度约 0.94/0.88。
 
 ## 1. 结论
 

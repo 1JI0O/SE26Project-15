@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Any
@@ -29,6 +31,8 @@ from app.services.agent.provider import AgentProviderFailure
 from app.services.agent.run_events import RunEventEmitter
 from app.services.agent.service import _provider_from_settings
 from app.services.tracing.service import trace_fingerprint
+
+logger = logging.getLogger("tracelab.agent.analysis")
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tracelab-agent-analysis")
 _lock = Lock()
@@ -164,6 +168,46 @@ def _submit(job_id: str) -> None:
     _executor.submit(_execute_job, job_id)
 
 
+def cancel_analysis_job(
+    session: Session, project_id: int, job_id: str
+) -> AgentAnalysisJob | None:
+    """Request early interruption of an analysis job, keeping already-published links.
+
+    A running worker sees ``status=cancelling`` at its next step boundary and finalizes the
+    run as ``succeeded`` with whatever it has published so far. A job that never started is
+    terminated directly here (no worker will run it — the start guard skips ``cancelling``).
+    Terminal jobs are returned unchanged (idempotent).
+    """
+
+    job = session.get(AgentAnalysisJob, job_id)
+    if job is None or job.project_id != project_id:
+        return None
+    if job.status in {"succeeded", "failed", "stale"}:
+        return job
+    now = utc_now()
+    if job.status == "queued" and job.agent_run_id is None:
+        # Never started; nothing was published. Finish cleanly instead of leaving a
+        # ``cancelling`` job that no worker will ever pick up.
+        job.status = "succeeded"
+        job.error_code = None
+        job.progress_json = {
+            "message": "追溯已中止（未发现可靠关系）",
+            "code": "analysis_cancelled",
+        }
+        job.completed_at = now
+    else:
+        job.status = "cancelling"
+        job.progress_json = {
+            "message": "正在中止追溯（保留已发现的关系）",
+            "code": "analysis_cancelling",
+        }
+    job.updated_at = now
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+    return job
+
+
 def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, str]:
     common = (
         "You are TraceLab's autonomous evidence analysis agent. You are the only semantic "
@@ -226,14 +270,14 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
     return common, request
 
 
-def _trace_step(run: AgentRun, item: dict[str, Any], session: Session) -> None:
-    trace = list(run.trace_json)
-    trace.append(item)
-    run.trace_json = trace
-    run.step_count = sum(entry.get("type") == "model_step" for entry in trace)
-    run.updated_at = utc_now()
-    session.add(run)
-    session.commit()
+def _trace_step(run: AgentRun, item: dict[str, Any], trace_entries: list[dict[str, Any]]) -> None:
+    """Append a trace entry to the in-memory accumulator.
+
+    The accumulated list is only written to the DB once, at job finalization, to avoid
+    hundreds of large JSON blob commits that cause SQLite write-lock contention under
+    concurrent workers.
+    """
+    trace_entries.append(item)
 
 
 def _activity(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -608,22 +652,42 @@ def _finalize_trace_run(
     emitter: RunEventEmitter,
     artifact: AgentAnalysisArtifact | None,
     published_count: int,
+    trace_entries: list[dict[str, Any]] | None = None,
+    cancelled: bool = False,
 ) -> None:
-    """Mark a (possibly multi-publish) trace run complete and emit terminal events."""
+    """Mark a (possibly multi-publish) trace run complete and emit terminal events.
+
+    When ``cancelled`` is set the run was interrupted early by the user; whatever was already
+    published is preserved and the job still finishes as ``succeeded`` so those links render.
+    """
 
     now = utc_now()
     job.status = "succeeded"
     job.error_code = None
     if artifact is not None:
         job.artifact_id = artifact.artifact_id
-    job.progress_json = {
-        "message": "Agent 分析完成" if published_count else "Agent 未发现可靠追溯关系"
-    }
+    if cancelled:
+        job.progress_json = {
+            "message": (
+                f"追溯已中止，保留 {published_count} 条已发现关系"
+                if published_count
+                else "追溯已中止（未发现可靠关系）"
+            ),
+            "code": "analysis_cancelled",
+        }
+    else:
+        job.progress_json = {
+            "message": "Agent 分析完成" if published_count else "Agent 未发现可靠追溯关系"
+        }
     job.updated_at = now
     job.completed_at = now
     run.status = "completed"
     run.updated_at = now
     run.completed_at = now
+    # Flush accumulated in-memory trace entries to the run row exactly once.
+    if trace_entries is not None:
+        run.trace_json = trace_entries
+        run.step_count = sum(e.get("type") == "model_step" for e in trace_entries)
     session.add(job)
     session.add(run)
     if artifact is not None:
@@ -640,7 +704,13 @@ def _finalize_trace_run(
     emitter.emit("run.completed", {"status": "completed"})
 
 
-def _fail(session: Session, job: AgentAnalysisJob, run: AgentRun | None, code: str) -> None:
+def _fail(
+    session: Session,
+    job: AgentAnalysisJob,
+    run: AgentRun | None,
+    code: str,
+    trace_entries: list[dict[str, Any]] | None = None,
+) -> None:
     now = utc_now()
     job.status = "failed"
     job.error_code = code[:128]
@@ -653,6 +723,10 @@ def _fail(session: Session, job: AgentAnalysisJob, run: AgentRun | None, code: s
         run.degraded_reason = code[:128]
         run.updated_at = now
         run.completed_at = now
+        # Flush accumulated in-memory trace entries to the run row.
+        if trace_entries is not None:
+            run.trace_json = trace_entries
+            run.step_count = sum(e.get("type") == "model_step" for e in trace_entries)
         session.add(run)
     session.commit()
 
@@ -661,7 +735,9 @@ def _execute_job(job_id: str) -> None:
     try:
         with Session(engine) as session:
             job = session.get(AgentAnalysisJob, job_id)
-            if job is None or job.status == "succeeded":
+            if job is None or job.status in {"succeeded", "cancelling"}:
+                # ``cancelling`` on a not-yet-started job: the cancel endpoint already wrote a
+                # terminal state for the no-run case, so nothing to do here.
                 return
             repository = session.get(CodeRepository, job.code_repository_id)
             if repository is None or repository.revision != job.code_revision:
@@ -725,6 +801,9 @@ def _execute_job(job_id: str) -> None:
                 "tool_definitions": tool_definitions(job.kind),
             }
             tool_results: list[dict[str, Any]] = []
+            # Accumulate trace entries in memory; write to DB exactly once at finalization to
+            # avoid hundreds of large JSON blob commits that cause SQLite write-lock contention.
+            trace_entries: list[dict[str, Any]] = []
             # Transient provider hiccups (malformed/truncated JSON on a big publish payload,
             # empty responses, rate limits) should not kill an otherwise-successful run. Retry
             # them a bounded number of times before giving up.
@@ -763,6 +842,31 @@ def _execute_job(job_id: str) -> None:
                 else "publish_trace_candidates"
             )
             for step_number in range(1, budget + 1):
+                # Check for an external stop signal at every step start. The cancel endpoint
+                # sets status=cancelling to interrupt early while KEEPING whatever was already
+                # published; a hard failure (manual abort) sets status=failed. Reloading the
+                # job is one cheap SELECT per step under WAL.
+                session.expire(job)
+                if job.status == "cancelling":
+                    emitter.emit(
+                        "analysis.progress",
+                        {"message": "正在中止追溯（保留已发现的关系）", "step": step_number},
+                    )
+                    _finalize_trace_run(
+                        session, job, run, emitter, run_artifact, published_count,
+                        trace_entries=trace_entries, cancelled=True,
+                    )
+                    return
+                if job.status == "failed":
+                    run.status = "failed"
+                    run.degraded_reason = job.error_code or "externally_aborted"
+                    run.updated_at = utc_now()
+                    run.completed_at = utc_now()
+                    run.trace_json = trace_entries
+                    run.step_count = sum(e.get("type") == "model_step" for e in trace_entries)
+                    session.add(run)
+                    session.commit()
+                    return
                 emitter.emit(
                     "analysis.progress",
                     {"message": "Agent 正在规划并核对证据", "step": step_number},
@@ -797,7 +901,7 @@ def _execute_job(job_id: str) -> None:
                         )
                         continue
                     emitter.emit("analysis.failed", {"code": exc.reason})
-                    _fail(session, job, run, exc.reason)
+                    _fail(session, job, run, exc.reason, trace_entries=trace_entries)
                     return
                 _trace_step(
                     run,
@@ -807,7 +911,7 @@ def _execute_job(job_id: str) -> None:
                         "tool_name": step.tool_name,
                         "arguments": step.arguments,
                     },
-                    session,
+                    trace_entries,
                 )
                 if step.action == "final":
                     feedback = {
@@ -843,11 +947,7 @@ def _execute_job(job_id: str) -> None:
                         ),
                     }
                     tool_results.append(feedback)
-                    _trace_step(
-                        run,
-                        {"type": "tool_result", "tool": tool_name, "ok": True, "reused": True},
-                        session,
-                    )
+                    _trace_step(run, {"type": "tool_result", "tool": tool_name, "ok": True, "reused": True}, trace_entries)
                     emitter.emit(
                         "analysis.tool.completed",
                         {
@@ -916,7 +1016,7 @@ def _execute_job(job_id: str) -> None:
                         ),
                     }
                     tool_results.append(feedback)
-                    _trace_step(run, {"type": "tool_result", **feedback}, session)
+                    _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
                     emitter.emit(
                         "analysis.tool.failed",
                         {
@@ -938,7 +1038,7 @@ def _execute_job(job_id: str) -> None:
                         ),
                     }
                     tool_results.append(feedback)
-                    _trace_step(run, {"type": "tool_result", **feedback}, session)
+                    _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
                     emitter.emit(
                         "analysis.tool.failed",
                         {
@@ -954,7 +1054,7 @@ def _execute_job(job_id: str) -> None:
                     seen_calls[call_key] = safe
                 feedback = {"tool": tool_name, "ok": True, "result": safe}
                 tool_results.append(feedback)
-                _trace_step(run, {"type": "tool_result", **feedback}, session)
+                _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
                 emitter.emit(
                     "analysis.tool.completed",
                     {
@@ -968,7 +1068,8 @@ def _execute_job(job_id: str) -> None:
                 if tool_name == "finish_analysis" and result.get("finished"):
                     # Explicit model-declared completion (trace).
                     _finalize_trace_run(
-                        session, job, run, emitter, run_artifact, published_count
+                        session, job, run, emitter, run_artifact, published_count,
+                        trace_entries=trace_entries,
                     )
                     return
                 if tool_name == publish_name and result.get("published"):
@@ -984,7 +1085,7 @@ def _execute_job(job_id: str) -> None:
                             artifact = _persist_artifact(session, job, run, result["payload"])
                         except ValueError as exc:
                             emitter.emit("analysis.failed", {"code": str(exc)})
-                            _fail(session, job, run, str(exc))
+                            _fail(session, job, run, str(exc), trace_entries=trace_entries)
                             return
                         now = utc_now()
                         job.status = "succeeded"
@@ -995,6 +1096,11 @@ def _execute_job(job_id: str) -> None:
                         run.status = "completed"
                         run.updated_at = now
                         run.completed_at = now
+                        # Flush accumulated in-memory trace entries to the run row.
+                        run.trace_json = trace_entries
+                        run.step_count = sum(
+                            e.get("type") == "model_step" for e in trace_entries
+                        )
                         session.add(job)
                         session.add(run)
                         session.add(artifact)
@@ -1030,7 +1136,7 @@ def _execute_job(job_id: str) -> None:
                             ),
                         }
                         tool_results.append(feedback)
-                        _trace_step(run, {"type": "tool_result", **feedback}, session)
+                        _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
                         emitter.emit(
                             "analysis.tool.failed",
                             {
@@ -1074,16 +1180,33 @@ def _execute_job(job_id: str) -> None:
             # Budget exhausted. If the run already produced results, finalize as succeeded;
             # otherwise nothing defensible was ever published.
             if run_artifact is not None or published_count > 0:
-                _finalize_trace_run(session, job, run, emitter, run_artifact, published_count)
+                _finalize_trace_run(
+                    session, job, run, emitter, run_artifact, published_count,
+                    trace_entries=trace_entries,
+                )
                 return
             emitter.emit("analysis.failed", {"code": "agent_output_incomplete"})
-            _fail(session, job, run, "agent_output_incomplete")
+            _fail(session, job, run, "agent_output_incomplete", trace_entries=trace_entries)
     except Exception as exc:
+        # Preserve the full traceback and the underlying error detail. The bare class
+        # name (e.g. "OperationalError") is useless for diagnosis; capture the message
+        # (SQLite locks vs. disk errors vs. malformed statements all raise the same class).
+        detail = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+        logger.error(
+            "analysis job %s crashed: %s: %s\n%s",
+            job_id,
+            exc.__class__.__name__,
+            detail,
+            traceback.format_exc(),
+        )
+        code = f"analysis_internal_error:{exc.__class__.__name__}"
+        if detail:
+            code = f"{code}:{detail}"
         with Session(engine) as session:
             job = session.get(AgentAnalysisJob, job_id)
             if job is not None:
                 run = session.get(AgentRun, job.agent_run_id) if job.agent_run_id else None
-                _fail(session, job, run, f"analysis_internal_error:{exc.__class__.__name__}")
+                _fail(session, job, run, code)
     finally:
         with _lock:
             _submitted.discard(job_id)
@@ -1098,22 +1221,45 @@ def recover_analysis_jobs() -> None:
                 )
             ).all()
         )
+        now = utc_now()
         for job in jobs:
+            # Drop zombie runs left by a previous process so they cannot occupy
+            # both ThreadPoolExecutor slots forever after restart.
+            stale = False
+            if job.updated_at is not None:
+                age = (now - job.updated_at).total_seconds()
+                stale = age > 900  # 15 minutes without progress
             if job.agent_run_id:
                 run = session.get(AgentRun, job.agent_run_id)
                 if run is not None and run.status in {"queued", "running"}:
                     run.status = "failed"
                     run.degraded_reason = "analysis_restarted"
-                    run.updated_at = utc_now()
-                    run.completed_at = run.updated_at
+                    run.updated_at = now
+                    run.completed_at = now
                     session.add(run)
+            if stale and job.status in {"running", "validating"}:
+                job.status = "failed"
+                job.error_code = "analysis_stale_timeout"
+                job.progress_json = {
+                    "message": "Agent 分析超时未更新，已自动结束",
+                    "code": "analysis_stale_timeout",
+                }
+                job.updated_at = now
+                job.completed_at = now
+                session.add(job)
+                continue
             job.status = "queued"
-            job.progress_json = {"message": "等待恢复 Agent 分析"}
-            job.updated_at = utc_now()
+            job.agent_run_id = None
+            job.progress_json = {"message": "排队等待 Agent 分析"}
+            job.updated_at = now
             session.add(job)
         session.commit()
         # Capture ids before the session closes; committed instances expire and would
         # raise DetachedInstanceError if their attributes were read outside the session.
-        job_ids = [job.job_id for job in jobs]
+        job_ids = [
+            job.job_id
+            for job in jobs
+            if job.status == "queued"
+        ]
     for job_id in job_ids:
         _submit(job_id)

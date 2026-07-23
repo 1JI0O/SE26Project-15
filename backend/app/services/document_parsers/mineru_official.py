@@ -65,6 +65,13 @@ class OfficialMinerUSettings:
 
 
 class HttpxMinerUTransport:
+    """HTTP transport for the official MinerU API.
+
+    Forces HTTP/1.1: some object-storage upload endpoints used by MinerU's
+    presigned URLs drop HTTP/2 mid-handshake, which surfaces as
+    ``SSL: UNEXPECTED_EOF_WHILE_READING``.
+    """
+
     def request(
         self,
         method: str,
@@ -74,18 +81,43 @@ class HttpxMinerUTransport:
         headers: dict[str, str] | None = None,
         timeout: float,
     ) -> HttpResponse:
+        # Large PDF uploads to OSS need a longer write/read window than the
+        # small JSON control-plane calls.
+        is_upload = method.upper() == "PUT"
+        read_timeout = max(timeout, 180.0) if is_upload else timeout
+        timeout_config = httpx.Timeout(
+            connect=min(30.0, timeout),
+            read=read_timeout,
+            write=read_timeout,
+            pool=min(30.0, timeout),
+        )
         try:
-            response = httpx.request(
-                method,
-                url,
-                content=body,
-                headers=headers,
-                timeout=timeout,
+            with httpx.Client(
+                http2=False,
                 follow_redirects=True,
-            )
-            response.raise_for_status()
+                timeout=timeout_config,
+            ) as client:
+                # Presigned OSS URLs must not receive an extra Content-Type;
+                # only send headers the caller explicitly provided.
+                response = client.request(
+                    method,
+                    url,
+                    content=body,
+                    headers=headers,
+                )
+                response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise MinerUUnavailableError(f"MinerU request failed: {exc}") from exc
+            host = httpx.URL(url).host or "unknown-host"
+            detail = str(exc)
+            hint = ""
+            if "UNEXPECTED_EOF_WHILE_READING" in detail or "SSLEOF" in detail:
+                hint = (
+                    " (TLS 连接被中断，常见于上传预签名地址时网络不稳/"
+                    "代理/VPN；请重试，或改用本地 mineru-api)"
+                )
+            raise MinerUUnavailableError(
+                f"MinerU request failed [{method} {host}]: {exc}{hint}"
+            ) from exc
         return HttpResponse(
             body=response.content,
             content_type=response.headers.get("Content-Type", "application/octet-stream"),
@@ -226,7 +258,10 @@ class OfficialMinerUClient(MinerUClientProtocol):
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> HttpResponse:
-        attempts = max(1, self.settings.request_retries)
+        # Uploads are more retry-sensitive (TLS EOF on OSS); give them more attempts.
+        base_attempts = max(1, self.settings.request_retries)
+        attempts = max(base_attempts, 5) if method.upper() == "PUT" else base_attempts
+        last_error: MinerUUnavailableError | None = None
         for attempt in range(1, attempts + 1):
             try:
                 return self.transport.request(
@@ -236,11 +271,14 @@ class OfficialMinerUClient(MinerUClientProtocol):
                     headers=headers,
                     timeout=self.settings.request_timeout_seconds,
                 )
-            except MinerUUnavailableError:
+            except MinerUUnavailableError as exc:
+                last_error = exc
                 if attempt == attempts:
                     raise
-                time.sleep(min(float(attempt), 3.0))
-        raise AssertionError("unreachable")
+                # Exponential backoff helps transient TLS EOF / proxy blips.
+                time.sleep(min(2.0 ** (attempt - 1), 8.0))
+        assert last_error is not None
+        raise last_error
 
     @staticmethod
     def _payload_data(payload: dict[str, Any]) -> dict[str, Any]:

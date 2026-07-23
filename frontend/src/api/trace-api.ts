@@ -43,6 +43,25 @@ export async function updateTraceStatus(
   return data
 }
 
+export interface TraceBatchStatusResult {
+  status: TraceStatus
+  updated_count: number
+  skipped_count: number
+  updated: TraceLink[]
+}
+
+export async function batchUpdateTraceStatus(
+  projectId: number,
+  status: Extract<TraceStatus, 'accepted' | 'rejected'>,
+  traceIds?: string[],
+): Promise<TraceBatchStatusResult> {
+  const { data } = await http.post<TraceBatchStatusResult>(
+    `/projects/${projectId}/trace-links/batch-status`,
+    { status, trace_ids: traceIds && traceIds.length ? traceIds : null },
+  )
+  return data
+}
+
 export async function getWorkspaceTraceMatrix(
   projectId: number | string,
 ): Promise<WorkspaceTraceRow[]> {

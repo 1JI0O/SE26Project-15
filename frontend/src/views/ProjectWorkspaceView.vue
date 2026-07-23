@@ -398,13 +398,16 @@
                 :rows="trace.traceRows.value"
                 :loading="trace.loading.value"
                 :generating="trace.generating.value"
+                :cancelling="trace.cancelling.value"
                 :error="trace.error.value"
                 :mode="trace.mode.value"
                 :degraded="trace.degraded.value"
                 :has-generated="hasGeneratedTrace"
                 :selected-id="traceIndex.selectedLinkId.value"
                 @suggest="generateAgentAnalysis(hasGeneratedTrace)"
+                @cancel="trace.cancelAnalysis"
                 @review="trace.reviewTrace"
+                @review-batch="trace.reviewBatch"
                 @select-row="onTraceRowSelect"
                 @hover-row="hoverTraceRow"
                 @leave-row="traceIndex.clearHover"
@@ -455,6 +458,16 @@
                         ? '重新生成'
                         : '生成追溯'
                   }}
+                </el-button>
+                <el-button
+                  v-if="trace.generating.value"
+                  size="small"
+                  type="warning"
+                  plain
+                  :loading="trace.cancelling.value"
+                  @click="trace.cancelAnalysis"
+                >
+                  {{ trace.cancelling.value ? '正在中止…' : '中止（保留已发现）' }}
                 </el-button>
               </aside>
             </div>
