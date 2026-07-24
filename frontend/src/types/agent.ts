@@ -85,6 +85,7 @@ export interface AgentUiAction {
   line?: number
   block_id?: string
   quote?: string
+  target_id?: string
   root_symbol?: string
   view?: 'architecture' | 'debug'
 }

@@ -128,14 +128,22 @@ function buildTraceDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>()
   for (const { target, range } of ranged) {
     const classes = ['trace-code-mark', `trace-code-${target.status}`]
+    if (target.multiplicity && target.multiplicity !== '1_to_1') {
+      classes.push(`trace-code-${target.multiplicity}`)
+    }
     if (active.has(target.targetId)) classes.push('trace-code-active')
     else if (hover.has(target.targetId)) classes.push('trace-code-hover')
+    const attributes: Record<string, string> = { 'data-trace-target': target.targetId }
+    if (target.fanoutCount > 1) attributes['data-fanout'] = String(target.fanoutCount)
+    if (target.multiplicity && target.multiplicity !== '1_to_1') {
+      attributes['data-multiplicity'] = target.multiplicity
+    }
     builder.add(
       range.from,
       range.to,
       Decoration.mark({
         class: classes.join(' '),
-        attributes: { 'data-trace-target': target.targetId },
+        attributes,
       }),
     )
   }
@@ -508,6 +516,34 @@ defineExpose({ getEditorContent, goToLine })
 .editor-body :deep(.trace-code-accepted) {
   background: rgba(46, 168, 118, 0.2);
   box-shadow: inset 0 -2px 0 rgba(46, 168, 118, 0.6);
+}
+
+.editor-body :deep(.trace-code-1_to_n) {
+  box-shadow: inset 0 -2px 0 rgba(139, 92, 246, 0.65);
+}
+
+.editor-body :deep(.trace-code-n_to_1) {
+  box-shadow: inset 0 -2px 0 rgba(8, 145, 178, 0.65);
+}
+
+.editor-body :deep(.trace-code-n_to_n) {
+  box-shadow: inset 0 -2px 0 rgba(139, 92, 246, 0.65), inset 0 -4px 0 rgba(8, 145, 178, 0.45);
+}
+
+.editor-body :deep(.trace-code-mark[data-fanout]::after) {
+  content: '×' attr(data-fanout);
+  margin-left: 2px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.15);
+  color: #8b5cf6;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.editor-body :deep(.trace-code-mark[data-multiplicity='n_to_1'][data-fanout]::after) {
+  background: rgba(8, 145, 178, 0.15);
+  color: #0891b2;
 }
 
 .editor-body :deep(.trace-code-active) {

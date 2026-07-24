@@ -17,6 +17,8 @@ import type { TraceEvidence, TraceLink, TraceStatus } from '@/types/tracing'
  * relation strongly and the hovered relation weakly.
  */
 
+export type TraceMultiplicity = '1_to_1' | '1_to_n' | 'n_to_1' | 'n_to_n'
+
 export interface PaperTargetView {
   targetId: string
   blockId: string
@@ -27,6 +29,9 @@ export interface PaperTargetView {
   targetType: string
   salience: number
   status: TraceStatus
+  /** Distinct code targets linked from this paper target. */
+  fanoutCount: number
+  multiplicity: TraceMultiplicity
   /** Links where this is the paper side, sorted by relevance desc. */
   links: TraceLink[]
 }
@@ -42,6 +47,8 @@ export interface CodeTargetView {
   charEnd: number | null
   role: string
   status: TraceStatus
+  fanoutCount: number
+  multiplicity: TraceMultiplicity
   links: TraceLink[]
 }
 
@@ -73,6 +80,57 @@ const codeTargetId = (link: TraceLink): string | null =>
 /** accepted wins over proposed for resting decoration intensity. */
 const mergeStatus = (current: TraceStatus, incoming: TraceStatus): TraceStatus =>
   current === 'accepted' || incoming === 'accepted' ? 'accepted' : current
+
+function computeMultiplicity(fanoutCount: number, isFanin: boolean): TraceMultiplicity {
+  const isFanout = fanoutCount > 1
+  if (isFanout && isFanin) return 'n_to_n'
+  if (isFanout) return '1_to_n'
+  if (isFanin) return 'n_to_1'
+  return '1_to_1'
+}
+
+function enrichMultiplicity(
+  paperMap: Map<string, PaperTargetView>,
+  codeMap: Map<string, CodeTargetView>,
+): void {
+  for (const view of paperMap.values()) {
+    const codeIds = new Set<string>()
+    for (const link of view.links) {
+      const cid = codeTargetId(link)
+      if (cid) codeIds.add(cid)
+    }
+    view.fanoutCount = codeIds.size
+    let isFanin = false
+    for (const cid of codeIds) {
+      const codeView = codeMap.get(cid)
+      if (!codeView) continue
+      const paperIds = new Set(
+        codeView.links.map((link) => paperTargetId(link)).filter((id): id is string => !!id),
+      )
+      if (paperIds.size > 1) isFanin = true
+    }
+    view.multiplicity = computeMultiplicity(view.fanoutCount, isFanin)
+  }
+
+  for (const view of codeMap.values()) {
+    const paperIds = new Set<string>()
+    for (const link of view.links) {
+      const pid = paperTargetId(link)
+      if (pid) paperIds.add(pid)
+    }
+    view.fanoutCount = paperIds.size
+    let isFanin = false
+    for (const pid of paperIds) {
+      const paperView = paperMap.get(pid)
+      if (!paperView) continue
+      const codeIds = new Set(
+        paperView.links.map((link) => codeTargetId(link)).filter((id): id is string => !!id),
+      )
+      if (codeIds.size > 1) isFanin = true
+    }
+    view.multiplicity = computeMultiplicity(view.fanoutCount, isFanin)
+  }
+}
 
 export function useTraceIndex(links: Ref<TraceLink[]>) {
   // The pinned relation the user selected, and the transient relation under the pointer.
@@ -122,6 +180,8 @@ export function useTraceIndex(links: Ref<TraceLink[]>) {
           targetType: evidence.target_type ?? 'method_text',
           salience: evidence.salience ?? 0,
           status: link.status,
+          fanoutCount: 1,
+          multiplicity: '1_to_1',
           links: [link],
         })
       }
@@ -154,6 +214,8 @@ export function useTraceIndex(links: Ref<TraceLink[]>) {
           charEnd: evidence.char_end ?? null,
           role: evidence.role ?? 'model_component',
           status: link.status,
+          fanoutCount: 1,
+          multiplicity: '1_to_1',
           links: [link],
         })
       }
@@ -164,6 +226,20 @@ export function useTraceIndex(links: Ref<TraceLink[]>) {
     return map
   })
 
+  const enrichedPaperTargets = computed(() => {
+    const paper = new Map(paperTargets.value)
+    const code = new Map(codeTargets.value)
+    enrichMultiplicity(paper, code)
+    return paper
+  })
+
+  const enrichedCodeTargets = computed(() => {
+    const paper = new Map(paperTargets.value)
+    const code = new Map(codeTargets.value)
+    enrichMultiplicity(paper, code)
+    return code
+  })
+
   /**
    * Resolve a target id (from a pane hover/click) to the best relation id.
    * A target can back several relations; the highest-relevance one is the primary,
@@ -171,7 +247,9 @@ export function useTraceIndex(links: Ref<TraceLink[]>) {
    */
   function linkIdForTarget(side: 'paper' | 'code', targetId: string): string | null {
     const view =
-      side === 'paper' ? paperTargets.value.get(targetId) : codeTargets.value.get(targetId)
+      side === 'paper'
+        ? enrichedPaperTargets.value.get(targetId)
+        : enrichedCodeTargets.value.get(targetId)
     return view?.links[0]?.id ?? null
   }
 
@@ -201,7 +279,7 @@ export function useTraceIndex(links: Ref<TraceLink[]>) {
     const pTargetId = paperTargetId(link)
     // Other relations that share this paper target (one code-segment ↔ many paper fragments, or
     // vice versa). Only the highest-relevance one is shown; the rest are surfaced as a count.
-    const shared = pTargetId ? paperTargets.value.get(pTargetId)?.links.length ?? 1 : 1
+    const shared = pTargetId ? enrichedPaperTargets.value.get(pTargetId)?.links.length ?? 1 : 1
     return {
       linkId: link.id,
       relationType: link.relation_type,
@@ -272,8 +350,8 @@ export function useTraceIndex(links: Ref<TraceLink[]>) {
     // derived
     selectedLink,
     hoveredLink,
-    paperTargets,
-    codeTargets,
+    paperTargets: enrichedPaperTargets,
+    codeTargets: enrichedCodeTargets,
     activePaperTargetIds,
     activeCodeTargetIds,
     hoverPaperTargetIds,

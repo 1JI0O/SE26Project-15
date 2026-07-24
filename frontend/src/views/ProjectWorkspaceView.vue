@@ -758,6 +758,9 @@ const paperMarks = computed<PaperMark[]>(() =>
     quote: target.quote,
     occurrence: target.occurrence,
     status: target.status,
+    targetType: target.targetType,
+    multiplicity: target.multiplicity,
+    fanoutCount: target.fanoutCount,
   })),
 )
 const codeTargetList = computed(() => [...traceIndex.codeTargets.value.values()])
@@ -1017,6 +1020,10 @@ function openTraceAndGenerate(): void {
 }
 
 async function generateAgentAnalysis(force = false): Promise<void> {
+  if (force) {
+    traceIndex.unselect()
+    traceIndex.clearHover()
+  }
   await trace.generateSuggestions(force)
   await tensorFlow.loadTensorFlow({ force: true })
 }
@@ -1094,8 +1101,14 @@ function hoverTraceRow(row: TraceRowView): void {
 
 async function jumpToTracePaper(row: TraceRowView): Promise<void> {
   const evidence = row.evidence.find((item) => item.side === 'paper')
+  const link = row.id ? trace.traceLinks.value.find((item) => item.id === row.id) : null
+  const paperTargetId = link?.paper_target_id || evidence?.target_id || null
   await nextTick()
-  const found = paperReaderRef.value?.scrollToBlock(row.paper, evidence?.quote || '')
+  const found = paperReaderRef.value?.scrollToBlock(
+    row.paper,
+    evidence?.quote || '',
+    paperTargetId,
+  )
   if (!found) ElMessage.warning('论文精确锚点不可用，已保留当前阅读位置')
 }
 
@@ -1120,7 +1133,10 @@ watch(
     // Paper side: scroll + highlight the traced block/formula.
     await nextTick()
     const paperBlock = paperEv?.ref || link.paper_block_id
-    if (paperBlock) paperReaderRef.value?.scrollToBlock(paperBlock, paperEv?.quote || '')
+    const paperTargetId = link.paper_target_id || paperEv?.target_id || null
+    if (paperBlock) {
+      paperReaderRef.value?.scrollToBlock(paperBlock, paperEv?.quote || '', paperTargetId)
+    }
     // Code side: open the file and reveal the line.
     const codePath = codeEv?.path || link.code_symbol_id.split('::', 1)[0]
     if (codePath) {
@@ -1181,7 +1197,11 @@ async function handleAgentUiAction(action: AgentUiAction): Promise<void> {
   }
   if (action.type === 'open_paper' && action.block_id) {
     await nextTick()
-    const found = paperReaderRef.value?.scrollToBlock(action.block_id, action.quote || '')
+    const found = paperReaderRef.value?.scrollToBlock(
+      action.block_id,
+      action.quote || '',
+      action.target_id ?? null,
+    )
     if (!found) ElMessage.warning('论文精确锚点不可用')
     return
   }
@@ -2127,6 +2147,7 @@ watch(activeBottomPanel, (tab) => {
   gap: 10px;
   width: 340px;
   max-width: calc(100vw - 36px);
+  pointer-events: none;
 }
 
 .trace-box {
@@ -2137,6 +2158,7 @@ watch(activeBottomPanel, (tab) => {
   border-radius: 10px;
   background: #ffffff;
   box-shadow: 0 12px 34px rgba(19, 35, 47, 0.18);
+  pointer-events: none;
 }
 
 /* The transient preview sits above the fixed box and reads lighter. */
@@ -2183,6 +2205,7 @@ watch(activeBottomPanel, (tab) => {
   color: #586675;
   font: inherit;
   font-size: 11px;
+  pointer-events: auto;
 }
 
 .trace-box-body {
@@ -2192,6 +2215,7 @@ watch(activeBottomPanel, (tab) => {
   padding: 10px 12px;
   max-height: 44vh;
   overflow-y: auto;
+  pointer-events: auto;
 }
 
 .trace-box-side {
