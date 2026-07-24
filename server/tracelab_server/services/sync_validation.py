@@ -20,9 +20,8 @@ REQUIRED_UPSERT_FIELDS = {
     "agent_run_event": {"run_public_id", "event_type"},
     "agent_memory": {"kind"},
 }
-# Mirror of the client's canonical TraceStatus enum
-# (frontend/src/schemas + backend/app/schemas/traces.py): {proposed, accepted,
-# rejected, stale}. "proposed" is the initial status of a freshly generated link.
+# Mirror of the shared TraceStatus contract: {proposed, accepted, rejected, stale}.
+# "proposed" is the initial status of a freshly generated link.
 # "pending" is retained only for backward compatibility with any older data.
 ALLOWED_TRACE_STATUSES = {"proposed", "pending", "accepted", "rejected", "stale"}
 ALLOWED_MESSAGE_ROLES = {"user", "assistant", "system", "tool"}
