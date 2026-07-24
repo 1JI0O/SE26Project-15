@@ -947,7 +947,11 @@ def _execute_job(job_id: str) -> None:
                         ),
                     }
                     tool_results.append(feedback)
-                    _trace_step(run, {"type": "tool_result", "tool": tool_name, "ok": True, "reused": True}, trace_entries)
+                    _trace_step(
+                        run,
+                        {"type": "tool_result", "tool": tool_name, "ok": True, "reused": True},
+                        trace_entries,
+                    )
                     emitter.emit(
                         "analysis.tool.completed",
                         {

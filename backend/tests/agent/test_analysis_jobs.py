@@ -8,8 +8,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, select
 
-from app.services.agent.provider import AgentProviderStep
-
 from app.models.entities import (
     AgentAnalysisJob,
     AgentConversation,
@@ -29,6 +27,7 @@ from app.services.agent.analysis_jobs import (
     create_analysis_job,
 )
 from app.services.agent.analysis_tools import execute_tool
+from app.services.agent.provider import AgentProviderStep
 from app.services.analysis_jobs import ANALYZER_VERSION
 from app.services.code_analysis.analyzer import analyze_code_archive
 from app.services.paper_markdown import inject_block_anchors
@@ -512,7 +511,11 @@ def test_cancel_running_worker_keeps_published_links(
 
     # Point the worker at the test engine and a scripted provider.
     monkeypatch.setattr(aj, "engine", engine)
-    monkeypatch.setattr(aj, "_provider_from_settings", lambda _session, for_analysis=False: (_StubProvider(), None))
+    monkeypatch.setattr(
+        aj,
+        "_provider_from_settings",
+        lambda _session, for_analysis=False: (_StubProvider(), None),
+    )
 
     worker = threading.Thread(target=aj._execute_job, args=(job_id,))
     worker.start()
