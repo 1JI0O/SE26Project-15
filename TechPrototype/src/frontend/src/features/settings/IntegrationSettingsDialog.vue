@@ -1,0 +1,440 @@
+<template>
+  <el-dialog
+    :model-value="modelValue"
+    title="集成设置"
+    width="min(760px, calc(100vw - 32px))"
+    class="settings-dialog"
+    destroy-on-close
+    @open="loadSettings"
+    @close="closeDialog"
+  >
+    <div v-loading="loading" class="settings-body">
+      <div v-if="settings" class="settings-status">
+        <span>配置保存在本机应用数据中，修改后立即用于新请求。</span>
+        <el-tag size="small" effect="plain" type="success">应用内配置</el-tag>
+      </div>
+
+      <el-tabs v-if="form" v-model="activeTab">
+        <el-tab-pane label="Agent API" name="agent">
+          <el-form label-position="top" class="settings-form">
+            <div class="switch-row">
+              <div>
+                <strong>启用 Agent 与 LLM 辅助追溯</strong>
+                <p>关闭后仍可使用静态追溯与其他工作台功能。</p>
+              </div>
+              <el-switch v-model="form.agent.enabled" />
+            </div>
+
+            <div class="form-grid">
+              <el-form-item label="API 地址" class="wide-field">
+                <el-input
+                  v-model.trim="form.agent.base_url"
+                  placeholder="https://api.deepseek.com"
+                />
+              </el-form-item>
+              <el-form-item label="模型">
+                <el-input
+                  v-model.trim="form.agent.model"
+                  placeholder="deepseek-v4-flash"
+                />
+              </el-form-item>
+              <el-form-item label="追溯分析模型" class="wide-field">
+                <el-input
+                  v-model.trim="form.agent.analysis_model"
+                  placeholder="留空则与对话模型相同；重要追溯可填更强模型，如 deepseek-v4-pro"
+                />
+              </el-form-item>
+              <el-form-item label="思考模式">
+                <el-select v-model="form.agent.thinking_mode">
+                  <el-option label="由服务决定" value="" />
+                  <el-option label="启用" value="enabled" />
+                  <el-option label="关闭" value="disabled" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="API Key" class="wide-field">
+                <el-input
+                  v-model="agentApiKey"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  :placeholder="agentKeyPlaceholder"
+                  @input="clearAgentKey = false"
+                />
+                <el-button
+                  v-if="form.agent.api_key_configured"
+                  text
+                  type="danger"
+                  class="clear-secret"
+                  @click="markAgentKeyForRemoval"
+                >
+                  {{ clearAgentKey ? '取消清除' : '清除已保存密钥' }}
+                </el-button>
+              </el-form-item>
+              <el-form-item label="请求超时（秒）">
+                <el-input-number
+                  v-model="form.agent.timeout_seconds"
+                  :min="1"
+                  :max="120"
+                  controls-position="right"
+                />
+              </el-form-item>
+            </div>
+          </el-form>
+        </el-tab-pane>
+
+        <el-tab-pane label="MinerU API" name="mineru">
+          <el-form label-position="top" class="settings-form">
+            <el-form-item label="接入方式">
+              <el-radio-group v-model="form.mineru.provider">
+                <el-radio-button value="local">本地服务</el-radio-button>
+                <el-radio-button value="official">官方 API</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+
+            <div v-if="form.mineru.provider === 'local'" class="form-grid">
+              <el-form-item label="本地服务地址" class="wide-field">
+                <el-input
+                  v-model.trim="form.mineru.local_url"
+                  placeholder="http://127.0.0.1:8001"
+                />
+              </el-form-item>
+              <el-form-item label="解析后端">
+                <el-input v-model.trim="form.mineru.backend" placeholder="pipeline" />
+              </el-form-item>
+              <el-form-item label="解析方式">
+                <el-select v-model="form.mineru.parse_method">
+                  <el-option label="自动" value="auto" />
+                  <el-option label="文本" value="txt" />
+                  <el-option label="OCR" value="ocr" />
+                </el-select>
+              </el-form-item>
+            </div>
+
+            <div v-else class="form-grid">
+              <el-form-item label="官方 API 地址" class="wide-field">
+                <el-input v-model.trim="form.mineru.official_api_url" />
+              </el-form-item>
+              <el-form-item label="模型">
+                <el-select v-model="form.mineru.official_api_model">
+                  <el-option label="VLM" value="vlm" />
+                  <el-option label="Pipeline" value="pipeline" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="API Token" class="wide-field">
+                <el-input
+                  v-model="mineruApiToken"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  :placeholder="mineruTokenPlaceholder"
+                  @input="clearMineruToken = false"
+                />
+                <el-button
+                  v-if="form.mineru.api_token_configured"
+                  text
+                  type="danger"
+                  class="clear-secret"
+                  @click="markMineruTokenForRemoval"
+                >
+                  {{ clearMineruToken ? '取消清除' : '清除已保存令牌' }}
+                </el-button>
+              </el-form-item>
+              <el-form-item label="解析能力" class="wide-field">
+                <el-checkbox v-model="form.mineru.ocr">OCR</el-checkbox>
+                <el-checkbox v-model="form.mineru.formula_enable">公式</el-checkbox>
+                <el-checkbox v-model="form.mineru.table_enable">表格</el-checkbox>
+              </el-form-item>
+            </div>
+
+            <div class="form-grid compact-grid">
+              <el-form-item label="语言">
+                <el-input v-model.trim="form.mineru.language" placeholder="ch" />
+              </el-form-item>
+              <el-form-item label="请求超时（秒）">
+                <el-input-number
+                  v-model="form.mineru.request_timeout_seconds"
+                  :min="1"
+                  :max="300"
+                  controls-position="right"
+                />
+              </el-form-item>
+              <el-form-item label="任务超时（秒）">
+                <el-input-number
+                  v-model="form.mineru.task_timeout_seconds"
+                  :min="1"
+                  :max="7200"
+                  controls-position="right"
+                />
+              </el-form-item>
+              <el-form-item label="轮询间隔（秒）">
+                <el-input-number
+                  v-model="form.mineru.poll_interval_seconds"
+                  :min="0.1"
+                  :max="30"
+                  :step="0.5"
+                  controls-position="right"
+                />
+              </el-form-item>
+              <el-form-item v-if="form.mineru.provider === 'official'" label="请求重试次数">
+                <el-input-number
+                  v-model="form.mineru.request_retries"
+                  :min="1"
+                  :max="10"
+                  controls-position="right"
+                />
+              </el-form-item>
+            </div>
+          </el-form>
+        </el-tab-pane>
+      </el-tabs>
+    </div>
+
+    <template #footer>
+      <el-button @click="closeDialog">取消</el-button>
+      <el-button type="primary" :loading="saving" :disabled="loading" @click="saveSettings">
+        保存设置
+      </el-button>
+    </template>
+  </el-dialog>
+</template>
+
+<script setup lang="ts">
+import { ElMessage } from 'element-plus'
+import { computed, ref } from 'vue'
+
+import {
+  getIntegrationSettings,
+  updateIntegrationSettings,
+} from '@/api/integration-settings-api'
+import type {
+  IntegrationSettings,
+  IntegrationSettingsUpdate,
+} from '@/types/integration-settings'
+
+defineProps<{ modelValue: boolean }>()
+const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
+
+const activeTab = ref('agent')
+const loading = ref(false)
+const saving = ref(false)
+const settings = ref<IntegrationSettings | null>(null)
+const form = ref<IntegrationSettings | null>(null)
+const agentApiKey = ref('')
+const mineruApiToken = ref('')
+const clearAgentKey = ref(false)
+const clearMineruToken = ref(false)
+
+const agentKeyPlaceholder = computed(() => {
+  if (clearAgentKey.value) return '密钥将在保存后清除'
+  return form.value?.agent.api_key_configured ? '已配置，留空则保留' : '输入 API Key'
+})
+
+const mineruTokenPlaceholder = computed(() => {
+  if (clearMineruToken.value) return '令牌将在保存后清除'
+  return form.value?.mineru.api_token_configured ? '已配置，留空则保留' : '输入 API Token'
+})
+
+async function loadSettings() {
+  loading.value = true
+  try {
+    const loaded = await getIntegrationSettings()
+    settings.value = loaded
+    form.value = structuredClone(loaded)
+    agentApiKey.value = ''
+    mineruApiToken.value = ''
+    clearAgentKey.value = false
+    clearMineruToken.value = false
+  } catch {
+    ElMessage.error('无法读取集成设置，请确认本地后端已启动')
+  } finally {
+    loading.value = false
+  }
+}
+
+function closeDialog() {
+  emit('update:modelValue', false)
+}
+
+function markAgentKeyForRemoval() {
+  clearAgentKey.value = !clearAgentKey.value
+  agentApiKey.value = ''
+}
+
+function markMineruTokenForRemoval() {
+  clearMineruToken.value = !clearMineruToken.value
+  mineruApiToken.value = ''
+}
+
+function hasHttpUrl(value: string) {
+  return value.startsWith('http://') || value.startsWith('https://')
+}
+
+function validateSettings(): boolean {
+  if (!form.value) return false
+  if (form.value.agent.enabled) {
+    if (!hasHttpUrl(form.value.agent.base_url) || !form.value.agent.model) {
+      activeTab.value = 'agent'
+      ElMessage.warning('启用 Agent 前请填写有效的 API 地址和模型')
+      return false
+    }
+    if (!form.value.agent.api_key_configured && !agentApiKey.value) {
+      activeTab.value = 'agent'
+      ElMessage.warning('启用 Agent 前请填写 API Key')
+      return false
+    }
+  }
+  const mineruUrl =
+    form.value.mineru.provider === 'local'
+      ? form.value.mineru.local_url
+      : form.value.mineru.official_api_url
+  if (!hasHttpUrl(mineruUrl)) {
+    activeTab.value = 'mineru'
+    ElMessage.warning('请填写有效的 MinerU 服务地址')
+    return false
+  }
+  if (
+    form.value.mineru.provider === 'official' &&
+    !form.value.mineru.api_token_configured &&
+    !mineruApiToken.value
+  ) {
+    activeTab.value = 'mineru'
+    ElMessage.warning('使用官方 MinerU API 前请填写 API Token')
+    return false
+  }
+  return true
+}
+
+async function saveSettings() {
+  if (!form.value || !validateSettings()) return
+  const payload: IntegrationSettingsUpdate = {
+    agent: {
+      enabled: form.value.agent.enabled,
+      base_url: form.value.agent.base_url,
+      model: form.value.agent.model,
+      analysis_model: form.value.agent.analysis_model,
+      thinking_mode: form.value.agent.thinking_mode,
+      timeout_seconds: form.value.agent.timeout_seconds,
+      clear_api_key: clearAgentKey.value,
+      ...(agentApiKey.value ? { api_key: agentApiKey.value } : {}),
+    },
+    mineru: {
+      provider: form.value.mineru.provider,
+      local_url: form.value.mineru.local_url,
+      backend: form.value.mineru.backend,
+      language: form.value.mineru.language,
+      parse_method: form.value.mineru.parse_method,
+      official_api_url: form.value.mineru.official_api_url,
+      official_api_model: form.value.mineru.official_api_model,
+      ocr: form.value.mineru.ocr,
+      formula_enable: form.value.mineru.formula_enable,
+      table_enable: form.value.mineru.table_enable,
+      request_timeout_seconds: form.value.mineru.request_timeout_seconds,
+      request_retries: form.value.mineru.request_retries,
+      task_timeout_seconds: form.value.mineru.task_timeout_seconds,
+      poll_interval_seconds: form.value.mineru.poll_interval_seconds,
+      clear_api_token: clearMineruToken.value,
+      ...(mineruApiToken.value ? { official_api_token: mineruApiToken.value } : {}),
+    },
+  }
+  saving.value = true
+  try {
+    settings.value = await updateIntegrationSettings(payload)
+    ElMessage.success('集成设置已保存')
+    closeDialog()
+  } catch {
+    ElMessage.error('保存失败，请检查设置后重试')
+  } finally {
+    saving.value = false
+  }
+}
+</script>
+
+<style scoped>
+:global(.settings-dialog.el-dialog) {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32px);
+  margin-top: 16px;
+  overflow: hidden;
+}
+
+:global(.settings-dialog .el-dialog__body) {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.settings-body {
+  min-height: 390px;
+}
+
+.settings-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #dce3ea;
+  border-radius: 6px;
+  color: #596978;
+  font-size: 13px;
+}
+
+.settings-form {
+  padding-top: 8px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 2px 0 16px;
+}
+
+.switch-row p {
+  margin: 4px 0 0;
+  color: #71808f;
+  font-size: 13px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+}
+
+.wide-field {
+  grid-column: 1 / -1;
+}
+
+.clear-secret {
+  margin-left: auto;
+  padding-right: 0;
+}
+
+.compact-grid {
+  padding-top: 8px;
+  border-top: 1px solid #e4e9ee;
+}
+
+:deep(.el-input-number),
+:deep(.el-select) {
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .settings-status,
+  .switch-row {
+    align-items: flex-start;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wide-field {
+    grid-column: auto;
+  }
+}
+</style>

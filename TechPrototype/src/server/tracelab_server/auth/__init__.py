@@ -1,0 +1,1 @@
+"""Cloud authentication primitives."""

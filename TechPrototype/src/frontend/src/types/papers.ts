@@ -1,0 +1,75 @@
+export interface PaperDocument {
+  id: number
+  project_id: number
+  filename: string
+  title: string
+  abstract: string
+  sections: Array<Record<string, unknown>>
+  paragraphs: Array<Record<string, unknown>>
+  parser: string
+  parser_version: string
+  parse_status: string
+  content_hash: string
+  created_at: string
+}
+
+export interface PaperParseJob {
+  id: string
+  project_id: number
+  filename: string
+  parser: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  created_at: string
+  updated_at: string
+  external_task_id: string | null
+  error: string | null
+  cached: boolean
+  document_id: number | null
+}
+
+export interface PaperParseResult {
+  job: PaperParseJob
+  document: PaperDocument
+  parser: string
+  parser_version: string
+  pages: WorkspacePaperPage[]
+}
+
+export interface WorkspacePaperPage {
+  page_number: number
+  title: string
+  body: string[]
+  anchors: Array<Record<string, unknown>>
+}
+
+export interface WorkspacePaperSection {
+  id: string
+  title: string
+  level: number
+  page: number | null
+}
+
+export interface WorkspacePaperDocument {
+  document_id: number
+  filename: string
+  title: string
+  markdown: string
+  sections: WorkspacePaperSection[]
+  asset_base_url: string
+  parser: string
+  parser_version: string
+  source: 'mineru-markdown' | 'normalized-fallback'
+  blocks: WorkspacePaperBlock[]
+}
+
+export interface WorkspacePaperBlock {
+  id: string
+  kind: string
+  text: string
+  page: number
+  page_number?: number
+  bbox: number[] | null
+  section_path: string[]
+  render_anchor: string
+  anchor_resolved: boolean
+}

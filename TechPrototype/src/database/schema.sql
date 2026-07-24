@@ -1,0 +1,46 @@
+CREATE TABLE IF NOT EXISTS project (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(160) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS paper_document (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    filename VARCHAR(255) NOT NULL,
+    storage_path TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    abstract TEXT NOT NULL DEFAULT '',
+    sections_json JSON NOT NULL,
+    paragraphs_json JSON NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS code_repository (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    filename VARCHAR(255) NOT NULL,
+    storage_path TEXT NOT NULL,
+    file_tree_json JSON NOT NULL,
+    symbols_json JSON NOT NULL,
+    imports_json JSON NOT NULL,
+    pytorch_candidates_json JSON NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS trace_link (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    paper_ref VARCHAR(255) NOT NULL,
+    code_ref VARCHAR(255) NOT NULL,
+    relation_type VARCHAR(64) NOT NULL,
+    confidence FLOAT NOT NULL DEFAULT 0,
+    rationale TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE
+);
+
