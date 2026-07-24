@@ -114,7 +114,9 @@ def test_0012_repairs_early_0010_trace_target_drift(tmp_path: Path) -> None:
                 "agent_analysis_model VARCHAR(160) NOT NULL DEFAULT ''"
             )
         )
-        connection.execute(text("UPDATE alembic_version SET version_num='0011_agent_analysis_model'"))
+        connection.execute(
+            text("UPDATE alembic_version SET version_num='0011_agent_analysis_model'")
+        )
 
     upgrade_database(engine, SQLModel.metadata)
 

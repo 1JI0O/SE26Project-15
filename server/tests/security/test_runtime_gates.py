@@ -30,7 +30,8 @@ def test_production_requires_email_delivery_and_external_backup() -> None:
         production_settings(backup_remote="").validate_runtime()
 
 
-def test_sync_feature_is_disabled_by_default() -> None:
+def test_sync_feature_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CLOUD_SYNC_FEATURE_ENABLED", raising=False)
     assert ServerSettings(app_env="test").cloud_sync_feature_enabled is False
 
 
