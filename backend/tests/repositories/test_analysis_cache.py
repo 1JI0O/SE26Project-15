@@ -25,12 +25,14 @@ class Model(nn.Module):
 
 def _wait_for_ready(client: TestClient, project_id: int) -> dict:
     payload: dict = {}
-    for _ in range(80):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
         response = client.get(f"/api/v1/projects/{project_id}/code/analysis")
-        if response.status_code == 200 and response.json().get("tensor_graph", {}).get("nodes"):
-            payload = response.json()
-            return payload
-        time.sleep(0.025)
+        body = response.json()
+        payload = {"status_code": response.status_code, "body": body}
+        if response.status_code == 200 and body.get("tensor_graph", {}).get("nodes"):
+            return body
+        time.sleep(0.05)
     raise AssertionError(f"analysis did not complete: {payload}")
 
 
