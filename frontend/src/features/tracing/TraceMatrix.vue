@@ -28,6 +28,15 @@
       :title="degraded ? `${mode} · Agent 分析失败，已保留现有结果` : `${mode} · 分析完成`"
     />
 
+    <div v-if="rows.length" class="trace-legend" aria-label="高亮图例">
+      <span><i class="legend-dot legend-proposed" />候选（蓝）</span>
+      <span><i class="legend-dot legend-accepted" />已接受（绿）</span>
+      <span><i class="legend-dot legend-fanout" />一对多（紫）</span>
+      <span><i class="legend-dot legend-fanin" />多对一（青）</span>
+      <span><i class="legend-dot legend-active" />当前选中（黄）</span>
+      <span><i class="legend-dot legend-hover" />悬停预览（浅黄）</span>
+    </div>
+
     <!-- Loading state -->
     <div v-if="loading" class="state-placeholder">
       <el-icon class="is-loading" :size="20"><i class="el-icon-loading" /></el-icon>
@@ -104,10 +113,10 @@
         </span>
         <span class="review-actions">
           <template v-if="row.id && row.status === 'proposed'">
-            <el-button size="small" text type="danger" @click.stop="$emit('review', row.id, 'rejected')">
+            <el-button size="small" text type="danger" @click.stop="reviewOne(row.id, 'rejected')">
               拒绝
             </el-button>
-            <el-button size="small" text type="success" @click.stop="$emit('review', row.id, 'accepted')">
+            <el-button size="small" text type="success" @click.stop="reviewOne(row.id, 'accepted')">
               接受
             </el-button>
           </template>
@@ -191,6 +200,12 @@ function emitBatch(
   const ids = useSelection ? Array.from(selectedSet.value) : undefined
   emit('reviewBatch', status, ids)
   selectedSet.value = new Set()
+  emit('leaveRow')
+}
+
+function reviewOne(traceId: string, status: Extract<TraceStatus, 'accepted' | 'rejected'>): void {
+  emit('review', traceId, status)
+  emit('leaveRow')
 }
 
 function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'info' | 'danger' {
@@ -258,6 +273,57 @@ function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'in
 
 .batch-count {
   color: #667789;
+}
+
+.trace-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f8fafb;
+  color: #667789;
+  font-size: 11px;
+}
+
+.trace-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legend-proposed {
+  background: rgba(88, 133, 255, 0.55);
+}
+
+.legend-accepted {
+  background: rgba(46, 168, 118, 0.65);
+}
+
+.legend-fanout {
+  background: rgba(139, 92, 246, 0.65);
+}
+
+.legend-fanin {
+  background: rgba(8, 145, 178, 0.65);
+}
+
+.legend-active {
+  background: #e0a83a;
+}
+
+.legend-hover {
+  background: rgba(224, 168, 58, 0.35);
+  border: 1px solid rgba(224, 168, 58, 0.55);
 }
 
 .state-placeholder {

@@ -181,6 +181,17 @@ export function useTrace(projectId: () => number) {
     cancelling.value = false
     cancelledRun = false
     error.value = null
+    if (force) {
+      traceLinks.value = []
+      traceRows.value = []
+      mode.value = ''
+      degraded.value = false
+      degradedReason.value = null
+      analysisLog.value = []
+      analysisProgress.value = ''
+      analysisActivity.value = ''
+      analysisStep.value = 0
+    }
     try {
       // Always force a fresh job on explicit user click. Reusing a stuck
       // queued/running fingerprint made the UI freeze on「等待 Agent 分析」.

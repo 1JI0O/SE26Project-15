@@ -88,21 +88,35 @@ const imageObjectUrls = new Set<string>()
 let blockJumpActive = false
 let settleTimer = 0
 let settleRaf = 0
+let highlightTimer = 0
 let highlightedElement: HTMLElement | null = null
+const TEMP_HIGHLIGHT_MS = 3200
+// Debounce hover so crossing glyph boundaries inside one mark doesn't flicker the trace box.
+let lastHoveredTargetId: string | null = null
+let hoverLeaveTimer = 0
 // Observes which heading is at the top of the viewport (TOC highlight only, never scrolls).
 let sectionObserver: IntersectionObserver | null = null
 const headingVisibility = new Map<string, number>()
 
 // Hold scroll-tracking suppression open until the smooth scroll actually stops (scrollTop
 // stable for a few frames), instead of a fixed 900ms that can expire mid-animation.
-function holdSuppressionUntilSettled(): void {
+function holdSuppressionUntilSettled(onSettled?: () => void): void {
   blockJumpActive = true
   window.clearTimeout(settleTimer)
   window.cancelAnimationFrame(settleRaf)
   const root = scrollRef.value
-  if (!root) return
+  if (!root) {
+    blockJumpActive = false
+    onSettled?.()
+    return
+  }
   let last = root.scrollTop
   let stableFrames = 0
+  const finish = (): void => {
+    window.cancelAnimationFrame(settleRaf)
+    blockJumpActive = false
+    onSettled?.()
+  }
   const tick = (): void => {
     const current = root.scrollTop
     if (Math.abs(current - last) < 1) {
@@ -112,17 +126,14 @@ function holdSuppressionUntilSettled(): void {
     }
     last = current
     if (stableFrames >= 4) {
-      blockJumpActive = false
+      finish()
       return
     }
     settleRaf = window.requestAnimationFrame(tick)
   }
   settleRaf = window.requestAnimationFrame(tick)
   // Hard safety cap: never stay locked longer than 2.5s.
-  settleTimer = window.setTimeout(() => {
-    window.cancelAnimationFrame(settleRaf)
-    blockJumpActive = false
-  }, 2500)
+  settleTimer = window.setTimeout(finish, 2500)
 }
 
 const renderedMarkdown = computed(() =>
@@ -170,9 +181,40 @@ function scrollToSection(sectionId: string): void {
   root.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
 }
 
-function scrollToBlock(blockId: string, quote = ''): boolean {
+function clearTempHighlight(): void {
+  window.clearTimeout(highlightTimer)
+  highlightedElement?.classList.remove('paper-block-highlight')
+  highlightedElement = null
+}
+
+function scheduleTempHighlight(el: HTMLElement): void {
+  clearTempHighlight()
+  highlightedElement = el
+  highlightedElement.classList.add('paper-block-highlight')
+  holdSuppressionUntilSettled(() => {
+    highlightTimer = window.setTimeout(() => {
+      highlightedElement?.classList.remove('paper-block-highlight')
+      highlightedElement = null
+    }, TEMP_HIGHLIGHT_MS)
+  })
+}
+
+function scrollToBlock(blockId: string, quote = '', paperTargetId: string | null = null): boolean {
   const root = scrollRef.value
   if (!root) return false
+
+  // Prefer the persistent trace mark for this target — lands on the exact underlined fragment.
+  if (paperTargetId) {
+    const mark = root.querySelector<HTMLElement>(
+      `[data-trace-target="${CSS.escape(paperTargetId)}"]`,
+    )
+    if (mark) {
+      mark.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      scheduleTempHighlight(mark)
+      return true
+    }
+  }
+
   const block = props.blocks.find((item) => item.id === blockId)
   // Prefer the injected block anchor (id or data-paper-block-id); fall back to fuzzy quote.
   let target =
@@ -187,22 +229,15 @@ function scrollToBlock(blockId: string, quote = ''): boolean {
     ) ?? null
   }
   if (!target) return false
-  highlightedElement?.classList.remove('paper-block-highlight')
   // Resolve the element that visually represents the block: for a math block the anchor is an
   // empty <span> inside an empty <p>, so highlight the following .math-display instead of the
   // zero-height wrapper (which showed as a thin strip on top).
   const visualTarget = target.matches('span') ? resolveVisualBlock(target) : target
-  highlightedElement = visualTarget || target
-  highlightedElement.classList.add('paper-block-highlight')
-  const anchorForScroll = highlightedElement
+  const anchorForScroll = visualTarget || target
   const top =
     anchorForScroll.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
-  holdSuppressionUntilSettled()
   root.scrollTo({ top: Math.max(0, top - root.clientHeight * 0.2), behavior: 'smooth' })
-  window.setTimeout(() => {
-    highlightedElement?.classList.remove('paper-block-highlight')
-    highlightedElement = null
-  }, 1800)
+  scheduleTempHighlight(anchorForScroll)
   return true
 }
 
@@ -225,11 +260,21 @@ function traceTargetId(event: Event): string | null {
 
 function onTraceOver(event: MouseEvent): void {
   const id = traceTargetId(event)
-  if (id) emit('traceHover', id)
+  window.clearTimeout(hoverLeaveTimer)
+  if (!id) return
+  if (id === lastHoveredTargetId) return
+  lastHoveredTargetId = id
+  emit('traceHover', id)
 }
 
 function onTraceOut(event: MouseEvent): void {
-  if (traceTargetId(event)) emit('traceLeave')
+  const id = traceTargetId(event)
+  if (!id) return
+  window.clearTimeout(hoverLeaveTimer)
+  hoverLeaveTimer = window.setTimeout(() => {
+    lastHoveredTargetId = null
+    emit('traceLeave')
+  }, 60)
 }
 
 function onTraceClick(event: MouseEvent): void {
@@ -354,6 +399,8 @@ onBeforeUnmount(() => {
   revokeImageObjectUrls()
   teardownSectionObserver()
   window.clearTimeout(settleTimer)
+  window.clearTimeout(highlightTimer)
+  window.clearTimeout(hoverLeaveTimer)
   window.cancelAnimationFrame(settleRaf)
 })
 
@@ -526,6 +573,54 @@ defineExpose({ scrollToSection, scrollToBlock, unresolvedTargetIds })
   color: inherit;
 }
 
+/* One-to-many: one paper fragment maps to multiple code locations. */
+.markdown-body :deep(.trace-mark-1_to_n),
+.markdown-body :deep(.trace-block-1_to_n) {
+  box-shadow: inset 0 -2px 0 rgba(139, 92, 246, 0.65);
+}
+
+.markdown-body :deep(.trace-mark-1_to_n:not(.trace-mark-proposed):not(.trace-mark-accepted)) {
+  background: rgba(139, 92, 246, 0.12);
+}
+
+/* Many-to-one: multiple paper fragments share one code location. */
+.markdown-body :deep(.trace-mark-n_to_1),
+.markdown-body :deep(.trace-block-n_to_1) {
+  box-shadow: inset 0 -2px 0 rgba(8, 145, 178, 0.65);
+}
+
+.markdown-body :deep(.trace-mark-n_to_1:not(.trace-mark-proposed):not(.trace-mark-accepted)) {
+  background: rgba(8, 145, 178, 0.12);
+}
+
+/* Many-to-many: both fanout and fanin. */
+.markdown-body :deep(.trace-mark-n_to_n),
+.markdown-body :deep(.trace-block-n_to_n) {
+  box-shadow: inset 0 -2px 0 rgba(139, 92, 246, 0.65), inset 0 -4px 0 rgba(8, 145, 178, 0.45);
+}
+
+.markdown-body :deep(.trace-mark-badge) {
+  margin-left: 2px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.15);
+  color: #8b5cf6;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  vertical-align: super;
+}
+
+.markdown-body :deep(.trace-mark-badge-fanin) {
+  background: rgba(8, 145, 178, 0.15);
+  color: #0891b2;
+}
+
+.markdown-body :deep(.trace-mark-badge-both) {
+  background: rgba(139, 92, 246, 0.12);
+  color: #7c3aed;
+}
+
 .markdown-body :deep(.trace-block-target) {
   cursor: pointer;
   border-left: 3px solid rgba(88, 133, 255, 0.5);
@@ -570,6 +665,21 @@ defineExpose({ scrollToSection, scrollToBlock, unresolvedTargetIds })
 .markdown-body :deep(.math-display.trace-block-accepted) {
   background: rgba(46, 168, 118, 0.16);
   outline-color: rgba(46, 168, 118, 0.5);
+}
+
+.markdown-body :deep(.math-display.trace-block-1_to_n) {
+  outline-color: rgba(139, 92, 246, 0.55);
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.markdown-body :deep(.math-display.trace-block-n_to_1) {
+  outline-color: rgba(8, 145, 178, 0.55);
+  background: rgba(8, 145, 178, 0.12);
+}
+
+.markdown-body :deep(.math-display.trace-block-n_to_n) {
+  outline-color: rgba(139, 92, 246, 0.55);
+  background: rgba(139, 92, 246, 0.1);
 }
 
 .markdown-body :deep(.math-display.paper-block-highlight) {
