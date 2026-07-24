@@ -103,3 +103,22 @@ cloudHttp.interceptors.response.use(undefined, async (error: AxiosError) => {
 // dedicated UUID-based clients and never calls the loopback API.
 export const http = localHttp
 export const apiBaseUrl = localApiBaseUrl
+
+// Pull the server-provided error detail out of an axios failure so callers can
+// surface the real reason (e.g. a sync 422 "Payload contains a forbidden field")
+// instead of the generic "Request failed with status code 422". Falls back to
+// the error message, then a caller-supplied default.
+export function extractErrorDetail(error: unknown, fallback = ''): string {
+  if (axios.isAxiosError(error)) {
+    const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail
+    if (typeof detail === 'string' && detail.trim()) return detail
+    if (Array.isArray(detail) && detail.length) {
+      // FastAPI request-validation errors return a list of {loc, msg, ...}.
+      const first = detail[0] as { msg?: unknown } | undefined
+      if (first && typeof first.msg === 'string' && first.msg.trim()) return first.msg
+    }
+    if (error.message) return error.message
+  }
+  if (error instanceof Error && error.message) return error.message
+  return fallback
+}

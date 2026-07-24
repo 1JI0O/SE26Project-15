@@ -28,6 +28,32 @@ function browserCsrfCookie(): string {
     ?.split('=', 2)[1] ?? ''
 }
 
+// The cloud assigns a device id at first login and REUSES it when the client
+// passes the same id back (single active device per account). We persist it so a
+// fresh login after a failed refresh (e.g. session revoked elsewhere) reuses the
+// same device instead of minting a new one. Device churn would otherwise strand
+// previously-enabled projects on a dead device and break their sync.
+const DEVICE_ID_STORAGE_KEY = 'tracelab_device_id'
+
+function loadPersistedDeviceId(): string {
+  if (typeof localStorage === 'undefined') return ''
+  try {
+    return localStorage.getItem(DEVICE_ID_STORAGE_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function persistDeviceId(deviceId: string): void {
+  if (typeof localStorage === 'undefined' || !deviceId) return
+  try {
+    localStorage.setItem(DEVICE_ID_STORAGE_KEY, deviceId)
+  } catch {
+    // Storage may be unavailable (private mode / disabled). The device id still
+    // lives in memory for this session; churn protection is simply best-effort.
+  }
+}
+
 export const useAuthStore = defineStore('cloud-auth', {
   state: () => ({
     accessToken: '',
@@ -58,12 +84,16 @@ export const useAuthStore = defineStore('cloud-auth', {
       this.accessToken = payload.access_token
       this.csrfToken = payload.csrf_token ?? browserCsrfCookie()
       this.deviceId = payload.device_id ?? this.deviceId
+      persistDeviceId(this.deviceId)
       this.user = payload.user
       this.workspace = payload.default_workspace
       setCloudAccessToken(this.accessToken)
     },
     async initialize() {
       if (this.ready) return
+      // Reuse the device id from a previous session so a fresh login (after a
+      // failed refresh) keeps the same cloud device instead of minting a new one.
+      this.deviceId = this.deviceId || loadPersistedDeviceId()
       setCloudRefreshHandler(() => this.refresh())
       setSessionExpiredHandler(() => {
         // A revoked session (e.g. this account logged in on another device)

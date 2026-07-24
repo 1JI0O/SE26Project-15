@@ -9,6 +9,11 @@ class LocalSyncEnable(BaseModel):
     agent_history_sync: bool = True
 
 
+class LocalDeviceAdopt(BaseModel):
+    workspace_id: str = Field(min_length=36, max_length=36)
+    device_id: str = Field(min_length=36, max_length=36)
+
+
 class LocalSyncModePatch(BaseModel):
     sync_mode: Literal["cloud_enabled", "cloud_paused", "cloud_detached", "local_only"]
 

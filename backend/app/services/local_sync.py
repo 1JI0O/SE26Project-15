@@ -8,6 +8,48 @@ from sqlmodel import Session
 from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
 from app.models.sync import LocalSyncOutbox, LocalSyncState
 
+# Canonical mirror of the cloud server's cloud_sync.FORBIDDEN_SYNC_KEYS
+# (server/tracelab_server/services/cloud_sync.py). The server recursively rejects
+# any sync push whose payload contains one of these keys (or a key ending in
+# "_api_key") with HTTP 422. Agent operation payloads embed arbitrary runtime
+# data (tool results, run-event payloads, message metadata) that can carry local
+# paths / secrets, so we strip these keys client-side BEFORE they ever reach the
+# outbox/push — both to unblock sync and to keep device-local secrets off the
+# cloud. Keep this set in sync with the server definition; the drift test in
+# backend/tests guards against regressions.
+FORBIDDEN_SYNC_KEYS = {
+    "storage_path",
+    "absolute_path",
+    "local_path",
+    "api_key",
+    "llm_api_key",
+    "mineru_api_key",
+    "refresh_token",
+    "access_token",
+    "secret",
+    "_upload_content",
+}
+
+
+def scrub_forbidden_keys(value: Any) -> Any:
+    """Recursively drop forbidden keys, returning a new structure.
+
+    Mirrors the server's ``_validate_sync_payload`` rule (casefolded membership in
+    ``FORBIDDEN_SYNC_KEYS`` or ``endswith("_api_key")``). Pure and non-mutating:
+    it must not alter the ORM-derived dicts handed to ``record_local_operation``.
+    """
+    if isinstance(value, dict):
+        cleaned: dict[Any, Any] = {}
+        for key, child in value.items():
+            normalized = str(key).casefold()
+            if normalized in FORBIDDEN_SYNC_KEYS or normalized.endswith("_api_key"):
+                continue
+            cleaned[key] = scrub_forbidden_keys(child)
+        return cleaned
+    if isinstance(value, list):
+        return [scrub_forbidden_keys(child) for child in value]
+    return value
+
 
 def _state(session: Session, project: Project) -> LocalSyncState | None:
     if not project.cloud_workspace_id:
@@ -37,7 +79,7 @@ def record_local_operation(
         entity_public_id=entity_public_id,
         operation=operation,
         base_version=base_version,
-        payload_json=payload,
+        payload_json=scrub_forbidden_keys(payload),
     )
     session.add(item)
     return item
