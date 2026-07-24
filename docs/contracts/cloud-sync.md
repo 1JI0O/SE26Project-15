@@ -62,6 +62,38 @@ Project、TraceLink 决定采用乐观锁；文件以 ArtifactVersion 保留多�
 Run Event 只追加。`pull.limit` 范围为 1–500，客户端持久化成功后才可 `ack`。
 冲突解决必须创建新的 `client_operation_id`，并通过 `supersedes_operation_id` 指向原冲突 receipt。
 
+## 禁用字段（forbidden keys）
+
+服务端 `cloud_sync._find_forbidden_key` 会**递归**扫描 push payload，只要任意层级出现以下键
+（大小写不敏感）或以 `_api_key` 结尾的键，整个 `/sync/push` 请求直接 `422 "Payload contains a
+forbidden field"`：
+
+```text
+storage_path, absolute_path, local_path, api_key, llm_api_key,
+mineru_api_key, refresh_token, access_token, secret, _upload_content
+```
+
+这是防止本地路径 / 密钥泄露到云端的安全护栏，**不可放宽**。由于客户端把同一工作区的所有子操作
+打包进一条 push 请求、且服务端一条失败即整批失败，Agent 运行数据（run event payload、message
+metadata、memory source 等任意运行时字段）若含上述键，会**阻塞整个工作区的同步**。
+
+因此 Desktop 本地后端必须在写入和读取 outbox 时**剥离这些键**：`local_sync.scrub_forbidden_keys`
+在 `record_local_operation`（入队时）与 `read_outbox`（序列化给客户端时，可自愈修复前已入库的
+历史脏行）两处应用。`local_sync.FORBIDDEN_SYNC_KEYS` 是服务端集合的**镜像**，两端必须保持一致，
+`backend/tests/sync/test_forbidden_key_scrub.py` 有漂移守卫测试。服务端命中时记 WARNING（仅键名、
+不记键值）便于定位。
+
+## 领域字段校验（bounded envelope）
+
+`sync_validation.validate_domain_operation` 对每条非 project upsert 校验必填字段与受限取值，命中即
+`422` 并记 WARNING（仅原因、不记取值）。取值词表必须与客户端 canonical 枚举一致，否则整批 push 失败：
+
+- TraceLink `status` ∈ `{proposed, accepted, rejected, stale}`（`proposed` 是新生成链接的初始态，
+  见 `frontend`/`backend/app/schemas/traces.py` 的 `TraceStatus`；`pending` 仅为历史兼容保留）。
+- AgentMessage `role` ∈ `{user, assistant, system, tool}`。
+- 必填字段见 `REQUIRED_UPSERT_FIELDS`（如 trace_link 需 `paper_ref/code_ref/status`，
+  agent_message 需 `conversation_public_id/role`）。
+
 ## 同步数据分类
 
 | 分类 | 进入 outbox/event | 存储方式 |

@@ -36,6 +36,7 @@ from app.schemas.local_sync import (
     LocalCloudEntityImport,
     LocalCloudProjectImport,
     LocalConflictResolve,
+    LocalDeviceAdopt,
     LocalSyncEnable,
     LocalSyncModePatch,
     LocalSyncResults,
@@ -49,6 +50,7 @@ from app.services.local_sync import (
     project_payload,
     record_local_operation,
     repository_payload,
+    scrub_forbidden_keys,
     trace_payload,
 )
 from app.services.paper_parser import parse_pdf
@@ -65,7 +67,9 @@ def import_cloud_project(
     if state is None:
         state = LocalSyncState(workspace_id=payload.workspace_id, device_id=payload.device_id)
     elif state.device_id != payload.device_id:
-        raise HTTPException(status_code=409, detail="Workspace is bound to another local device")
+        # Device ids rotate across logins; adopt the current device for this
+        # workspace instead of refusing the cloud import.
+        _adopt_workspace_device(session, payload.workspace_id, payload.device_id)
     project = session.exec(select(Project).where(Project.public_id == payload.public_id)).first()
     if project is None:
         project = Project(
@@ -641,6 +645,44 @@ def _apply_remote_conflict_value(
             session.add(entity)
 
 
+def _adopt_workspace_device(session: Session, workspace_id: str, device_id: str) -> bool:
+    """Re-point a workspace's local sync state (and any pending outbox ops) to the
+    given device.
+
+    ``LocalSyncState.device_id`` is per-install-local: an install must always sync
+    as its CURRENT auth device. Device ids rotate across logins (a fresh login
+    without a persisted id mints a new device), which would otherwise strand a
+    previously-enabled workspace on a dead device — the cloud then rejects blob
+    uploads (409 unbound device) and pushes (403 invalid sync device). Realigning
+    the state and the pending outbox to the current device keeps sync working and
+    is always safe because this state is local to a single install.
+    """
+    state = session.get(LocalSyncState, workspace_id)
+    if state is None or state.device_id == device_id:
+        return False
+    state.device_id = device_id
+    session.add(state)
+    pending = session.exec(
+        select(LocalSyncOutbox).where(
+            LocalSyncOutbox.workspace_id == workspace_id,
+            LocalSyncOutbox.status == "pending",
+        )
+    ).all()
+    for operation in pending:
+        operation.device_id = device_id
+        session.add(operation)
+    return True
+
+
+@router.post("/local-sync/device/adopt")
+def adopt_workspace_device(
+    payload: LocalDeviceAdopt, session: Session = Depends(get_session)
+) -> dict:
+    changed = _adopt_workspace_device(session, payload.workspace_id, payload.device_id)
+    session.commit()
+    return {"changed": changed}
+
+
 @router.get("/local-sync/state")
 def read_sync_state(workspace_id: str, session: Session = Depends(get_session)) -> dict:
     state = session.get(LocalSyncState, workspace_id)
@@ -666,7 +708,10 @@ def enable_project_sync(
     if state is None:
         state = LocalSyncState(workspace_id=payload.workspace_id, device_id=payload.device_id)
     elif state.device_id != payload.device_id:
-        raise HTTPException(status_code=409, detail="Workspace is bound to another local device")
+        # The workspace was previously bound to a different local device id. Since
+        # device ids rotate across logins, adopt the current device (realigning
+        # any pending outbox ops) instead of hard-failing the enable.
+        _adopt_workspace_device(session, payload.workspace_id, payload.device_id)
     project.cloud_workspace_id = payload.workspace_id
     project.sync_mode = "cloud_enabled"
     project.agent_history_sync = payload.agent_history_sync
@@ -933,7 +978,7 @@ def read_outbox(workspace_id: str, session: Session = Depends(get_session)) -> d
                 "entity_public_id": item.entity_public_id,
                 "operation": item.operation,
                 "base_version": item.base_version,
-                "payload": item.payload_json,
+                "payload": scrub_forbidden_keys(item.payload_json),
             }
             for item in rows
         ]

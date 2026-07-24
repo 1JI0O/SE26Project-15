@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 
-import { localHttp } from '@/api/http'
+import { extractErrorDetail, localHttp } from '@/api/http'
 import { deleteCloudProject, listCloudProjects } from '@/api/cloud-project-api'
 import { getProject, updateProject } from '@/api/project-api'
 import {
@@ -14,6 +14,11 @@ import type { CloudProject, SyncOperation } from '@/types/cloud'
 export const useSyncStore = defineStore('cloud-sync', {
   state: () => ({
     syncing: false,
+    // The public_id the user explicitly triggered a sync for, so only that
+    // project's row shows "正在同步" (a sync is workspace-wide under the hood, but
+    // the UI scopes the spinner to the clicked project). Null for background /
+    // workspace-level syncs that are not tied to a single row.
+    activeSyncPublicId: null as string | null,
     lastSyncedAt: '' as string,
     lastError: '' as string,
     conflictCount: 0,
@@ -25,10 +30,17 @@ export const useSyncStore = defineStore('cloud-sync', {
     cloudProjects: [] as CloudProject[],
   }),
   actions: {
-    async sync() {
+    async sync(focusPublicId?: string) {
       const auth = useAuthStore()
       if (!auth.workspace || !auth.deviceId || !auth.verified) return
+      // A sync is workspace-wide (it drains the whole outbox), so a second
+      // concurrent run would push the same operations again — racing the server's
+      // per-operation receipt insert and causing duplicate-key 500s. Serialize:
+      // if a sync is already in flight, this click is a no-op (the running sync
+      // already covers every project's pending work).
+      if (this.syncing) return
       this.syncing = true
+      this.activeSyncPublicId = focusPublicId ?? null
       this.lastError = ''
       try {
         const result = await synchronizeWorkspace(auth.workspace.workspace_id, auth.deviceId)
@@ -38,10 +50,11 @@ export const useSyncStore = defineStore('cloud-sync', {
         this.lastSyncedAt = new Date().toISOString()
         return result
       } catch (error) {
-        this.lastError = error instanceof Error ? error.message : '云同步失败'
+        this.lastError = extractErrorDetail(error, '云同步失败')
         throw error
       } finally {
         this.syncing = false
+        this.activeSyncPublicId = null
       }
     },
     async refreshPending() {
@@ -84,7 +97,9 @@ export const useSyncStore = defineStore('cloud-sync', {
       if (project.sync_mode === 'local_only' || project.sync_mode === 'cloud_detached') {
         return 'local'
       }
-      if (this.syncing) return 'syncing'
+      // Only the row the user actually triggered shows the syncing spinner; the
+      // rest keep their last-known pending/synced label during a workspace sync.
+      if (this.syncing && this.activeSyncPublicId === project.public_id) return 'syncing'
       if (this.pendingProjectPublicIds.includes(project.public_id)) return 'pending'
       return 'synced'
     },

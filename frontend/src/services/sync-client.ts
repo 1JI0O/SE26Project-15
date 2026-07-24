@@ -240,29 +240,74 @@ async function pushOperations(operations: SyncOperation[]): Promise<number> {
   return pushed.data.results.filter((result) => result.status === 'conflict').length
 }
 
+async function ensureDeviceBindings(workspaceId: string): Promise<void> {
+  // Re-bind the current device to every locally-enabled project that already
+  // exists on the cloud. A project op push also creates the binding, but only
+  // when there is a pending project op — a project whose metadata is already
+  // synced would otherwise have no binding for a newly-adopted device, so its
+  // blob uploads would 409. Best-effort: a project not yet on the cloud has no
+  // record to bind and its first project push will create the binding.
+  const projects = await localHttp.get<
+    Array<{ public_id: string; sync_mode: string; cloud_workspace_id: string | null }>
+  >('/projects')
+  for (const project of projects.data) {
+    if (project.sync_mode !== 'cloud_enabled') continue
+    if (project.cloud_workspace_id !== workspaceId) continue
+    try {
+      await cloudHttp.patch(`/projects/${project.public_id}/device-sync`, {
+        sync_mode: 'cloud_enabled',
+      })
+    } catch {
+      // Project not yet on the cloud (404) or transient failure — the project
+      // push will establish the binding.
+    }
+  }
+}
+
 export async function synchronizeWorkspace(
   workspaceId: string,
   deviceId: string,
 ): Promise<{ pushed: number; pulled: number; conflicts: number }> {
   if (!hasLocalWorkspace) return { pushed: 0, pulled: 0, conflicts: 0 }
-  const outbox = await localHttp.get<{ operations: SyncOperation[] }>('/local-sync/outbox', {
-    params: { workspace_id: workspaceId },
+  // Device ids rotate across logins (a fresh login without a persisted id mints
+  // a new device). A local install must always sync as its CURRENT auth device,
+  // so realign the workspace's local sync state + any pending outbox ops to it.
+  // When the device actually changed, also (re)establish the cloud device
+  // binding for every enabled project — blob upload-init (409) and push (403)
+  // both reject operations from a device that is not bound to the project.
+  const adopted = await localHttp.post<{ changed: boolean }>('/local-sync/device/adopt', {
+    workspace_id: workspaceId,
+    device_id: deviceId,
   })
-  // The CloudProject must exist server-side before any blob upload-init or
-  // child-entity push: the server rejects uploads for an unknown project with
-  // 409 "Project is not accepting uploads". attachBlob() calls the cloud, so it
-  // must run only AFTER the project operation has been pushed. Push project
-  // operations first, then attach blobs and push the remaining operations.
-  const projectOps = outbox.data.operations.filter((op) => op.entity_type === 'project')
-  const childOps = outbox.data.operations.filter((op) => op.entity_type !== 'project')
+  if (adopted.data.changed) await ensureDeviceBindings(workspaceId)
+  // Drain the outbox in batches. The local backend returns at most 100 pending
+  // ops per read, so a project with a long history (e.g. hundreds of agent run
+  // events) needs several rounds. Loop until nothing pending remains so a single
+  // sync fully clears the workspace instead of leaving it "待同步". The round cap
+  // bounds the loop if new ops are produced faster than they push (agent still
+  // running); the remainder drains on the next sync.
+  let pushedCount = 0
   let conflicts = 0
-  conflicts += await pushOperations(projectOps)
-  const preparedChildOps: SyncOperation[] = []
-  for (const operation of childOps) {
-    preparedChildOps.push(await attachBlob(operation))
+  for (let round = 0; round < 200; round += 1) {
+    const outbox = await localHttp.get<{ operations: SyncOperation[] }>('/local-sync/outbox', {
+      params: { workspace_id: workspaceId },
+    })
+    const operations = outbox.data.operations
+    if (!operations.length) break
+    // The CloudProject must exist server-side before any blob upload-init or
+    // child-entity push: the server rejects uploads for an unknown project.
+    // attachBlob() calls the cloud, so push project operations first, then attach
+    // blobs and push the remaining operations.
+    const projectOps = operations.filter((op) => op.entity_type === 'project')
+    const childOps = operations.filter((op) => op.entity_type !== 'project')
+    conflicts += await pushOperations(projectOps)
+    const preparedChildOps: SyncOperation[] = []
+    for (const operation of childOps) {
+      preparedChildOps.push(await attachBlob(operation))
+    }
+    conflicts += await pushOperations(preparedChildOps)
+    pushedCount += projectOps.length + preparedChildOps.length
   }
-  conflicts += await pushOperations(preparedChildOps)
-  const pushedCount = projectOps.length + preparedChildOps.length
   let after = 0
   try {
     const state = await localHttp.get<{ last_pulled_seq: number }>('/local-sync/state', {

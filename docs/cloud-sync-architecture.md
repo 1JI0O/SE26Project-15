@@ -193,9 +193,30 @@ GET  /api/v1/blobs/{blob_id}/download
 | `cloud_paused` | 当前设备只 pull，不消费普通 outbox；不影响其他设备 |
 | `cloud_detached` | 当前设备解除绑定并在本地恢复 `local_only`；不删除云端项目 |
 
+### 设备身份与自适配（device adoption）
+
+每个 push operation 都携带 `device_id`，服务器要求 `operation.device_id == 认证设备`（否则 403
+"Invalid sync device"），blob `upload-init` 也要求当前设备已绑定项目（否则 409）。因此本地
+`LocalSyncState.device_id`（每次 outbox 入队时写入 op）必须与**当前登录设备**一致。
+
+云端「单设备账号」会在登录时复用客户端回传的 `device_id`；客户端把它持久化（`localStorage`
+的 `tracelab_device_id`，见 [auth.ts](../frontend/src/stores/auth.ts)），使刷新失败后的重新登录
+仍复用同一设备，避免 device_id 漂移。若 device_id 仍发生变化（换机、被其他设备单点登录顶下线
+后重登），`synchronizeWorkspace` 会先调用 `POST /local-sync/device/adopt` 把该 workspace 的
+`LocalSyncState.device_id` 及所有 pending outbox 重指向当前设备，再对每个 `cloud_enabled` 项目
+`PATCH /projects/{public_id}/device-sync` 重建云端绑定，然后才 push/upload。`enable` 与云端项目
+导入遇到旧 device_id 时同样自适配而非报 409，因为该状态是**单个安装本地**的，重指向当前设备
+永远安全。
+
 云端项目删除是 owner 的独立操作，生成 30 天 tombstone 并影响所有设备。关闭 Agent 历史同步时，
 本地同一事务停止新 Agent outbox，并 suppress 尚未发送的 Agent operation；既有云端历史不会隐式
 删除。
+
+> **禁用字段剥离**：Agent operation 的 payload 内嵌任意运行时数据（run event payload、message
+> metadata、memory source），可能带 `storage_path` / `api_key` 等键。服务端对含这些键的 push
+> 直接 422 且整批失败，会阻塞整个工作区同步。本地后端在 `record_local_operation`（入队）与
+> `read_outbox`（读取，可自愈历史脏行）两处用 `scrub_forbidden_keys` 递归剥离，键集合镜像服务端
+> `cloud_sync.FORBIDDEN_SYNC_KEYS`。详见 [contracts/cloud-sync.md](contracts/cloud-sync.md#禁用字段forbidden-keys)。
 
 ## 7. Blob 和维护 Worker
 

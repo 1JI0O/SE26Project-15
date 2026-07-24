@@ -242,6 +242,52 @@ def test_project_sync_is_idempotent_and_conflicts_are_explicit(cloud_client: Tes
     assert resolved.json()["results"][0]["status"] == "applied"
 
 
+def test_push_rejects_payload_with_forbidden_field(cloud_client: TestClient) -> None:
+    """A nested forbidden key (local path / secret) is rejected with 422. The
+    desktop client scrubs these before push; this guards the server contract the
+    scrub mirrors."""
+    auth = _register_verify_login(cloud_client, "forbidden@example.com")
+    headers = {"Authorization": f"Bearer {auth['access_token']}"}
+    workspace_id = auth["default_workspace"]["workspace_id"]
+    poisoned = {
+        "workspace_id": workspace_id,
+        "device_id": auth["device_id"],
+        "client_operation_id": "33333333-3333-4333-8333-333333333333",
+        "entity_type": "agent_message",
+        "entity_public_id": "44444444-4444-4444-8444-444444444444",
+        "operation": "upsert",
+        "base_version": 0,
+        "payload": {
+            "project_public_id": "22222222-2222-4222-8222-222222222222",
+            "conversation_public_id": "55555555-5555-4555-8555-555555555555",
+            "role": "assistant",
+            "metadata": {"nested": {"storage_path": "/home/user/x"}},
+        },
+    }
+    response = cloud_client.post(
+        "/api/v1/sync/push", headers=headers, json={"operations": [poisoned]}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Payload contains a forbidden field"
+
+    # The same op with the forbidden key removed passes the payload gate (project
+    # binding is a separate, later concern — 422 must no longer be the blocker).
+    cleaned = {
+        **poisoned,
+        "client_operation_id": "33333333-3333-4333-8333-333333333334",
+        "payload": {
+            "project_public_id": "22222222-2222-4222-8222-222222222222",
+            "conversation_public_id": "55555555-5555-4555-8555-555555555555",
+            "role": "assistant",
+            "metadata": {"nested": {"tokens": 12}},
+        },
+    }
+    cleaned_response = cloud_client.post(
+        "/api/v1/sync/push", headers=headers, json={"operations": [cleaned]}
+    )
+    assert cleaned_response.status_code != 422
+
+
 def test_ack_rejects_cursor_beyond_workspace_sequence(cloud_client: TestClient) -> None:
     auth = _register_verify_login(cloud_client, "cursor@example.com")
     response = cloud_client.post(

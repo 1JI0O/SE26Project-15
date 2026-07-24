@@ -130,8 +130,8 @@
                       size="small"
                       text
                       :icon="Refresh"
-                      :loading="sync.syncing"
-                      @click.stop="syncNow()"
+                      :loading="sync.syncing && sync.activeSyncPublicId === row.local.public_id"
+                      @click.stop="syncNow(row.local.public_id)"
                     >同步</el-button>
                     <el-dropdown
                       v-if="managing && ['cloud_enabled', 'cloud_paused', 'cloud_detached'].includes(row.local.sync_mode)"
@@ -393,9 +393,9 @@ async function applyConflictChoice(choice: 'keep_cloud' | 'overwrite_cloud' | 'c
 }
 
 // Per-project manual sync (需求 3.1): push local changes + pull remote.
-async function syncNow() {
+async function syncNow(focusPublicId?: string) {
   try {
-    await sync.sync()
+    await sync.sync(focusPublicId)
     await store.fetchProjects()
     ElMessage.success('云同步完成')
   } catch {
