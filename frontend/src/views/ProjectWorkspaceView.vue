@@ -581,7 +581,11 @@
     />
 
     <!-- Fixed box (selected relation, both sides) + optional hover preview stacked above it. -->
-    <div v-if="traceIndex.selectedSummary.value || traceIndex.hoveredSummary.value" class="trace-box-stack">
+    <div
+      v-if="traceIndex.selectedSummary.value || traceIndex.hoveredSummary.value"
+      class="trace-box-stack"
+      :style="{ bottom: `${traceBoxBottom}px` }"
+    >
       <div v-if="traceIndex.hoveredSummary.value" class="trace-box trace-box-hover">
         <header class="trace-box-head">
           <span>悬浮预览</span>
@@ -801,6 +805,15 @@ const draggedPane = ref<PaneKey | null>(null)
 const explorerWidth = ref(260)
 const editorLeftPercent = ref(50)
 const bottomPanelHeight = ref(290)
+// The floating trace boxes dock right above the bottom panel so they never cover the matrix
+// review actions; when the panel is closed or maximized there is no "above" to dock to and
+// they fall back to sitting on the status bar.
+const viewportHeight = ref(window.innerHeight)
+const traceBoxBottom = computed(() => {
+  const base = 46 // status bar (23px) + margin
+  if (!bottomPanelOpen.value || bottomPanelMaximized.value) return base
+  return Math.min(23 + 12 + bottomPanelHeight.value, Math.round(viewportHeight.value * 0.55))
+})
 const storedAgentWidth = Number(window.localStorage.getItem('tracelab.agent.width'))
 const agentWidth = ref(
   Number.isFinite(storedAgentWidth) && storedAgentWidth >= 260
@@ -862,8 +875,13 @@ function onGlobalKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && traceIndex.pinned.value) traceIndex.unselect()
 }
 
+function onWindowResize(): void {
+  viewportHeight.value = window.innerHeight
+  clampAgentWidth()
+}
+
 onMounted(async () => {
-  window.addEventListener('resize', clampAgentWidth)
+  window.addEventListener('resize', onWindowResize)
   window.addEventListener('keydown', onGlobalKeydown)
   await nextTick()
   clampAgentWidth()
@@ -887,7 +905,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', clampAgentWidth)
+  window.removeEventListener('resize', onWindowResize)
   window.removeEventListener('keydown', onGlobalKeydown)
   stopResize()
   paper.cancelPolling() // stop any in-flight parse poll so it can't hit /projects/NaN/... (422)
@@ -2140,7 +2158,7 @@ watch(activeBottomPanel, (tab) => {
 .trace-box-stack {
   position: fixed;
   right: 18px;
-  bottom: 46px;
+  /* bottom is bound inline (traceBoxBottom): docked above the bottom panel when it is open. */
   z-index: 2200;
   display: flex;
   flex-direction: column;
@@ -2213,7 +2231,7 @@ watch(activeBottomPanel, (tab) => {
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  max-height: 44vh;
+  max-height: 30vh;
   overflow-y: auto;
   pointer-events: auto;
 }

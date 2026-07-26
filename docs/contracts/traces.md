@@ -23,6 +23,8 @@ GET  /api/v1/projects/{project_id}/trace-links
 
 分析失败时不生成静态或规则降级候选。旧 revision 结果保留为 stale 供审计。Agent 新结果使用 `source: "agent"`、`static_confidence: 0`。
 
+trace 分析任务内部可将区域取证并行派发给子代理（见 [agent 契约](agent.md) 的 `dispatch_trace_subagents`）；这只影响任务内部执行方式与 SSE 事件流的来源标注，`TraceLink` 数据形状与本契约的对外接口不变。
+
 ### 片段级锚点与评分（V1）
 
 每条 link 现在携带独立的 `PaperTarget` / `CodeTarget`（表 `paper_target` / `code_target`），并在 `TraceLink` 上新增 `paper_target_id`、`code_target_id`、`relevance` 列，以及 `score_basis_json` / `provenance_json`。`evidence` 每一侧新增：

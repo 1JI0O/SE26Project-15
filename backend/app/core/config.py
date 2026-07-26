@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     tracelab_agent_plugin_roots: list[str] | str = Field(default_factory=list)
     tracelab_analysis_inline_max_bytes: int = Field(default=512_000, ge=0)
     tracelab_analysis_workers: int = Field(default=2, ge=1, le=8)
+    # Parallel fan-out for trace analysis sub-agents (0/1 disables parallelism; the
+    # dispatch tool still works, regions just run sequentially).
+    tracelab_trace_subagent_parallelism: int = Field(default=3, ge=0, le=8)
+    # Per-region step budget for one trace sub-agent run.
+    tracelab_trace_subagent_steps: int = Field(default=14, ge=4, le=30)
     tracelab_agent_confirmation_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
     github_clone_timeout_seconds: int = Field(default=60, ge=5, le=300)
     # Loopback cloud reverse proxy. The desktop WebView cannot bypass TLS errors

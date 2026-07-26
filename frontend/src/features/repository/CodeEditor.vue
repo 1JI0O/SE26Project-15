@@ -78,6 +78,13 @@ const emit = defineEmits<{
 const editorContainer = ref<HTMLDivElement | null>(null)
 let editorView: EditorView | null = null
 let ignoreUpdate = false
+// The editor is destroyed and rebuilt asynchronously whenever the file changes (language pack
+// import). A reveal requested during that window must survive until the new view exists, and a
+// stale mount must never win over a newer file switch.
+let pendingReveal: { line: number } | null = null
+let mounting = false
+let mountToken = 0
+let flashTimer: number | undefined
 
 const setTraceDecorations = StateEffect.define<DecorationSet>()
 const traceField = StateField.define<DecorationSet>({
@@ -86,6 +93,24 @@ const traceField = StateField.define<DecorationSet>({
     value = value.map(tr.changes)
     for (const effect of tr.effects) {
       if (effect.is(setTraceDecorations)) value = effect.value
+    }
+    return value
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
+
+// One-shot flash on the jump target line; cleared by a timer.
+const flashLineDeco = Decoration.line({ class: 'cm-line-flash' })
+const setFlashLine = StateEffect.define<number | null>()
+const flashField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes)
+    for (const effect of tr.effects) {
+      if (effect.is(setFlashLine)) {
+        value =
+          effect.value === null ? Decoration.none : Decoration.set([flashLineDeco.range(effect.value)])
+      }
     }
     return value
   },
@@ -311,15 +336,18 @@ function createExtensions(langExt: Extension): Extension[] {
       }
     }),
     traceField,
+    flashField,
     traceDomHandlers,
     langExt,
   ]
 }
 
-async function mountEditor(): Promise<void> {
+async function mountEditor(token: number): Promise<void> {
   if (!editorContainer.value || !props.file) return
 
   const langExt = await getLanguageExtension(props.file.path)
+  // A newer file switch started while the language pack was loading; let it own the view.
+  if (token !== mountToken || !editorContainer.value || !props.file) return
   const extensions = createExtensions(langExt)
 
   const state = EditorState.create({
@@ -343,10 +371,16 @@ function destroyEditor(): void {
 
 // Watch for file changes — recreate editor (flush: post ensures DOM is ready)
 watch(() => props.file, async (newFile) => {
+  const token = ++mountToken
+  mounting = true
   destroyEditor()
   if (newFile) {
     await nextTick()
-    await mountEditor()
+    await mountEditor(token)
+  }
+  if (token === mountToken) {
+    mounting = false
+    if (pendingReveal) applyPendingReveal()
   }
 }, { immediate: true, flush: 'post' })
 
@@ -396,22 +430,37 @@ function getEditorContent(): string {
 }
 
 /**
- * Go to a specific line (1-based), select it, and scroll into view.
- * The selection highlight uses the existing green selection style.
+ * Go to a specific line (1-based), select it, and center it in the viewport.
+ * File switches rebuild the editor asynchronously, so the request is queued and applied by
+ * whichever of goToLine / mountEditor happens last (last request wins).
  */
 function goToLine(line: number): void {
-  if (!editorView) return
+  pendingReveal = { line }
+  if (editorView && !mounting) applyPendingReveal()
+}
+
+function applyPendingReveal(): void {
+  if (!editorView || !pendingReveal) return
   const doc = editorView.state.doc
-  const lineNum = Math.max(1, Math.min(line, doc.lines))
+  const lineNum = Math.max(1, Math.min(pendingReveal.line, doc.lines))
+  pendingReveal = null
   const lineObj = doc.line(lineNum)
   editorView.dispatch({
     selection: { anchor: lineObj.from, head: lineObj.to },
-    scrollIntoView: true,
+    effects: [
+      EditorView.scrollIntoView(lineObj.from, { y: 'center' }),
+      setFlashLine.of(lineObj.from),
+    ],
   })
   editorView.focus()
+  window.clearTimeout(flashTimer)
+  flashTimer = window.setTimeout(() => {
+    editorView?.dispatch({ effects: setFlashLine.of(null) })
+  }, 1600)
 }
 
 onBeforeUnmount(() => {
+  window.clearTimeout(flashTimer)
   destroyEditor()
 })
 
@@ -555,6 +604,11 @@ defineExpose({ getEditorContent, goToLine })
 .editor-body :deep(.trace-code-hover) {
   background: rgba(224, 168, 58, 0.16);
   box-shadow: 0 0 0 1px rgba(224, 168, 58, 0.45);
+}
+
+/* One-shot flash on the line a jump landed on. */
+.editor-body :deep(.cm-line-flash) {
+  background: rgba(31, 143, 120, 0.18);
 }
 
 @media (max-width: 820px) {
