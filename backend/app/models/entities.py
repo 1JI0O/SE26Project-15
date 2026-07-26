@@ -10,6 +10,19 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def as_utc(value: datetime) -> datetime:
+    """Return ``value`` as an aware UTC datetime.
+
+    Every timestamp here is written as aware UTC via :func:`utc_now`, but SQLite has no
+    timezone-aware type: a value read back from the database comes out **naive**. Mixing the
+    two in a comparison or subtraction raises ``TypeError: can't subtract offset-naive and
+    offset-aware datetimes``, so anything that compares a stored timestamp against
+    :func:`utc_now` must normalize it through here first.
+    """
+
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 class Project(SQLModel, table=True):
     __tablename__ = "project"
 

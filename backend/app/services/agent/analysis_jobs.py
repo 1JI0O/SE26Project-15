@@ -25,6 +25,7 @@ from app.models.entities import (
     PaperDocument,
     PaperTarget,
     TraceLink,
+    as_utc,
     utc_now,
 )
 from app.schemas.agent import AgentAnalysisJobCreate, AgentAnalysisJobRead
@@ -1397,7 +1398,8 @@ def recover_analysis_jobs() -> None:
             # both ThreadPoolExecutor slots forever after restart.
             stale = False
             if job.updated_at is not None:
-                age = (now - job.updated_at).total_seconds()
+                # Stored timestamps come back naive from SQLite; normalize before subtracting.
+                age = (now - as_utc(job.updated_at)).total_seconds()
                 stale = age > 900  # 15 minutes without progress
             if job.agent_run_id:
                 run = session.get(AgentRun, job.agent_run_id)

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from pydantic import ValidationError
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.entities import AgentToolRequest, TraceLink, utc_now
+from app.models.entities import AgentToolRequest, TraceLink, as_utc, utc_now
 from app.schemas.agent import (
     AgentCitation,
     AgentConfirmationRead,
@@ -74,12 +74,8 @@ def confirmation_to_read(request: AgentToolRequest) -> AgentConfirmationRead:
     )
 
 
-def _aware(value: datetime) -> datetime:
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
 def _expire_if_needed(session: Session, request: AgentToolRequest) -> None:
-    if request.status == "pending" and _aware(request.expires_at) <= utc_now():
+    if request.status == "pending" and as_utc(request.expires_at) <= utc_now():
         request.status = "expired"
         request.error_summary = "confirmation_expired"
         session.add(request)
