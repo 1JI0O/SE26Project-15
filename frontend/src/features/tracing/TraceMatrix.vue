@@ -128,7 +128,17 @@
               接受
             </el-button>
           </template>
-          <small v-else>{{ row.top.uncertainty }}</small>
+          <el-button
+            v-if="row.decidedIds.length"
+            size="small"
+            text
+            @click.stop="reviewGroup(row, 'proposed')"
+          >
+            撤回
+          </el-button>
+          <small v-if="!row.proposedIds.length && !row.decidedIds.length">
+            {{ row.top.uncertainty }}
+          </small>
         </span>
       </div>
       <el-empty v-if="!mergedRows.length" description="上传论文和代码后可生成追溯候选" />
@@ -161,7 +171,10 @@ const emit = defineEmits<{
   suggest: []
   cancel: []
   review: [traceId: string, status: Extract<TraceStatus, 'accepted' | 'rejected'>]
-  reviewBatch: [status: Extract<TraceStatus, 'accepted' | 'rejected'>, traceIds?: string[]]
+  reviewBatch: [
+    status: Extract<TraceStatus, 'accepted' | 'rejected' | 'proposed'>,
+    traceIds?: string[],
+  ]
   selectRow: [row: TraceRowView]
   hoverRow: [row: TraceRowView]
   leaveRow: []
@@ -174,6 +187,8 @@ interface MergedTraceRow {
   top: TraceRowView
   ids: string[]
   proposedIds: string[]
+  // Accepted/rejected links in the group — the ones a "撤回" reverts to proposed.
+  decidedIds: string[]
   relationTypes: string[]
   count: number
   confidence: number
@@ -207,6 +222,11 @@ const mergedRows = computed<MergedTraceRow[]>(() => {
       proposedIds: sorted
         .filter((row): row is TraceRowView & { id: string } =>
           Boolean(row.id) && row.status === 'proposed',
+        )
+        .map((row) => row.id),
+      decidedIds: sorted
+        .filter((row): row is TraceRowView & { id: string } =>
+          Boolean(row.id) && (row.status === 'accepted' || row.status === 'rejected'),
         )
         .map((row) => row.id),
       relationTypes,
@@ -274,9 +294,10 @@ function emitBatch(
 
 function reviewGroup(
   row: MergedTraceRow,
-  status: Extract<TraceStatus, 'accepted' | 'rejected'>,
+  status: Extract<TraceStatus, 'accepted' | 'rejected' | 'proposed'>,
 ): void {
-  emit('reviewBatch', status, row.proposedIds)
+  // 'proposed' undoes the group's decisions; the other two review its pending links.
+  emit('reviewBatch', status, status === 'proposed' ? row.decidedIds : row.proposedIds)
   emit('leaveRow')
 }
 

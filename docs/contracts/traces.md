@@ -105,12 +105,15 @@ Degraded reasons are stable machine-readable codes such as `llm_disabled`, `llm_
 - `PATCH /api/v1/projects/{project_id}/trace-links/{trace_id}/status`
 - `POST /api/v1/projects/{project_id}/trace-links/batch-status`
 
-The PATCH body accepts only `accepted` or `rejected`, and only a `proposed` trace can be reviewed.
-Repeated or invalid transitions return `409`. `stale` is system-owned.
+The PATCH body accepts `accepted`, `rejected`, or `proposed`. `accepted`/`rejected` review a
+`proposed` trace; `proposed` **reverts** (撤回) an `accepted`/`rejected` decision back to the
+review queue and clears `decided_at`. Repeated or invalid transitions return `409`. `stale` is
+system-owned and can be neither set nor reverted.
 
-Batch review accepts `{ "status": "accepted"|"rejected", "trace_ids": [...] | null }`. `trace_ids`
-selects a subset; `null`/omitted applies to every currently-`proposed` link in the project. Only
-`proposed` links change (already-decided/stale are skipped), so it is idempotent. The response is
+Batch review accepts `{ "status": "accepted"|"rejected"|"proposed", "trace_ids": [...] | null }`.
+`trace_ids` selects a subset; `null`/omitted applies to every eligible link in the project.
+`accepted`/`rejected` move only `proposed` links; `proposed` reverts only `accepted`/`rejected`
+links (everything else is skipped), so the operation is idempotent. The response is
 `{ status, updated_count, skipped_count, updated: [TraceLinkRead...] }`.
 
 Manual creation through `POST /trace-links` remains available for compatibility, but requires both
