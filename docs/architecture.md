@@ -183,6 +183,7 @@ TraceLab/
 │   │       │   ├── mineru.py          # 本地 MinerU client/parser
 │   │       │   ├── mineru_official.py # 官方 MinerU API client
 │   │       │   ├── normalizer.py      # MinerU payload 规范化
+│   │       │   ├── geometry.py        # middle.json 页面/行几何，句子级 PDF 高亮
 │   │       │   └── stub.py            # 测试替身 parser
 │   │       ├── code_analyzer.py      # 代码分析兼容入口
 │   │       ├── code_analysis/
@@ -239,7 +240,7 @@ TraceLab/
 │   │   ├── components/                 # AppShell 与旧/兼容组件
 │   │   ├── features/
 │   │   │   ├── agent/AgentPanel.vue
-│   │   │   ├── papers/                  # 导入条、目录树、阅读器、Markdown 渲染
+│   │   │   ├── papers/                  # 导入条、目录树、Markdown/PDF 阅读器、追溯高亮
 │   │   │   ├── repository/              # RepositoryTree、CodeEditor
 │   │   │   ├── tensor-flow/             # Canvas、Inspector
 │   │   │   ├── tracing/                 # Matrix、Evidence、Conflict、Report 等

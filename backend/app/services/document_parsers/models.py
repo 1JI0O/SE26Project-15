@@ -8,9 +8,20 @@ class PaperBlock:
     kind: str
     text: str
     page_number: int
+    #: Block box in 0-1 of the page, top-left origin (MinerU's 0-1000 space, rescaled).
     bbox: list[float] | None = None
     section_path: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    #: Per-line boxes ``{"text", "bbox"}`` in the same 0-1 space, recovered from
+    #: ``middle.json`` when available. Empty for documents parsed before geometry
+    #: capture existed, or when the block could not be matched to its lines — the
+    #: reader then highlights the whole block box instead.
+    lines: list[dict[str, Any]] = field(default_factory=list)
+    #: Page dimensions in PDF points, from ``middle.json``. Carried so the reader can
+    #: compare them against the page it actually rendered: a mismatch (a rotated page,
+    #: a MinerU/renderer disagreement) means the boxes cannot be trusted, and drawing
+    #: them anyway would put highlights over unrelated text.
+    page_size: list[float] | None = None
 
 
 @dataclass(slots=True)

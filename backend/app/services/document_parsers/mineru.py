@@ -124,7 +124,10 @@ class MinerUClient:
                 self.settings.backend,
                 self.settings.parse_method,
                 self.settings.language,
+                # Bumped when the cached normalized payload gains fields: re-uploading a
+                # paper then re-parses instead of restoring a cache entry with no geometry.
                 "assets-v1",
+                "geometry-v1",
             )
         )
 
@@ -206,7 +209,9 @@ class MinerUClient:
             "table_enable": "true",
             "return_md": "true",
             "return_content_list": "true",
-            "return_middle_json": "false",
+            # Supplies page_size and the line/span boxes used for sentence-level
+            # highlighting on the original PDF; the content list only has block boxes.
+            "return_middle_json": "true",
             "return_images": "true",
             "response_format_zip": "true",
         }
@@ -256,6 +261,15 @@ class MinerUParser:
 
 
 def _decode_result(response: HttpResponse) -> tuple[Any, bytes | None]:
+    """Extract the payload the normalizer consumes from a MinerU result response.
+
+    The content list stays the source of truth for text and reading order. ``middle.json``
+    is folded in beside it (rather than replacing it) purely to supply page geometry:
+    ``page_size`` plus line/span boxes, which the content list does not carry. It is
+    optional — older MinerU builds and the plain-JSON response shape have none, and the
+    document then parses exactly as before, just without line-level highlighting.
+    """
+
     if "json" in response.content_type:
         return response.json(), None
     try:
@@ -267,6 +281,30 @@ def _decode_result(response: HttpResponse) -> tuple[Any, bytes | None]:
             ) or next((name for name in names if name.endswith("content_list.json")), None)
             if preferred is None:
                 raise MinerUError("MinerU result archive has no content list JSON")
-            return json.loads(archive.read(preferred).decode("utf-8")), response.body
+            key = (
+                "content_list_v2"
+                if preferred.endswith("content_list_v2.json")
+                else "content_list"
+            )
+            payload: dict[str, Any] = {
+                key: json.loads(archive.read(preferred).decode("utf-8")),
+            }
+            middle = _read_middle_json(archive, names)
+            if middle is not None:
+                payload["middle_json"] = middle
+            return payload, response.body
     except zipfile.BadZipFile as exc:
         raise MinerUError("MinerU result is neither JSON nor a ZIP archive") from exc
+
+
+def _read_middle_json(archive: zipfile.ZipFile, names: list[str]) -> Any | None:
+    """Read ``*_middle.json`` from the archive, tolerating its absence or corruption."""
+
+    name = next((item for item in names if item.endswith("middle.json")), None)
+    if name is None:
+        return None
+    try:
+        return json.loads(archive.read(name).decode("utf-8"))
+    except (KeyError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # Geometry is an enhancement; never fail a parse over it.
+        return None

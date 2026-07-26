@@ -67,6 +67,18 @@ export async function getWorkspacePaperDocument(
   return data
 }
 
+/**
+ * Fetch the original PDF as bytes for pdf.js.
+ *
+ * Routed through the shared axios client rather than handed to pdf.js as a URL so it
+ * inherits the configured base URL and interceptors, and so the desktop shell (which
+ * talks to a sidecar on a different port) resolves it the same way as every other call.
+ */
+export async function getPaperPdfData(pdfUrl: string): Promise<ArrayBuffer> {
+  const { data } = await http.get<ArrayBuffer>(pdfUrl, { responseType: 'arraybuffer' })
+  return data
+}
+
 export function resolvePaperAssetUrl(assetBaseUrl: string, assetPath: string): string {
   if (/^(?:data:image\/|blob:)/i.test(assetPath)) return assetPath
   if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(assetPath)) return ''

@@ -318,6 +318,7 @@
               ref="paperReaderRef"
               :markdown="paper.paperDocument.value?.markdown || ''"
               :asset-base-url="paper.paperDocument.value?.asset_base_url || ''"
+              :pdf-url="paper.paperDocument.value?.pdf_url || null"
               :active-section-id="paper.activeSectionId.value"
               :has-paper="paper.hasPaper.value"
               :loading="paper.loading.value"

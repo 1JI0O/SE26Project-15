@@ -2,6 +2,11 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from app.services.document_parsers.geometry import (
+    PageGeometry,
+    assign_line_boxes,
+    extract_page_geometry,
+)
 from app.services.document_parsers.models import PaperBlock, PaperPage, ParsedDocument
 
 _AUXILIARY_TYPES = {
@@ -59,6 +64,17 @@ def _entry_text(entry: dict[str, Any]) -> str:
 
 
 def _normalized_bbox(value: Any) -> list[float] | None:
+    """Rescale a ``content_list`` block box into 0-1 of the page.
+
+    MinerU documents these boxes as "mapped to a range of 0-1000" per axis, with a
+    top-left origin — so the page's real dimensions are neither available here nor
+    needed. The ``<= 1`` branch keeps already-normalised payloads (and test fixtures)
+    passing through untouched.
+
+    Note this is a *different* space from ``middle.json``, whose line boxes are in raw
+    PDF points; those are normalised separately in ``geometry``.
+    """
+
     if not isinstance(value, list) or len(value) != 4:
         return None
     try:
@@ -108,6 +124,18 @@ def _flatten_entries(payload: Any) -> list[dict[str, Any]]:
                 if entries:
                     return entries
     return []
+
+
+def _page_geometry(payload: Any) -> dict[int, PageGeometry]:
+    """Line/page geometry from the ``middle.json`` the parser folded into the payload.
+
+    Absent for documents parsed before geometry capture, and for the JSON (non-archive)
+    MinerU response shape, in which case blocks simply keep no line boxes.
+    """
+
+    if isinstance(payload, dict):
+        return extract_page_geometry(payload.get("middle_json"))
+    return {}
 
 
 def _page_number(entry: dict[str, Any]) -> int:
@@ -200,6 +228,12 @@ def normalize_mineru_payload(
 
     if not blocks_by_page:
         raise ValueError("MinerU result contains no readable document blocks")
+
+    # Blocks are in reading order within a page, as are middle.json's lines, so the
+    # matcher can walk both forward together.
+    geometry = _page_geometry(payload)
+    for page_number, page_blocks in blocks_by_page.items():
+        assign_line_boxes(page_blocks, geometry.get(page_number))
 
     title = document_title or next(
         (block.text for blocks in blocks_by_page.values() for block in blocks if block.text),

@@ -21,6 +21,8 @@ backend/.desktop-build/
 backend/.desktop-dist/
 frontend/src-tauri/binaries/
 frontend/src-tauri/resources/backend-runtime/
+# Staged from pdfjs-dist by scripts/copy-pdfjs-assets.mjs on dev/build.
+frontend/public/pdfjs/
 dist/
 node_modules/
 coverage/
