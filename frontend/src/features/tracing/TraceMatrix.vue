@@ -29,12 +29,22 @@
     />
 
     <div v-if="rows.length" class="trace-legend" aria-label="高亮图例">
-      <span><i class="legend-dot legend-proposed" />候选（蓝）</span>
-      <span><i class="legend-dot legend-accepted" />已接受（绿）</span>
-      <span><i class="legend-dot legend-fanout" />一对多（紫）</span>
-      <span><i class="legend-dot legend-fanin" />多对一（青）</span>
-      <span><i class="legend-dot legend-active" />当前选中（黄）</span>
-      <span><i class="legend-dot legend-hover" />悬停预览（浅黄）</span>
+      <strong>高亮含义</strong>
+      <span title="Agent 生成、尚未审阅的关系"><i class="legend-dot legend-proposed" />候选（蓝）</span>
+      <span title="你已确认的关系"><i class="legend-dot legend-accepted" />已接受（绿）</span>
+      <span title="同一处论文内容对应多处代码：紫色下划线右上角的 ×N 表示对应的代码位置数量">
+        <i class="legend-dot legend-fanout" />一对多（紫 ×N）
+      </span>
+      <span title="多处论文内容对应同一处代码：青色下划线右上角的 ×N 表示对应的论文片段数量">
+        <i class="legend-dot legend-fanin" />多对一（青 ×N）
+      </span>
+      <span title="当前选中的那一条关系，两侧同时用黄色标出">
+        <i class="legend-dot legend-active" />当前选中（黄）
+      </span>
+      <span title="鼠标悬停预览，不会移动视图"><i class="legend-dot legend-hover" />悬停预览（浅黄）</span>
+      <small class="legend-note">
+        一处内容对应多条关系时，点击默认跳转到相关度最高的一条；其余在右下角面板中以“另有 N 条”列出。
+      </small>
     </div>
 
     <!-- Loading state -->
@@ -291,6 +301,16 @@ function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'in
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+
+.trace-legend strong {
+  color: #55636f;
+}
+
+.legend-note {
+  flex-basis: 100%;
+  color: #8a95a1;
+  line-height: 1.6;
 }
 
 .legend-dot {

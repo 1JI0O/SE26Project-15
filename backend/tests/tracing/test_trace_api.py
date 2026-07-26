@@ -190,3 +190,102 @@ def test_batch_status_reviews_subset_then_all_remaining_proposed() -> None:
             json={"status": "stale"},
         )
         assert bad.status_code == 422
+
+
+def _clear_fixture_engine() -> tuple[object, int]:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        project = Project(name="Clear fixture")
+        session.add(project)
+        session.commit()
+        session.refresh(project)
+        project_id = project.id or 0
+        rows = [
+            ("agent", "proposed"),
+            ("agent", "accepted"),
+            ("agent", "rejected"),
+            ("manual", "proposed"),
+        ]
+        for index, (source, link_status) in enumerate(rows):
+            session.add(
+                TraceLink(
+                    project_id=project_id,
+                    paper_ref=f"p{index}",
+                    code_ref=f"models/net.py::S{index}",
+                    relation_type="implements",
+                    confidence=0.8,
+                    source=source,
+                    evidence_json=[],
+                    rationale="fixture",
+                    uncertainty_json={"level": "medium", "reasons": []},
+                    fingerprint=f"clear-fixture-{index}",
+                    status=link_status,
+                )
+            )
+        session.commit()
+    return engine, project_id
+
+
+def _clear_client(engine: object) -> TestClient:
+    def session_override() -> Iterator[Session]:
+        with Session(engine) as session:  # type: ignore[arg-type]
+            yield session
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_session] = session_override
+    return TestClient(app)
+
+
+def test_clear_defaults_to_proposed_and_keeps_reviewed_decisions() -> None:
+    engine, project_id = _clear_fixture_engine()
+    with _clear_client(engine) as client:
+        cleared = client.delete(f"/api/v1/projects/{project_id}/trace-links")
+        assert cleared.status_code == 200
+        body = cleared.json()
+        # Both proposed links (agent + manual) go; accepted and rejected survive.
+        assert body == {"scope": "proposed", "deleted_count": 2, "kept_count": 2}
+
+        remaining = client.get(f"/api/v1/projects/{project_id}/trace-links")
+        assert {item["status"] for item in remaining.json()} == {"accepted", "rejected"}
+
+        # Repeating the clear is a no-op rather than an error.
+        again = client.delete(f"/api/v1/projects/{project_id}/trace-links")
+        assert again.json()["deleted_count"] == 0
+
+
+def test_clear_agent_scope_spares_manual_relations() -> None:
+    engine, project_id = _clear_fixture_engine()
+    with _clear_client(engine) as client:
+        cleared = client.delete(
+            f"/api/v1/projects/{project_id}/trace-links", params={"scope": "agent"}
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["deleted_count"] == 3
+
+        remaining = client.get(f"/api/v1/projects/{project_id}/trace-links").json()
+        assert [item["source"] for item in remaining] == ["manual"]
+
+
+def test_clear_all_scope_empties_the_project() -> None:
+    engine, project_id = _clear_fixture_engine()
+    with _clear_client(engine) as client:
+        cleared = client.delete(
+            f"/api/v1/projects/{project_id}/trace-links", params={"scope": "all"}
+        )
+        assert cleared.json() == {"scope": "all", "deleted_count": 4, "kept_count": 0}
+        assert client.get(f"/api/v1/projects/{project_id}/trace-links").json() == []
+
+
+def test_clear_rejects_unknown_scope() -> None:
+    engine, project_id = _clear_fixture_engine()
+    with _clear_client(engine) as client:
+        response = client.delete(
+            f"/api/v1/projects/{project_id}/trace-links", params={"scope": "everything"}
+        )
+        assert response.status_code == 422

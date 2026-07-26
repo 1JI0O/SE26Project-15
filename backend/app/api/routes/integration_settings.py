@@ -2,8 +2,14 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session
 
 from app.db.session import get_session
-from app.schemas.integration_settings import IntegrationSettingsRead, IntegrationSettingsUpdate
+from app.schemas.integration_settings import (
+    IntegrationProbeRequest,
+    IntegrationProbeResult,
+    IntegrationSettingsRead,
+    IntegrationSettingsUpdate,
+)
 from app.services.document_parsers.jobs import reset_paper_parsing_service
+from app.services.integration_probe import run_integration_probe
 from app.services.integration_settings import (
     get_effective_integration_config,
     integration_config_to_read,
@@ -29,3 +35,17 @@ def update_integration_settings(
     config = save_integration_config(session, payload)
     reset_paper_parsing_service()
     return integration_config_to_read(config, "application")
+
+
+@router.post("/probe", response_model=IntegrationProbeResult)
+def probe_integration_endpoint(
+    payload: IntegrationProbeRequest,
+    session: Session = Depends(get_session),
+) -> IntegrationProbeResult:
+    """Check whether the given (or stored) credentials actually reach the provider.
+
+    Always answers 200 with ``ok=false`` on failure so the dialog can show the provider's own
+    message; a transport error is a legitimate probe result, not an API error.
+    """
+
+    return run_integration_probe(session, payload)

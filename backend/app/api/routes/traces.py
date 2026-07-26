@@ -6,10 +6,19 @@ from sqlmodel import Session, select
 from app.api.routes.helpers import parse_workspace_project_id
 from app.api.routes.projects import get_project_or_404
 from app.db.session import get_session
-from app.models.entities import CodeRepository, PaperDocument, TraceLink, utc_now
+from app.models.entities import (
+    CodeRepository,
+    CodeTarget,
+    PaperDocument,
+    PaperTarget,
+    TraceLink,
+    utc_now,
+)
 from app.schemas.traces import (
     TraceBatchStatusResult,
     TraceBatchStatusUpdate,
+    TraceClearResult,
+    TraceClearScope,
     TraceLinkCreate,
     TraceLinkRead,
     TraceStatus,
@@ -250,6 +259,80 @@ def batch_update_trace_status(
         updated_count=len(links),
         skipped_count=max(skipped, 0),
         updated=[trace_to_read(link) for link in links],
+    )
+
+
+def _prune_orphan_targets(session: Session, project_id: int) -> None:
+    """Drop paper/code targets no longer referenced by any remaining link.
+
+    Targets only exist to anchor relations, so once every link that pointed at one is gone the
+    row is dead weight — and leaving it behind would let repeated regenerations grow the table
+    without bound.
+    """
+
+    live_paper = {
+        row
+        for row in session.exec(
+            select(TraceLink.paper_target_id).where(TraceLink.project_id == project_id)
+        ).all()
+        if row
+    }
+    live_code = {
+        row
+        for row in session.exec(
+            select(TraceLink.code_target_id).where(TraceLink.project_id == project_id)
+        ).all()
+        if row
+    }
+    for target in session.exec(
+        select(PaperTarget).where(PaperTarget.project_id == project_id)
+    ).all():
+        if target.target_id not in live_paper:
+            session.delete(target)
+    for target in session.exec(select(CodeTarget).where(CodeTarget.project_id == project_id)).all():
+        if target.target_id not in live_code:
+            session.delete(target)
+
+
+@router.delete("", response_model=TraceClearResult)
+def clear_trace_links(
+    project_id: int,
+    scope: TraceClearScope = Query(default=TraceClearScope.PROPOSED),
+    session: Session = Depends(get_session),
+) -> TraceClearResult:
+    """Discard previously generated relations before a fresh trace run.
+
+    The workbench asks the user whether to keep the previous round when they hit 重新生成;
+    choosing "clear" calls this. Deletions are mirrored into the sync outbox so a cloud-enabled
+    project does not resurrect the removed relations on its next sync.
+    """
+
+    project = get_project_or_404(project_id, session)
+    links = session.exec(select(TraceLink).where(TraceLink.project_id == project_id)).all()
+    if scope is TraceClearScope.ALL:
+        doomed = list(links)
+    elif scope is TraceClearScope.AGENT:
+        doomed = [link for link in links if link.source != "manual"]
+    else:
+        doomed = [link for link in links if link.status == TraceStatus.PROPOSED.value]
+    for link in doomed:
+        record_local_operation(
+            session,
+            project,
+            "trace_link",
+            link.public_id,
+            trace_payload(project, link),
+            operation="delete",
+            base_version=link.version,
+        )
+        session.delete(link)
+    session.flush()
+    _prune_orphan_targets(session, project_id)
+    session.commit()
+    return TraceClearResult(
+        scope=scope,
+        deleted_count=len(doomed),
+        kept_count=len(links) - len(doomed),
     )
 
 

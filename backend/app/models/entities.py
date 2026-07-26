@@ -486,7 +486,7 @@ class IntegrationConfig(SQLModel, table=True):
     agent_model: str = Field(default="", max_length=160)
     agent_analysis_model: str = Field(default="", max_length=160)
     agent_thinking_mode: str = Field(default="", max_length=16)
-    agent_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    agent_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
     mineru_provider: str = Field(default="local", max_length=16)
     mineru_local_url: str = Field(default="http://127.0.0.1:8001", max_length=500)
     mineru_backend: str = Field(default="pipeline", max_length=64)

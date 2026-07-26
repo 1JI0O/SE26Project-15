@@ -9,6 +9,8 @@ import {
   saveWorkspaceCodeFile,
   uploadCode,
 } from '@/api/repository-api'
+import { extractErrorDetail } from '@/api/http'
+import { useDebug } from '@/composables/useDebug'
 import type {
   RepositorySummary,
   WorkspaceCodeFile,
@@ -103,6 +105,7 @@ function countLines(value: string): number {
 }
 
 export function useCode(projectId: () => number) {
+  const debug = useDebug()
   const codeTree = ref<WorkspaceCodeTreeNode[]>([])
   const codeFiles = ref<CodeFile[]>([])
   const codeFilename = ref('')
@@ -376,7 +379,11 @@ export function useCode(projectId: () => number) {
       ElMessage.success('GitHub 仓库导入并分析完成')
       return true
     } catch (cause) {
-      ElMessage.error('GitHub 仓库导入失败，请检查公开仓库地址')
+      // The backend rejects specific things (private repo, bad URL shape, git missing, clone
+      // timeout) — surfacing its own reason saves a round of guessing.
+      const detail = extractErrorDetail(cause)
+      debug.error('code.githubImport', `GitHub 导入失败：${url}`, cause)
+      ElMessage.error(detail ? `GitHub 仓库导入失败：${detail}` : 'GitHub 仓库导入失败，请检查公开仓库地址')
       console.error(cause)
       return false
     } finally {

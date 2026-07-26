@@ -47,6 +47,7 @@ import { getPaperAssetBlob, resolvePaperAssetUrl } from '@/api/paper-api'
 import { renderPaperMarkdown } from './markdown-renderer'
 import {
   decoratePaperTargets,
+  resolveEventTargetId,
   resolveVisualBlock,
   setActivePaperTargets,
   type PaperMark,
@@ -199,17 +200,36 @@ function scheduleTempHighlight(el: HTMLElement): void {
   })
 }
 
+/** Scroll `el` to the vertical centre of the reading pane, using the pane's own scroll box.
+ * `scrollIntoView({block:'center'})` walks every scrollable ancestor and could nudge the whole
+ * workbench, so the offset is computed against `.paper-scroll` directly. */
+function centerInPane(el: HTMLElement): void {
+  const root = scrollRef.value
+  if (!root) return
+  const rootBox = root.getBoundingClientRect()
+  const elBox = el.getBoundingClientRect()
+  const offset = elBox.top - rootBox.top + root.scrollTop
+  const top = offset - Math.max(0, (root.clientHeight - elBox.height) / 2)
+  root.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+}
+
 function scrollToBlock(blockId: string, quote = '', paperTargetId: string | null = null): boolean {
   const root = scrollRef.value
   if (!root) return false
 
   // Prefer the persistent trace mark for this target — lands on the exact underlined fragment.
   if (paperTargetId) {
-    const mark = root.querySelector<HTMLElement>(
-      `[data-trace-target="${CSS.escape(paperTargetId)}"]`,
-    )
+    const escaped = CSS.escape(paperTargetId)
+    const mark =
+      root.querySelector<HTMLElement>(`[data-trace-target="${escaped}"]`) ??
+      // Blocks shared by several relations list every id; the primary attribute holds only one.
+      root.querySelector<HTMLElement>(`[data-trace-targets~="${escaped}"]`) ??
+      [...root.querySelectorAll<HTMLElement>('[data-trace-targets]')].find((el) =>
+        (el.getAttribute('data-trace-targets') ?? '').split(',').includes(paperTargetId),
+      ) ??
+      null
     if (mark) {
-      mark.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      centerInPane(mark)
       scheduleTempHighlight(mark)
       return true
     }
@@ -234,9 +254,7 @@ function scrollToBlock(blockId: string, quote = '', paperTargetId: string | null
   // zero-height wrapper (which showed as a thin strip on top).
   const visualTarget = target.matches('span') ? resolveVisualBlock(target) : target
   const anchorForScroll = visualTarget || target
-  const top =
-    anchorForScroll.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
-  root.scrollTo({ top: Math.max(0, top - root.clientHeight * 0.2), behavior: 'smooth' })
+  centerInPane(anchorForScroll)
   scheduleTempHighlight(anchorForScroll)
   return true
 }
@@ -255,7 +273,10 @@ function applyTraceDecorations(): void {
 
 function traceTargetId(event: Event): string | null {
   const el = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-trace-target]')
-  return el?.dataset.traceTarget ?? null
+  if (!el) return null
+  // A shared block backs several relations; keep the current selection sticky so clicking the
+  // same formula twice doesn't hop to a different relation.
+  return resolveEventTargetId(el, props.activeTargetIds ?? new Set())
 }
 
 function onTraceOver(event: MouseEvent): void {

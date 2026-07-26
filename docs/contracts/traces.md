@@ -29,7 +29,7 @@ GET  /api/v1/projects/{project_id}/trace-links
 
 - `occurrence`：quote 在所属 block（论文）或引用行范围（代码）内的第几次出现，从 1 计；
 - `char_start` / `char_end`：能精确定位时的字符范围（论文为 block 文本内偏移，代码为文件内偏移）；
-- 代码侧还有 `match_line_start` / `match_line_end`、`column_start` / `column_end`；
+- 代码侧还有 `match_line_start` / `match_line_end`、`column_start` / `column_end`；当锚点降级到 `normalized` / `approximate`（无 char 偏移）时，`match_line_*` 由 quote 的字母数字签名在文件内重新定位得到，因此始终指向核实过的行；`line_start` / `line_end` 仅在包含该命中时才保留模型声明的上下文区间；
 - `quote_hash` / `code_quote_hash`：`sha256(规范化 quote)`，用于跨 revision 的内容一致性；
 - 论文侧 `target_type`（formula/variable/constraint/algorithm/figure/method_text）、`salience`；代码侧 `role`。
 
@@ -113,6 +113,28 @@ selects a subset; `null`/omitted applies to every currently-`proposed` link in t
 
 Manual creation through `POST /trace-links` remains available for compatibility, but requires both
 paper and code evidence and always creates a proposed relation.
+
+## Clearing before a rerun
+
+`DELETE /api/v1/projects/{project_id}/trace-links?scope=proposed|agent|all`
+
+Removes previously generated relations so a rerun starts from a known state. `scope` decides how
+much is dropped:
+
+| scope | Deletes | Keeps |
+| --- | --- | --- |
+| `proposed` (default) | every `proposed` link | all `accepted`/`rejected` decisions |
+| `agent` | every link with `source != "manual"` | manually created links |
+| `all` | every link in the project | nothing |
+
+Paper/code targets left without any referencing link are pruned in the same transaction, so
+repeated regeneration cannot grow `paper_target`/`code_target` without bound. Deletions are mirrored
+into the local sync outbox as `operation="delete"`, so a cloud-enabled project does not resurrect
+the removed relations on its next sync. The response is `{ scope, deleted_count, kept_count }`, and
+repeating the call is a no-op rather than an error.
+
+The workbench asks the user before rerunning ("保留历史记录" / "清空后重新生成"); keeping is the
+default because reruns upsert by fingerprint and never overwrite a human decision.
 
 ## Version behavior
 

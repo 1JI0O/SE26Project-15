@@ -121,6 +121,25 @@ class TraceBatchStatusResult(BaseModel):
     updated: list[TraceLinkRead]
 
 
+class TraceClearScope(StrEnum):
+    """Which existing relations a clear request removes.
+
+    ``proposed`` keeps every human decision (accepted/rejected) and only drops candidates
+    nobody reviewed. ``agent`` additionally drops reviewed agent output but keeps manual
+    relations. ``all`` empties the project's relation set.
+    """
+
+    PROPOSED = "proposed"
+    AGENT = "agent"
+    ALL = "all"
+
+
+class TraceClearResult(BaseModel):
+    scope: TraceClearScope
+    deleted_count: int
+    kept_count: int
+
+
 class TraceLinkSuggestion(BaseModel):
     """Iteration 1 compatibility schema for workspace aggregation."""
 

@@ -29,6 +29,28 @@ export interface AgentAnalysisJob {
   completed_at: string | null
 }
 
+/** Everything the backend knows about one analysis run; shown by the workbench debug panel. */
+export interface AgentAnalysisDiagnostics {
+  job_id: string
+  project_id: number
+  kind: AgentAnalysisKind
+  status: AgentAnalysisJob['status']
+  error_code: string | null
+  progress: Record<string, unknown>
+  run_id: string | null
+  run_status: string | null
+  degraded_reason: string | null
+  provider_name: string | null
+  model_name: string | null
+  step_count: number
+  published_link_count: number
+  events: AgentRunEvent[]
+  steps: Record<string, unknown>[]
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
 export interface AgentCitation {
   side: 'paper' | 'code' | 'trace' | 'graph' | 'memory' | 'project'
   ref: string

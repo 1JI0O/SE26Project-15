@@ -70,3 +70,22 @@ export async function getWorkspaceTraceMatrix(
   )
   return data
 }
+
+/** Which existing relations a clear request drops. See TraceClearScope on the backend. */
+export type TraceClearScope = 'proposed' | 'agent' | 'all'
+
+export interface TraceClearResult {
+  scope: TraceClearScope
+  deleted_count: number
+  kept_count: number
+}
+
+export async function clearTraceLinks(
+  projectId: number,
+  scope: TraceClearScope,
+): Promise<TraceClearResult> {
+  const { data } = await http.delete<TraceClearResult>(`/projects/${projectId}/trace-links`, {
+    params: { scope },
+  })
+  return data
+}

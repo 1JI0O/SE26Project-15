@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 from app.models.entities import AgentAnalysisArtifact, CodeRepository, PaperDocument
 from app.services.analysis_jobs import repository_edits_root
 from app.services.code_analysis.editor import FileAccessError, read_repository_file
-from app.services.tracing.anchoring import AnchorError, resolve_anchor
+from app.services.tracing.anchoring import AnchorError, locate_approximate_span, resolve_anchor
 
 
 class StrictModel(BaseModel):
@@ -511,6 +511,20 @@ def _resolve_code_anchor(repository: CodeRepository, evidence: TraceCodeEvidence
             column_start=col_start,
             column_end=col_end,
         )
+        return result
+    # Normalized / approximate match: the quote is genuinely in the file but its exact character
+    # range is unknown, so the declared line numbers are still the model's unverified claim.
+    # Recover the range from the quote's alphanumeric signature so ":line" in the UI and the
+    # editor decoration point at the code that actually matched, not at a guessed window.
+    span = locate_approximate_span(content, evidence.quote)
+    if span is not None:
+        match_start, _ = _offset_to_linecol(content, span[0])
+        match_end, _ = _offset_to_linecol(content, max(span[0], span[1] - 1))
+        result.update(match_line_start=match_start, match_line_end=match_end)
+        # A declared range that does not even contain the verified match is simply wrong; keep it
+        # only when it still works as surrounding context.
+        if not (result["line_start"] <= match_start and match_end <= result["line_end"]):
+            result.update(line_start=match_start, line_end=match_end)
     return result
 
 

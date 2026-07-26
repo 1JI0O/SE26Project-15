@@ -47,6 +47,16 @@
         >
           <span>导入代码</span>
         </el-button>
+        <el-tooltip content="只给 GitHub 链接，工作台自己拉取代码" placement="bottom">
+          <el-button
+            size="small"
+            :icon="Download"
+            :loading="code.importingGithub.value"
+            @click="githubDialogVisible = true"
+          >
+            <span>GitHub</span>
+          </el-button>
+        </el-tooltip>
         <el-button
           size="small"
           type="primary"
@@ -57,6 +67,31 @@
           <span>生成追溯</span>
         </el-button>
         <el-button size="small" @click="openArtifactVersions">版本历史</el-button>
+        <el-tooltip
+          :content="
+            debug.enabled.value
+              ? '调试模式已开启：所有报错都会带完整信息记录，点击关闭'
+              : '开启调试模式：出错时输出完整堆栈与服务端返回，便于定位问题'
+          "
+          placement="bottom"
+        >
+          <el-button
+            size="small"
+            :type="debug.enabled.value ? 'warning' : 'default'"
+            :plain="debug.enabled.value"
+            @click="toggleDebug"
+          >
+            <span>调试{{ debug.enabled.value ? '中' : '' }}</span>
+          </el-button>
+        </el-tooltip>
+        <el-button
+          v-if="debug.enabled.value && !debug.panelOpen.value"
+          size="small"
+          text
+          @click="debug.panelOpen.value = true"
+        >
+          输出({{ debug.entries.value.length }})
+        </el-button>
         <!-- 需求 3.1: sync a synced project from inside the workbench -->
         <template v-if="cloudSyncEnabled && workspace.syncMode.value === 'cloud_enabled'">
           <el-tag size="small" :type="workspaceStatus.type" effect="plain" round>
@@ -644,6 +679,33 @@
         </div>
       </div>
     </div>
+    <DebugPanel />
+    <el-dialog v-model="githubDialogVisible" title="从 GitHub 导入代码" width="min(520px, calc(100vw - 32px))">
+      <el-form label-position="top">
+        <el-form-item label="公开仓库地址">
+          <el-input
+            v-model="githubUrl"
+            placeholder="https://github.com/owner/repo"
+            clearable
+            @keyup.enter="onGitHubImport"
+          />
+        </el-form-item>
+      </el-form>
+      <p class="github-hint">
+        工作台会浅克隆该仓库的默认分支并直接完成静态分析，无需手动下载打包。仅支持 HTTPS 公开仓库。
+      </p>
+      <template #footer>
+        <el-button @click="githubDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="code.importingGithub.value"
+          :disabled="!githubUrl.trim()"
+          @click="onGitHubImport"
+        >
+          导入
+        </el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="artifactVersionsVisible" title="本机保留的云端文件版本" width="760px">
       <el-table :data="artifactVersions">
         <el-table-column prop="entity_type" label="类型" width="150" />
@@ -678,7 +740,7 @@ import {
   UploadFilled,
   Warning,
 } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { localCloudSyncAvailable, localHttp } from '@/api/http'
@@ -686,6 +748,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useSyncStore } from '@/stores/sync'
 
 import { isEditableFile, fileIcon, useCode } from '@/composables/useCode'
+import { useDebug } from '@/composables/useDebug'
 import { useDesktop } from '@/composables/useDesktop'
 import { useImport } from '@/composables/useImport'
 import { useInsights } from '@/composables/useInsights'
@@ -696,6 +759,7 @@ import { useTraceIndex } from '@/composables/useTraceIndex'
 import { useWorkspace } from '@/composables/useWorkspace'
 import type { PaperMark } from '@/features/papers/trace-decorations'
 import AgentPanel from '@/features/agent/AgentPanel.vue'
+import DebugPanel from '@/components/DebugPanel.vue'
 import PaperOutlineTree from '@/features/papers/PaperOutlineTree.vue'
 import PaperReader from '@/features/papers/PaperReader.vue'
 import CodeEditor from '@/features/repository/CodeEditor.vue'
@@ -774,6 +838,7 @@ const selectedPaperUnresolved = computed(() => {
 })
 const insights = useInsights(() => workspace.projectId.value)
 const desktop = useDesktop()
+const debug = useDebug()
 const { importSteps } = useImport(
   () => paper.hasPaper.value,
   () => code.hasCode.value,
@@ -795,6 +860,7 @@ const bottomPanelMaximized = ref(false)
 const explorerOpen = ref(true)
 const agentOpen = ref(false)
 const githubUrl = ref('')
+const githubDialogVisible = ref(false)
 const activeExplorerView = ref<'files' | 'outline'>('files')
 const paperFirst = ref(true)
 const draggedPane = ref<PaneKey | null>(null)
@@ -1015,17 +1081,61 @@ const hasGeneratedTrace = computed(
 
 function openTraceAndGenerate(): void {
   openBottomPanel('trace')
-  // First run may reuse an existing job; an explicit regenerate forces a fresh pass.
   void generateAgentAnalysis(hasGeneratedTrace.value)
 }
 
-async function generateAgentAnalysis(force = false): Promise<void> {
-  if (force) {
+/**
+ * Run the trace agent. When a previous round exists, ask first whether to keep it.
+ *
+ * Keeping is the default: an unreviewed candidate that the next run rediscovers is upserted by
+ * fingerprint, and accepted/rejected decisions are never overwritten — so "保留" costs nothing and
+ * lets the new run build on what is already there. "不保留" deletes the previous candidates up
+ * front so the matrix shows only this round's output.
+ */
+async function generateAgentAnalysis(isRerun = false): Promise<void> {
+  if (isRerun) {
+    let keepPrevious: boolean
+    try {
+      const action = await ElMessageBox.confirm(
+        `当前已有 ${trace.traceRows.value.length} 条追溯结果。重新生成时是否保留这些历史记录？\n`
+          + '保留：已接受/已拒绝的判断不会被覆盖，新结果会与旧结果合并。\n'
+          + '不保留：先清空未审阅的候选，只显示本轮生成的结果。',
+        '重新生成追溯',
+        {
+          confirmButtonText: '保留历史记录',
+          cancelButtonText: '清空后重新生成',
+          distinguishCancelAndClose: true,
+          type: 'warning',
+        },
+      )
+      keepPrevious = action === 'confirm'
+    } catch (action) {
+      // ElMessageBox rejects with 'cancel' (the secondary button) or 'close' (X / Esc).
+      if (action === 'close') return
+      keepPrevious = false
+    }
     traceIndex.unselect()
     traceIndex.clearHover()
+    if (!keepPrevious) {
+      try {
+        await trace.clearExisting('proposed')
+      } catch {
+        return
+      }
+    }
   }
-  await trace.generateSuggestions(force)
+  await trace.generateSuggestions(isRerun)
   await tensorFlow.loadTensorFlow({ force: true })
+}
+
+function toggleDebug(): void {
+  const next = !debug.enabled.value
+  debug.setEnabled(next)
+  if (next) {
+    debug.panelOpen.value = true
+    debug.info('debug', '调试模式已开启，后续报错会输出完整信息')
+  }
+  ElMessage.info(next ? '调试模式已开启' : '调试模式已关闭')
 }
 
 async function handleImportAction(stepIndex: string): Promise<void> {
@@ -1081,10 +1191,13 @@ function onTensorJumpToCode(node: TensorFlowNode): void {
   void jumpToCode(node.sourcePath, node.lineStart)
 }
 
-async function jumpToCode(path: string, line: number): Promise<void> {
+// Open a file and reveal a line in the code pane. Switching files rebuilds the CodeMirror view
+// asynchronously, so CodeEditor queues the reveal when its view is not up yet — this function must
+// not try to compensate with extra waiting of its own.
+async function jumpToCode(path: string, line: number, endLine?: number): Promise<void> {
   await code.openCodeFile(path)
   await nextTick()
-  codeEditorRef.value?.goToLine(line)
+  codeEditorRef.value?.goToLine(line, endLine)
 }
 
 // Clicking a matrix row selects that relation (single source of truth = link id); the
@@ -1116,7 +1229,11 @@ async function jumpToTraceCode(row: TraceRowView): Promise<void> {
   const evidence = row.evidence.find((item) => item.side === 'code')
   const path = evidence?.path || row.code.split('::', 1)[0]
   if (!path) return
-  await jumpToCode(path, evidence?.line_start || 1)
+  await jumpToCode(
+    path,
+    evidence?.match_line_start ?? evidence?.line_start ?? 1,
+    evidence?.match_line_end ?? evidence?.line_end ?? undefined,
+  )
 }
 
 // Selection is the ONLY trigger for a jump, and it fires exactly once per change: selecting a
@@ -1137,10 +1254,14 @@ watch(
     if (paperBlock) {
       paperReaderRef.value?.scrollToBlock(paperBlock, paperEv?.quote || '', paperTargetId)
     }
-    // Code side: open the file and reveal the line.
+    // Code side: open the file and reveal the matched range.
     const codePath = codeEv?.path || link.code_symbol_id.split('::', 1)[0]
     if (codePath) {
-      await jumpToCode(codePath, codeEv?.match_line_start ?? codeEv?.line_start ?? 1)
+      await jumpToCode(
+        codePath,
+        codeEv?.match_line_start ?? codeEv?.line_start ?? 1,
+        codeEv?.match_line_end ?? codeEv?.line_end ?? undefined,
+      )
     }
   },
 )
@@ -1169,6 +1290,7 @@ async function onGitHubImport(): Promise<void> {
   const success = await code.handleGitHubImport(url)
   if (success) {
     githubUrl.value = ''
+    githubDialogVisible.value = false
     await reloadDerivedViews()
   }
 }
@@ -2135,6 +2257,13 @@ watch(activeBottomPanel, (tab) => {
   .status-bar span:nth-of-type(3) {
     display: none;
   }
+}
+
+.github-hint {
+  margin: 0;
+  color: #7a8794;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .trace-box-stack {

@@ -78,6 +78,13 @@ const emit = defineEmits<{
 const editorContainer = ref<HTMLDivElement | null>(null)
 let editorView: EditorView | null = null
 let ignoreUpdate = false
+// A jump requested while no editor exists yet. Switching files destroys the view and remounts it
+// asynchronously (the language mode is a dynamic import), so a caller that opens a file and then
+// asks for a line would otherwise hit a null view and be silently dropped — leaving the pane at
+// the top of the file, next to whatever OTHER trace target happens to be decorated there.
+// The path is kept so a queued jump is not replayed onto a different file the user opened since.
+let pendingReveal: { path: string; line: number; endLine?: number } | null = null
+let revealFrame = 0
 
 const setTraceDecorations = StateEffect.define<DecorationSet>()
 const traceField = StateField.define<DecorationSet>({
@@ -332,6 +339,15 @@ async function mountEditor(): Promise<void> {
     parent: editorContainer.value,
   })
   refreshTraceDecorations()
+  // Replay a jump that arrived while this view was being (re)created — but only if it was meant
+  // for the file that actually got mounted.
+  if (pendingReveal) {
+    const queued = pendingReveal
+    pendingReveal = null
+    if (!queued.path || queued.path === props.file.path) {
+      goToLine(queued.line, queued.endLine)
+    }
+  }
 }
 
 function destroyEditor(): void {
@@ -339,6 +355,7 @@ function destroyEditor(): void {
     editorView.destroy()
     editorView = null
   }
+  window.cancelAnimationFrame(revealFrame)
 }
 
 // Watch for file changes — recreate editor (flush: post ensures DOM is ready)
@@ -396,19 +413,45 @@ function getEditorContent(): string {
 }
 
 /**
- * Go to a specific line (1-based), select it, and scroll into view.
- * The selection highlight uses the existing green selection style.
+ * Go to a specific line (1-based), select it, and centre it in the viewport.
+ *
+ * `endLine` is the last line of the traced range. A short range is centred as a whole; a long
+ * one centres on its first line so the reader lands on the declaration rather than the middle
+ * of a body.
+ *
+ * When no view exists yet (the file is still being opened) the request is queued and replayed
+ * by `mountEditor`, so a jump is never silently lost.
  */
-function goToLine(line: number): void {
-  if (!editorView) return
+function goToLine(line: number, endLine?: number): void {
+  if (!editorView) {
+    pendingReveal = { path: props.file?.path ?? '', line, endLine }
+    return
+  }
+  pendingReveal = null
   const doc = editorView.state.doc
   const lineNum = Math.max(1, Math.min(line, doc.lines))
   const lineObj = doc.line(lineNum)
-  editorView.dispatch({
-    selection: { anchor: lineObj.from, head: lineObj.to },
-    scrollIntoView: true,
-  })
+  // Centre the whole range only while it still fits comfortably on screen.
+  const lastLine = endLine ? Math.max(1, Math.min(endLine, doc.lines)) : lineNum
+  const focusLine =
+    lastLine > lineNum && lastLine - lineNum <= 12
+      ? Math.floor((lineNum + lastLine) / 2)
+      : lineNum
+  const centre = (): void => {
+    if (!editorView) return
+    const current = editorView.state.doc
+    const safe = Math.max(1, Math.min(focusLine, current.lines))
+    editorView.dispatch({
+      effects: EditorView.scrollIntoView(current.line(safe).from, { y: 'center' }),
+    })
+  }
+  editorView.dispatch({ selection: { anchor: lineObj.from, head: lineObj.to } })
+  centre()
   editorView.focus()
+  // A freshly mounted view has not measured its own geometry yet, so the scroll above can land
+  // short. Re-issue it once on the next frame, when line heights are known.
+  window.cancelAnimationFrame(revealFrame)
+  revealFrame = window.requestAnimationFrame(centre)
 }
 
 onBeforeUnmount(() => {
