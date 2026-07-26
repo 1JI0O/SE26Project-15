@@ -183,16 +183,25 @@ def update_trace_status(
     ).first()
     if link is None:
         raise HTTPException(status_code=404, detail="Trace link not found")
-    if payload.status not in {TraceStatus.ACCEPTED, TraceStatus.REJECTED}:
+    if payload.status == TraceStatus.PROPOSED:
+        # Undo a human review decision: the link returns to the review queue. Stale links
+        # stay stale — they belong to an outdated code revision, not to a decision.
+        if link.status not in {TraceStatus.ACCEPTED.value, TraceStatus.REJECTED.value}:
+            raise HTTPException(
+                status_code=409, detail="Only accepted or rejected traces can be reverted"
+            )
+        link.decided_at = None
+    elif payload.status in {TraceStatus.ACCEPTED, TraceStatus.REJECTED}:
+        if link.status != TraceStatus.PROPOSED.value:
+            raise HTTPException(status_code=409, detail="Only proposed traces can be reviewed")
+        link.decided_at = utc_now()
+    else:
         raise HTTPException(
             status_code=422,
-            detail="Only accepted or rejected decisions are allowed",
+            detail="Only accepted, rejected, or proposed (revert) are allowed",
         )
-    if link.status != TraceStatus.PROPOSED.value:
-        raise HTTPException(status_code=409, detail="Only proposed traces can be reviewed")
     link.status = payload.status.value
-    link.decided_at = utc_now()
-    link.updated_at = link.decided_at
+    link.updated_at = utc_now()
     link.version += 1
     session.add(link)
     record_local_operation(
@@ -214,22 +223,27 @@ def batch_update_trace_status(
     payload: TraceBatchStatusUpdate,
     session: Session = Depends(get_session),
 ) -> TraceBatchStatusResult:
-    """Accept or reject many proposed trace links at once.
+    """Accept, reject, or revert many trace links at once.
 
-    ``trace_ids`` selects a subset; omit it to review every currently-proposed link in the
-    project. Only ``proposed`` links change — already-decided or stale links are skipped, so
-    the operation is idempotent and safe to retry.
+    ``trace_ids`` selects a subset; omit it to apply to every eligible link in the project.
+    ``accepted``/``rejected`` move only ``proposed`` links; ``proposed`` reverts only
+    ``accepted``/``rejected`` links back to the review queue. Ineligible or stale links are
+    skipped, so the operation is idempotent and safe to retry.
     """
 
     project = get_project_or_404(project_id, session)
-    if payload.status not in {TraceStatus.ACCEPTED, TraceStatus.REJECTED}:
+    if payload.status == TraceStatus.PROPOSED:
+        source_statuses = {TraceStatus.ACCEPTED.value, TraceStatus.REJECTED.value}
+    elif payload.status in {TraceStatus.ACCEPTED, TraceStatus.REJECTED}:
+        source_statuses = {TraceStatus.PROPOSED.value}
+    else:
         raise HTTPException(
             status_code=422,
-            detail="Only accepted or rejected decisions are allowed",
+            detail="Only accepted, rejected, or proposed (revert) are allowed",
         )
     statement = select(TraceLink).where(
         TraceLink.project_id == project_id,
-        TraceLink.status == TraceStatus.PROPOSED.value,
+        TraceLink.status.in_(source_statuses),
     )
     requested_ids = [tid for tid in (payload.trace_ids or []) if tid]
     if requested_ids:
@@ -238,7 +252,7 @@ def batch_update_trace_status(
     now = utc_now()
     for link in links:
         link.status = payload.status.value
-        link.decided_at = now
+        link.decided_at = None if payload.status == TraceStatus.PROPOSED else now
         link.updated_at = now
         link.version += 1
         session.add(link)

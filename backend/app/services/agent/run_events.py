@@ -21,6 +21,57 @@ def event_to_read(event: AgentRunEvent) -> AgentRunEventRead:
     )
 
 
+def append_event(
+    session: Session,
+    run: AgentRun,
+    sequence: int,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> AgentRunEvent:
+    """Insert one run event row (plus its local-sync operation) and commit.
+
+    Shared by the session-bound ``RunEventEmitter`` and the thread-safe shared event bus
+    used by parallel trace sub-agents, so both paths stay behaviorally identical.
+    """
+
+    event = AgentRunEvent(
+        run_id=run.run_id,
+        conversation_id=run.conversation_id,
+        project_id=run.project_id,
+        sequence=sequence,
+        event_type=event_type,
+        payload_json=payload or {},
+    )
+    session.add(event)
+    project = session.get(Project, run.project_id)
+    if project is not None and project.agent_history_sync:
+        from app.services.local_sync import agent_event_payload, record_local_operation
+
+        record_local_operation(
+            session,
+            project,
+            "agent_run_event",
+            event.public_id,
+            {
+                "project_public_id": project.public_id,
+                "run_public_id": run.public_id,
+                "conversation_public_id": session.exec(
+                    select(AgentConversation.public_id).where(
+                        AgentConversation.conversation_id == event.conversation_id
+                    )
+                ).first(),
+                "sequence": event.sequence,
+                "event_type": event.event_type,
+                "payload": agent_event_payload(event.payload_json),
+                "created_at": event.created_at.isoformat(),
+            },
+            base_version=0,
+        )
+    session.commit()
+    session.refresh(event)
+    return event
+
+
 class RunEventEmitter:
     def __init__(self, session: Session, run: AgentRun) -> None:
         self.session = session
@@ -32,42 +83,7 @@ class RunEventEmitter:
 
     def emit(self, event_type: str, payload: dict[str, Any] | None = None) -> AgentRunEvent:
         self.sequence += 1
-        event = AgentRunEvent(
-            run_id=self.run.run_id,
-            conversation_id=self.run.conversation_id,
-            project_id=self.run.project_id,
-            sequence=self.sequence,
-            event_type=event_type,
-            payload_json=payload or {},
-        )
-        self.session.add(event)
-        project = self.session.get(Project, self.run.project_id)
-        if project is not None and project.agent_history_sync:
-            from app.services.local_sync import agent_event_payload, record_local_operation
-
-            record_local_operation(
-                self.session,
-                project,
-                "agent_run_event",
-                event.public_id,
-                {
-                    "project_public_id": project.public_id,
-                    "run_public_id": self.run.public_id,
-                    "conversation_public_id": self.session.exec(
-                        select(AgentConversation.public_id).where(
-                            AgentConversation.conversation_id == event.conversation_id
-                        )
-                    ).first(),
-                    "sequence": event.sequence,
-                    "event_type": event.event_type,
-                    "payload": agent_event_payload(event.payload_json),
-                    "created_at": event.created_at.isoformat(),
-                },
-                base_version=0,
-            )
-        self.session.commit()
-        self.session.refresh(event)
-        return event
+        return append_event(self.session, self.run, self.sequence, event_type, payload)
 
 
 def list_run_events(

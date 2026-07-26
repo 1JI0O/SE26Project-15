@@ -6,7 +6,9 @@
 >
 > 适用范围：Tauri 桌面端复用的 `frontend/src` 与 `backend/app`
 >
-> 实施状态（2026-07-22，V1 聚焦切片）：已落地——`PaperTarget`/`CodeTarget`/`TraceReviewEvent` 表与迁移 `0010_trace_targets`；`TraceLink` 新增 `paper_target_id`/`code_target_id`/`relevance`/`score_basis_json`/`provenance_json`/`supersedes_trace_id`；发布 schema 升级为 `trace-agent-v2`（occurrence + target_type/role + salience/relevance/confidence），校验升级为“指定 occurrence 处 quote 命中 + 内容 hash 计算”；单 Agent 四阶段 prompt 与对齐后的 `trace-analysis` skill；导入后自动后台协调器（`services/tracing/coordinator.py`）；下线 `static_candidates` 写入路径（`/suggest` 恒 `static_candidates_retired`）；前端双向 hover/高亮（论文 `<mark>` 锚点装饰 + CodeMirror6 Decoration + 共享双向索引 `useTraceIndex` + 相关度浮层 + 点击固定/Esc）。**暂缓**：§11.3 跨 reparse 重锚算法、§12 固定样例集/指标质量门、V2 并发 subagent、图内 bbox 热区与算法 step 级分解。
+> 实施状态（2026-07-22，V1 聚焦切片）：已落地——`PaperTarget`/`CodeTarget`/`TraceReviewEvent` 表与迁移 `0010_trace_targets`；`TraceLink` 新增 `paper_target_id`/`code_target_id`/`relevance`/`score_basis_json`/`provenance_json`/`supersedes_trace_id`；发布 schema 升级为 `trace-agent-v2`（occurrence + target_type/role + salience/relevance/confidence），校验升级为“指定 occurrence 处 quote 命中 + 内容 hash 计算”；单 Agent 四阶段 prompt 与对齐后的 `trace-analysis` skill；导入后自动后台协调器（`services/tracing/coordinator.py`）；下线 `static_candidates` 写入路径（`/suggest` 恒 `static_candidates_retired`）；前端双向 hover/高亮（论文 `<mark>` 锚点装饰 + CodeMirror6 Decoration + 共享双向索引 `useTraceIndex` + 相关度浮层 + 点击固定/Esc）。**暂缓**：§11.3 跨 reparse 重锚算法、§12 固定样例集/指标质量门、图内 bbox 热区与算法 step 级分解。
+>
+> 更新（2026-07-26）：§9.2 的有界 subagent 已按**简化形态**落地——单 AgentRun 内新增 `dispatch_trace_subagents` 工具，父 Agent 在 SCOUT/MAP 后把区域派发给独立有界线程池中的并行子代理（各自独立上下文/预算、直接经单写者发布汇发布），未建独立父子 Run 与独立归并 Skill；见 `backend/app/services/agent/subagents.py` 与实现文档 §4.8。
 >
 > 可靠性修订（2026-07-23，`analysis_jobs.py`）：主循环每 5 步检测 job 是否被外部置为 `failed`（手动中止），若是则立即收尾、释放 `ThreadPoolExecutor` worker 槽，避免后续任务永久停在“等待 Agent 分析”；`AgentRun.trace_json` 改为内存累积、仅在 job 终结时一次性写回（`trace_entries`），减少每步大 JSON 写入；`RunEventEmitter` 仍逐事件 commit 以驱动 SSE 实时进度。
 >
@@ -384,11 +386,11 @@ V1 中这些区域由单个 Agent 在一个 Run 内顺序处理，受该 Run 的
 - **V1**：上表六个角色中，论文侦察、代码制图、区域追溯、校验归并**在同一个追溯 Agent job 内以两轮、多阶段的方式顺序执行**，复用现有单 Run 循环（`analysis_jobs.py` 的 `for step in range(budget)` 结构，trace 预算 64）。第一轮完成侦察 + 制图 + 选重点，第二轮完成逐区域取证 + 归并发布。它们共享上下文，不并发，不派生子 run。交互修订角色按第 14 节实现。
 - **V2**：当 V1 在固定样例集上暴露单 Agent 上下文过载问题时，才把这些阶段升级为“一个追溯 job 下包含多个有父子关系的 Agent run”，接入第 9.2 节的有界 subagent 模型；绝不在普通聊天里模拟 subagent。
 
-现有 Agent Runtime 完全没有父子 run、subagent、worker pool 或编排层（代码中零实现），因此 V2 是一项独立的基础设施工程，必须在 V1 验证追溯可靠后单独立项，不与 V1 混在一起交付。
+> 状态更新（2026-07-26）：编排层已以简化形态落地——`subagents.py` 提供有界并行的区域子代理（`dispatch_trace_subagents` 工具 + 每次派发临建的线程池 + 单写者发布汇 + 线程安全事件总线），但**没有**独立父子 Run 结构；per-worker 数据库 session、SSE 序号唯一、区域级取消/超时已解决，job 级 token 硬上限仍未实现。
 
 ### 9.2 有界 subagent 模型（V2）
 
-本节整体属于 V2。V1 不实现并发 subagent，其“区域”只是单 Agent 内的顺序处理段落，天然受单 Run 预算约束。V2 引入真正的并发 subagent 时遵循以下约束，并需额外解决 per-worker 数据库 session、SSE 多路复用、区域级重试与 job 级 token 硬上限等工程问题：
+本节的完整形态属于 V2；当前已落地其简化子集（单 Run 内 dispatch 工具 + 有界线程池，见实施状态行与实现文档 §4.8）。完整形态还需解决独立父子 run、四职责独立 Skill 与 job 级 token 硬上限。约束如下：
 
 - subagent 由协调器创建，绑定一个登记过的 `ExplorationRegion`。
 - subagent 不能自行无限派生；补充探索必须作为请求返回协调器，由协调器按剩余预算决定。

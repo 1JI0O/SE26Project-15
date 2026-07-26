@@ -78,12 +78,14 @@ const emit = defineEmits<{
 const editorContainer = ref<HTMLDivElement | null>(null)
 let editorView: EditorView | null = null
 let ignoreUpdate = false
-// A jump requested while no editor exists yet. Switching files destroys the view and remounts it
-// asynchronously (the language mode is a dynamic import), so a caller that opens a file and then
-// asks for a line would otherwise hit a null view and be silently dropped — leaving the pane at
-// the top of the file, next to whatever OTHER trace target happens to be decorated there.
-// The path is kept so a queued jump is not replayed onto a different file the user opened since.
+// The editor is destroyed and rebuilt asynchronously whenever the file changes (language pack
+// import). A reveal requested during that window must survive until the new view exists, and a
+// stale mount must never win over a newer file switch. The path is kept so a queued reveal is
+// never replayed onto a different file the user opened in the meantime.
 let pendingReveal: { path: string; line: number; endLine?: number } | null = null
+let mounting = false
+let mountToken = 0
+let flashTimer: number | undefined
 let revealFrame = 0
 
 const setTraceDecorations = StateEffect.define<DecorationSet>()
@@ -93,6 +95,24 @@ const traceField = StateField.define<DecorationSet>({
     value = value.map(tr.changes)
     for (const effect of tr.effects) {
       if (effect.is(setTraceDecorations)) value = effect.value
+    }
+    return value
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
+
+// One-shot flash on the jump target line; cleared by a timer.
+const flashLineDeco = Decoration.line({ class: 'cm-line-flash' })
+const setFlashLine = StateEffect.define<number | null>()
+const flashField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes)
+    for (const effect of tr.effects) {
+      if (effect.is(setFlashLine)) {
+        value =
+          effect.value === null ? Decoration.none : Decoration.set([flashLineDeco.range(effect.value)])
+      }
     }
     return value
   },
@@ -318,15 +338,18 @@ function createExtensions(langExt: Extension): Extension[] {
       }
     }),
     traceField,
+    flashField,
     traceDomHandlers,
     langExt,
   ]
 }
 
-async function mountEditor(): Promise<void> {
+async function mountEditor(token: number): Promise<void> {
   if (!editorContainer.value || !props.file) return
 
   const langExt = await getLanguageExtension(props.file.path)
+  // A newer file switch started while the language pack was loading; let it own the view.
+  if (token !== mountToken || !editorContainer.value || !props.file) return
   const extensions = createExtensions(langExt)
 
   const state = EditorState.create({
@@ -339,15 +362,7 @@ async function mountEditor(): Promise<void> {
     parent: editorContainer.value,
   })
   refreshTraceDecorations()
-  // Replay a jump that arrived while this view was being (re)created — but only if it was meant
-  // for the file that actually got mounted.
-  if (pendingReveal) {
-    const queued = pendingReveal
-    pendingReveal = null
-    if (!queued.path || queued.path === props.file.path) {
-      goToLine(queued.line, queued.endLine)
-    }
-  }
+  // A queued reveal is replayed by the file watcher once `mounting` clears, so nothing to do here.
 }
 
 function destroyEditor(): void {
@@ -360,10 +375,16 @@ function destroyEditor(): void {
 
 // Watch for file changes — recreate editor (flush: post ensures DOM is ready)
 watch(() => props.file, async (newFile) => {
+  const token = ++mountToken
+  mounting = true
   destroyEditor()
   if (newFile) {
     await nextTick()
-    await mountEditor()
+    await mountEditor(token)
+  }
+  if (token === mountToken) {
+    mounting = false
+    if (pendingReveal) applyPendingReveal()
   }
 }, { immediate: true, flush: 'post' })
 
@@ -413,26 +434,32 @@ function getEditorContent(): string {
 }
 
 /**
- * Go to a specific line (1-based), select it, and centre it in the viewport.
+ * Go to a specific line (1-based), select it, and center it in the viewport.
+ * File switches rebuild the editor asynchronously, so the request is queued and applied by
+ * whichever of goToLine / mountEditor happens last (last request wins).
  *
- * `endLine` is the last line of the traced range. A short range is centred as a whole; a long
- * one centres on its first line so the reader lands on the declaration rather than the middle
- * of a body.
- *
- * When no view exists yet (the file is still being opened) the request is queued and replayed
- * by `mountEditor`, so a jump is never silently lost.
+ * `endLine` is the last line of the traced range: a short range is centred as a whole, a long
+ * one centres on its first line so the reader lands on the declaration rather than mid-body.
  */
 function goToLine(line: number, endLine?: number): void {
-  if (!editorView) {
-    pendingReveal = { path: props.file?.path ?? '', line, endLine }
+  pendingReveal = { path: props.file?.path ?? '', line, endLine }
+  if (editorView && !mounting) applyPendingReveal()
+}
+
+function applyPendingReveal(): void {
+  if (!editorView || !pendingReveal) return
+  // A reveal queued for another file is stale — the user has since opened something else.
+  if (pendingReveal.path && props.file && pendingReveal.path !== props.file.path) {
+    pendingReveal = null
     return
   }
-  pendingReveal = null
   const doc = editorView.state.doc
-  const lineNum = Math.max(1, Math.min(line, doc.lines))
+  const lineNum = Math.max(1, Math.min(pendingReveal.line, doc.lines))
+  const rangeEnd = pendingReveal.endLine
+  pendingReveal = null
   const lineObj = doc.line(lineNum)
-  // Centre the whole range only while it still fits comfortably on screen.
-  const lastLine = endLine ? Math.max(1, Math.min(endLine, doc.lines)) : lineNum
+  // Centre the whole match only while it still fits comfortably on screen.
+  const lastLine = rangeEnd ? Math.max(1, Math.min(rangeEnd, doc.lines)) : lineNum
   const focusLine =
     lastLine > lineNum && lastLine - lineNum <= 12
       ? Math.floor((lineNum + lastLine) / 2)
@@ -445,16 +472,24 @@ function goToLine(line: number, endLine?: number): void {
       effects: EditorView.scrollIntoView(current.line(safe).from, { y: 'center' }),
     })
   }
-  editorView.dispatch({ selection: { anchor: lineObj.from, head: lineObj.to } })
+  editorView.dispatch({
+    selection: { anchor: lineObj.from, head: lineObj.to },
+    effects: setFlashLine.of(lineObj.from),
+  })
   centre()
   editorView.focus()
   // A freshly mounted view has not measured its own geometry yet, so the scroll above can land
   // short. Re-issue it once on the next frame, when line heights are known.
   window.cancelAnimationFrame(revealFrame)
   revealFrame = window.requestAnimationFrame(centre)
+  window.clearTimeout(flashTimer)
+  flashTimer = window.setTimeout(() => {
+    editorView?.dispatch({ effects: setFlashLine.of(null) })
+  }, 1600)
 }
 
 onBeforeUnmount(() => {
+  window.clearTimeout(flashTimer)
   destroyEditor()
 })
 
@@ -598,6 +633,11 @@ defineExpose({ getEditorContent, goToLine })
 .editor-body :deep(.trace-code-hover) {
   background: rgba(224, 168, 58, 0.16);
   box-shadow: 0 0 0 1px rgba(224, 168, 58, 0.45);
+}
+
+/* One-shot flash on the line a jump landed on. */
+.editor-body :deep(.cm-line-flash) {
+  background: rgba(31, 143, 120, 0.18);
 }
 
 @media (max-width: 820px) {

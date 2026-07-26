@@ -60,13 +60,13 @@
 
     <!-- Content -->
     <template v-else>
-      <div v-if="proposedRows.length" class="batch-bar">
+      <div v-if="proposedGroups.length" class="batch-bar">
         <el-checkbox
           :model-value="allProposedSelected"
           :indeterminate="someProposedSelected && !allProposedSelected"
           @change="toggleSelectAll"
         >
-          全选候选（{{ proposedRows.length }}）
+          全选候选（{{ proposedGroups.length }}）
         </el-checkbox>
         <span class="batch-spacer" />
         <template v-if="selectedCount">
@@ -97,43 +97,61 @@
         <span>审阅</span>
       </div>
       <div
-        v-for="row in rows"
-        :key="`${row.paper}-${row.code}`"
-        :class="['trace-row', 'clickable', { selected: !!row.id && row.id === selectedId }]"
-        @click="$emit('selectRow', row)"
-        @mouseenter="$emit('hoverRow', row)"
+        v-for="row in mergedRows"
+        :key="row.key"
+        :class="['trace-row', 'clickable', { selected: isRowSelected(row) }]"
+        @click="$emit('selectRow', row.top)"
+        @mouseenter="$emit('hoverRow', row.top)"
         @mouseleave="$emit('leaveRow')"
       >
         <span class="check-cell" @click.stop>
           <el-checkbox
-            v-if="row.id && row.status === 'proposed'"
-            :model-value="selectedSet.has(row.id)"
-            @change="toggleRow(row.id)"
+            v-if="row.proposedIds.length"
+            :model-value="isGroupChecked(row)"
+            @change="toggleRow(row)"
           />
         </span>
-        <span class="location-cell" :title="row.rationale">{{ row.paper }}</span>
-        <span class="location-cell" :title="row.rationale">{{ row.code }}</span>
-        <span>{{ row.type }} · {{ row.evidenceCount }} 证据</span>
-        <el-progress :percentage="row.confidence" />
+        <span class="location-cell" :title="row.top.rationale">{{ row.top.paper }}</span>
+        <span class="location-cell" :title="row.top.rationale">{{ row.top.code }}</span>
+        <span :title="row.relationTypes.join(' / ')">
+          {{ row.relationTypes.join(' / ') }} · {{ row.evidenceCount }} 证据
+          <em v-if="row.count > 1" class="merge-badge">×{{ row.count }}</em>
+        </span>
+        <el-progress :percentage="row.confidence" :color="confidenceColor(row.confidence)" />
         <span class="trace-status">
-          <el-tag :type="statusType(row.status)" effect="plain" size="small">
-            {{ row.status }}
+          <el-tag
+            :type="statusType(row.status)"
+            effect="plain"
+            size="small"
+            :title="row.statusSummary"
+          >
+            {{ row.status === 'mixed' ? '混合' : row.status }}
           </el-tag>
-          <small>{{ row.source }}</small>
+          <small>{{ row.top.source }}</small>
         </span>
         <span class="review-actions">
-          <template v-if="row.id && row.status === 'proposed'">
-            <el-button size="small" text type="danger" @click.stop="reviewOne(row.id, 'rejected')">
+          <template v-if="row.proposedIds.length">
+            <el-button size="small" text type="danger" @click.stop="reviewGroup(row, 'rejected')">
               拒绝
             </el-button>
-            <el-button size="small" text type="success" @click.stop="reviewOne(row.id, 'accepted')">
+            <el-button size="small" text type="success" @click.stop="reviewGroup(row, 'accepted')">
               接受
             </el-button>
           </template>
-          <small v-else>{{ row.uncertainty }}</small>
+          <el-button
+            v-if="row.decidedIds.length"
+            size="small"
+            text
+            @click.stop="reviewGroup(row, 'proposed')"
+          >
+            撤回
+          </el-button>
+          <small v-if="!row.proposedIds.length && !row.decidedIds.length">
+            {{ row.top.uncertainty }}
+          </small>
         </span>
       </div>
-      <el-empty v-if="!rows.length" description="上传论文和代码后可生成追溯候选" />
+      <el-empty v-if="!mergedRows.length" description="上传论文和代码后可生成追溯候选" />
     </template>
   </article>
 </template>
@@ -142,6 +160,7 @@
 import { computed, ref, watch } from 'vue'
 import type { TraceRowView } from '@/composables/useTrace'
 import type { TraceStatus } from '@/types/tracing'
+import { confidenceColor } from './confidence'
 
 const props = withDefaults(
   defineProps<{
@@ -162,45 +181,115 @@ const emit = defineEmits<{
   suggest: []
   cancel: []
   review: [traceId: string, status: Extract<TraceStatus, 'accepted' | 'rejected'>]
-  reviewBatch: [status: Extract<TraceStatus, 'accepted' | 'rejected'>, traceIds?: string[]]
+  reviewBatch: [
+    status: Extract<TraceStatus, 'accepted' | 'rejected' | 'proposed'>,
+    traceIds?: string[],
+  ]
   selectRow: [row: TraceRowView]
   hoverRow: [row: TraceRowView]
   leaveRow: []
 }>()
 
+// One merged row per paper×code pair: the same pair may carry several relations (different
+// relation_type links); the matrix shows the highest-confidence one and reviews the whole group.
+interface MergedTraceRow {
+  key: string
+  top: TraceRowView
+  ids: string[]
+  proposedIds: string[]
+  // Accepted/rejected links in the group — the ones a "撤回" reverts to proposed.
+  decidedIds: string[]
+  relationTypes: string[]
+  count: number
+  confidence: number
+  status: TraceRowView['status'] | 'mixed'
+  statusSummary: string
+  evidenceCount: number
+}
+
+const mergedRows = computed<MergedTraceRow[]>(() => {
+  const groups = new Map<string, TraceRowView[]>()
+  for (const row of props.rows) {
+    const key = `${row.paper}|${row.code}`
+    const list = groups.get(key)
+    if (list) list.push(row)
+    else groups.set(key, [row])
+  }
+  const merged: MergedTraceRow[] = []
+  for (const [key, group] of groups) {
+    const sorted = [...group].sort((a, b) => b.confidence - a.confidence)
+    const top = sorted[0]
+    const relationTypes: string[] = []
+    const statusCounts = new Map<string, number>()
+    for (const row of sorted) {
+      if (!relationTypes.includes(row.type)) relationTypes.push(row.type)
+      statusCounts.set(row.status, (statusCounts.get(row.status) ?? 0) + 1)
+    }
+    merged.push({
+      key,
+      top,
+      ids: sorted.map((row) => row.id).filter((id): id is string => Boolean(id)),
+      proposedIds: sorted
+        .filter((row): row is TraceRowView & { id: string } =>
+          Boolean(row.id) && row.status === 'proposed',
+        )
+        .map((row) => row.id),
+      decidedIds: sorted
+        .filter((row): row is TraceRowView & { id: string } =>
+          Boolean(row.id) && (row.status === 'accepted' || row.status === 'rejected'),
+        )
+        .map((row) => row.id),
+      relationTypes,
+      count: sorted.length,
+      confidence: top.confidence,
+      status: statusCounts.size === 1 ? top.status : 'mixed',
+      statusSummary: Array.from(statusCounts, ([status, count]) => `${status} ${count}`).join(' · '),
+      evidenceCount: sorted.reduce((sum, row) => sum + row.evidenceCount, 0),
+    })
+  }
+  return merged
+})
+
 // Ids checked for batch review. Kept in sync with the current proposed set so decided/removed
-// rows never linger as phantom selections.
+// rows never linger as phantom selections. Checking a merged row checks its whole group.
 const selectedSet = ref<Set<string>>(new Set())
 
-const proposedRows = computed(() =>
-  props.rows.filter((row): row is TraceRowView & { id: string } =>
-    Boolean(row.id) && row.status === 'proposed',
-  ),
-)
+const proposedGroups = computed(() => mergedRows.value.filter((row) => row.proposedIds.length))
+const allProposedIds = computed(() => proposedGroups.value.flatMap((row) => row.proposedIds))
 const selectedCount = computed(() => selectedSet.value.size)
 const allProposedSelected = computed(
-  () => proposedRows.value.length > 0 && proposedRows.value.every((row) => selectedSet.value.has(row.id)),
+  () =>
+    allProposedIds.value.length > 0 &&
+    allProposedIds.value.every((id) => selectedSet.value.has(id)),
 )
 const someProposedSelected = computed(() =>
-  proposedRows.value.some((row) => selectedSet.value.has(row.id)),
+  allProposedIds.value.some((id) => selectedSet.value.has(id)),
 )
 
-watch(proposedRows, (rows) => {
-  const valid = new Set(rows.map((row) => row.id))
+watch(allProposedIds, (ids) => {
+  const valid = new Set(ids)
   const next = new Set<string>()
   for (const id of selectedSet.value) if (valid.has(id)) next.add(id)
   selectedSet.value = next
 })
 
-function toggleRow(id: string): void {
+function isRowSelected(row: MergedTraceRow): boolean {
+  return Boolean(props.selectedId && row.ids.includes(props.selectedId))
+}
+
+function isGroupChecked(row: MergedTraceRow): boolean {
+  return row.proposedIds.every((id) => selectedSet.value.has(id))
+}
+
+function toggleRow(row: MergedTraceRow): void {
   const next = new Set(selectedSet.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
+  if (isGroupChecked(row)) for (const id of row.proposedIds) next.delete(id)
+  else for (const id of row.proposedIds) next.add(id)
   selectedSet.value = next
 }
 
 function toggleSelectAll(checked: boolean | string | number): void {
-  selectedSet.value = checked ? new Set(proposedRows.value.map((row) => row.id)) : new Set()
+  selectedSet.value = checked ? new Set(allProposedIds.value) : new Set()
 }
 
 function emitBatch(
@@ -213,12 +302,16 @@ function emitBatch(
   emit('leaveRow')
 }
 
-function reviewOne(traceId: string, status: Extract<TraceStatus, 'accepted' | 'rejected'>): void {
-  emit('review', traceId, status)
+function reviewGroup(
+  row: MergedTraceRow,
+  status: Extract<TraceStatus, 'accepted' | 'rejected' | 'proposed'>,
+): void {
+  // 'proposed' undoes the group's decisions; the other two review its pending links.
+  emit('reviewBatch', status, status === 'proposed' ? row.decidedIds : row.proposedIds)
   emit('leaveRow')
 }
 
-function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'info' | 'danger' {
+function statusType(status: MergedTraceRow['status']): 'success' | 'warning' | 'info' | 'danger' {
   if (status === 'accepted') return 'success'
   if (status === 'rejected') return 'danger'
   if (status === 'proposed') return 'warning'
@@ -388,6 +481,16 @@ function statusType(status: TraceRowView['status']): 'success' | 'warning' | 'in
   display: flex;
   align-items: center;
   gap: 5px;
+}
+
+.merge-badge {
+  padding: 0 5px;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.14);
+  color: #8b5cf6;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
 }
 
 .trace-status small,

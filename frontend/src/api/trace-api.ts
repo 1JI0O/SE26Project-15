@@ -31,10 +31,13 @@ export async function suggestTraceLinks(
   return data
 }
 
+// 'proposed' reverts a previous accept/reject decision back to the review queue.
+export type TraceReviewStatus = Extract<TraceStatus, 'accepted' | 'rejected' | 'proposed'>
+
 export async function updateTraceStatus(
   projectId: number,
   traceId: string,
-  status: Extract<TraceStatus, 'accepted' | 'rejected'>,
+  status: TraceReviewStatus,
 ): Promise<TraceLink> {
   const { data } = await http.patch<TraceLink>(
     `/projects/${projectId}/trace-links/${traceId}/status`,
@@ -52,7 +55,7 @@ export interface TraceBatchStatusResult {
 
 export async function batchUpdateTraceStatus(
   projectId: number,
-  status: Extract<TraceStatus, 'accepted' | 'rejected'>,
+  status: TraceReviewStatus,
   traceIds?: string[],
 ): Promise<TraceBatchStatusResult> {
   const { data } = await http.post<TraceBatchStatusResult>(

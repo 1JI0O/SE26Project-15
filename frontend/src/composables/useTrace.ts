@@ -7,6 +7,7 @@ import {
   listTraceLinks,
   updateTraceStatus,
   type TraceClearScope,
+  type TraceReviewStatus,
 } from '@/api/trace-api'
 import {
   cancelAgentAnalysisJob,
@@ -285,17 +286,22 @@ export function useTrace(projectId: () => number) {
     }
   }
 
-  async function reviewTrace(
-    traceId: string,
-    status: Extract<TraceStatus, 'accepted' | 'rejected'>,
-  ): Promise<void> {
+  const reviewVerb: Record<TraceReviewStatus, string> = {
+    accepted: '已接受',
+    rejected: '已拒绝',
+    proposed: '已撤回',
+  }
+
+  async function reviewTrace(traceId: string, status: TraceReviewStatus): Promise<void> {
     try {
       const updated = await updateTraceStatus(projectId(), traceId, status)
       const index = traceRows.value.findIndex((row) => row.id === traceId)
       if (index >= 0) traceRows.value[index] = fromTraceLink(updated)
       const linkIndex = traceLinks.value.findIndex((link) => link.id === traceId)
       if (linkIndex >= 0) traceLinks.value[linkIndex] = updated
-      ElMessage.success(status === 'accepted' ? '追溯关系已接受' : '追溯关系已拒绝')
+      ElMessage.success(
+        status === 'proposed' ? '已撤回审阅，关系回到待审状态' : `追溯关系${reviewVerb[status]}`,
+      )
     } catch (cause) {
       debug.error('trace.review', `更新追溯 ${traceId} 状态失败`, cause)
       ElMessage.error('追溯审阅状态更新失败')
@@ -303,12 +309,10 @@ export function useTrace(projectId: () => number) {
     }
   }
 
-  // Accept/reject many proposed links at once. Pass explicit ids for a selection, or omit
-  // them to review every currently-proposed link in the project.
-  async function reviewBatch(
-    status: Extract<TraceStatus, 'accepted' | 'rejected'>,
-    traceIds?: string[],
-  ): Promise<void> {
+  // Accept/reject many proposed links at once — or revert decided links back to proposed
+  // (status 'proposed'). Pass explicit ids for a selection, or omit them to apply to every
+  // eligible link in the project.
+  async function reviewBatch(status: TraceReviewStatus, traceIds?: string[]): Promise<void> {
     try {
       const result = await batchUpdateTraceStatus(projectId(), status, traceIds)
       const updatedById = new Map(result.updated.map((link) => [link.id, link]))
@@ -319,11 +323,9 @@ export function useTrace(projectId: () => number) {
         updatedById.has(link.id) ? updatedById.get(link.id)! : link,
       )
       if (result.updated_count) {
-        ElMessage.success(
-          `${status === 'accepted' ? '已接受' : '已拒绝'} ${result.updated_count} 条追溯关系`,
-        )
+        ElMessage.success(`${reviewVerb[status]} ${result.updated_count} 条追溯关系`)
       } else {
-        ElMessage.info('没有可审阅的候选关系')
+        ElMessage.info(status === 'proposed' ? '没有可撤回的审阅' : '没有可审阅的候选关系')
       }
     } catch (cause) {
       debug.error('trace.reviewBatch', '批量审阅失败', cause)
