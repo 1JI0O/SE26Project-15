@@ -80,11 +80,13 @@ let editorView: EditorView | null = null
 let ignoreUpdate = false
 // The editor is destroyed and rebuilt asynchronously whenever the file changes (language pack
 // import). A reveal requested during that window must survive until the new view exists, and a
-// stale mount must never win over a newer file switch.
-let pendingReveal: { line: number } | null = null
+// stale mount must never win over a newer file switch. The path is kept so a queued reveal is
+// never replayed onto a different file the user opened in the meantime.
+let pendingReveal: { path: string; line: number; endLine?: number } | null = null
 let mounting = false
 let mountToken = 0
 let flashTimer: number | undefined
+let revealFrame = 0
 
 const setTraceDecorations = StateEffect.define<DecorationSet>()
 const traceField = StateField.define<DecorationSet>({
@@ -360,6 +362,7 @@ async function mountEditor(token: number): Promise<void> {
     parent: editorContainer.value,
   })
   refreshTraceDecorations()
+  // A queued reveal is replayed by the file watcher once `mounting` clears, so nothing to do here.
 }
 
 function destroyEditor(): void {
@@ -367,6 +370,7 @@ function destroyEditor(): void {
     editorView.destroy()
     editorView = null
   }
+  window.cancelAnimationFrame(revealFrame)
 }
 
 // Watch for file changes — recreate editor (flush: post ensures DOM is ready)
@@ -433,26 +437,51 @@ function getEditorContent(): string {
  * Go to a specific line (1-based), select it, and center it in the viewport.
  * File switches rebuild the editor asynchronously, so the request is queued and applied by
  * whichever of goToLine / mountEditor happens last (last request wins).
+ *
+ * `endLine` is the last line of the traced range: a short range is centred as a whole, a long
+ * one centres on its first line so the reader lands on the declaration rather than mid-body.
  */
-function goToLine(line: number): void {
-  pendingReveal = { line }
+function goToLine(line: number, endLine?: number): void {
+  pendingReveal = { path: props.file?.path ?? '', line, endLine }
   if (editorView && !mounting) applyPendingReveal()
 }
 
 function applyPendingReveal(): void {
   if (!editorView || !pendingReveal) return
+  // A reveal queued for another file is stale — the user has since opened something else.
+  if (pendingReveal.path && props.file && pendingReveal.path !== props.file.path) {
+    pendingReveal = null
+    return
+  }
   const doc = editorView.state.doc
   const lineNum = Math.max(1, Math.min(pendingReveal.line, doc.lines))
+  const rangeEnd = pendingReveal.endLine
   pendingReveal = null
   const lineObj = doc.line(lineNum)
+  // Centre the whole match only while it still fits comfortably on screen.
+  const lastLine = rangeEnd ? Math.max(1, Math.min(rangeEnd, doc.lines)) : lineNum
+  const focusLine =
+    lastLine > lineNum && lastLine - lineNum <= 12
+      ? Math.floor((lineNum + lastLine) / 2)
+      : lineNum
+  const centre = (): void => {
+    if (!editorView) return
+    const current = editorView.state.doc
+    const safe = Math.max(1, Math.min(focusLine, current.lines))
+    editorView.dispatch({
+      effects: EditorView.scrollIntoView(current.line(safe).from, { y: 'center' }),
+    })
+  }
   editorView.dispatch({
     selection: { anchor: lineObj.from, head: lineObj.to },
-    effects: [
-      EditorView.scrollIntoView(lineObj.from, { y: 'center' }),
-      setFlashLine.of(lineObj.from),
-    ],
+    effects: setFlashLine.of(lineObj.from),
   })
+  centre()
   editorView.focus()
+  // A freshly mounted view has not measured its own geometry yet, so the scroll above can land
+  // short. Re-issue it once on the next frame, when line heights are known.
+  window.cancelAnimationFrame(revealFrame)
+  revealFrame = window.requestAnimationFrame(centre)
   window.clearTimeout(flashTimer)
   flashTimer = window.setTimeout(() => {
     editorView?.dispatch({ effects: setFlashLine.of(null) })

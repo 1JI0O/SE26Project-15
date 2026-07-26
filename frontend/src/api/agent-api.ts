@@ -1,6 +1,7 @@
 import { apiBaseUrl, http } from '@/api/http'
 import type {
   AgentCapability,
+  AgentAnalysisDiagnostics,
   AgentAnalysisJob,
   AgentAnalysisKind,
   AgentConfirmation,
@@ -47,6 +48,17 @@ export async function cancelAgentAnalysisJob(
 ): Promise<AgentAnalysisJob> {
   const { data } = await http.post<AgentAnalysisJob>(
     `/projects/${projectId}/agent/analysis-jobs/${encodeURIComponent(jobId)}/cancel`,
+  )
+  return data
+}
+
+/** Full failure detail for one analysis run — only fetched while debug mode is on. */
+export async function getAgentAnalysisDiagnostics(
+  projectId: number,
+  jobId: string,
+): Promise<AgentAnalysisDiagnostics> {
+  const { data } = await http.get<AgentAnalysisDiagnostics>(
+    `/projects/${projectId}/agent/analysis-jobs/${encodeURIComponent(jobId)}/diagnostics`,
   )
   return data
 }

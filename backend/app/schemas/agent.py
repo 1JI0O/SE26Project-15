@@ -169,6 +169,33 @@ class AgentAnalysisJobRead(BaseModel):
     completed_at: datetime | None
 
 
+class AgentAnalysisDiagnosticsRead(BaseModel):
+    """Full failure/progress detail for one analysis job, surfaced by the workbench debug mode.
+
+    The normal job read only exposes a short ``error_code``; when debug mode is on the UI needs
+    the underlying provider/tool failures and the last model steps to explain what actually broke.
+    """
+
+    job_id: str
+    project_id: int
+    kind: str
+    status: str
+    error_code: str | None
+    progress: dict[str, object] = Field(default_factory=dict)
+    run_id: str | None
+    run_status: str | None
+    degraded_reason: str | None
+    provider_name: str | None
+    model_name: str | None
+    step_count: int
+    published_link_count: int
+    events: list[AgentRunEventRead] = Field(default_factory=list)
+    steps: list[dict[str, object]] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
 class AgentAnalysisArtifactRead(BaseModel):
     artifact_id: str
     job_id: str

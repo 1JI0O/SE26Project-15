@@ -2,17 +2,21 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   batchUpdateTraceStatus,
+  clearTraceLinks,
   getWorkspaceTraceMatrix,
   listTraceLinks,
   updateTraceStatus,
+  type TraceClearScope,
   type TraceReviewStatus,
 } from '@/api/trace-api'
 import {
   cancelAgentAnalysisJob,
   createAgentAnalysisJob,
+  getAgentAnalysisDiagnostics,
   getAgentAnalysisJob,
   streamAgentAnalysisJob,
 } from '@/api/agent-api'
+import { useDebug } from '@/composables/useDebug'
 import type { TraceEvidence, TraceLink, TraceStatus, WorkspaceTraceRow } from '@/types/tracing'
 
 export interface TraceRowView {
@@ -61,6 +65,7 @@ function fromWorkspaceRow(row: WorkspaceTraceRow): TraceRowView {
 }
 
 export function useTrace(projectId: () => number) {
+  const debug = useDebug()
   const traceRows = ref<TraceRowView[]>([])
   // Raw links power the bidirectional hover index (fragment anchoring + relevance).
   const traceLinks = ref<TraceLink[]>([])
@@ -97,9 +102,27 @@ export function useTrace(projectId: () => number) {
       traceLinks.value = []
       traceRows.value = []
       error.value = '追溯矩阵加载失败'
+      debug.error('trace.load', '追溯矩阵加载失败', cause)
       console.error(cause)
     } finally {
       loading.value = false
+    }
+  }
+
+  /** Drop previously generated relations. Called when the user answers "不保留" before a rerun. */
+  async function clearExisting(scope: TraceClearScope = 'proposed'): Promise<number> {
+    try {
+      const result = await clearTraceLinks(projectId(), scope)
+      traceLinks.value = []
+      traceRows.value = []
+      mode.value = ''
+      debug.info('trace.clear', `已清除 ${result.deleted_count} 条历史追溯（scope=${scope}）`)
+      return result.deleted_count
+    } catch (cause) {
+      debug.error('trace.clear', '清除历史追溯失败', cause)
+      ElMessage.error('清除历史追溯结果失败')
+      console.error(cause)
+      throw cause
     }
   }
 
@@ -156,6 +179,13 @@ export function useTrace(projectId: () => number) {
           pushLog(`#${analysisStep.value} ${activity}`)
         } else if (event.event_type === 'analysis.tool.failed') {
           pushLog(`⚠ ${String(p.code ?? '重试')}`)
+          debug.warn(
+            'trace.tool',
+            `工具调用失败：${String(p.tool_name ?? '未知')} → ${String(p.code ?? '')}`,
+            p,
+          )
+        } else if (event.event_type === 'analysis.failed') {
+          debug.error('trace.analysis', `分析中止：${String(p.code ?? '未知原因')}`, p)
         } else if (event.event_type === 'analysis.published') {
           const total = Number(p.total_links ?? 0)
           pushLog(`✓ 新增 ${Number(p.new_links ?? 0)} 条（累计 ${total}）`)
@@ -173,6 +203,21 @@ export function useTrace(projectId: () => number) {
     }
     const completed = await getAgentAnalysisJob(projectId(), submitted.job_id)
     if (completed.status !== 'succeeded') {
+      // In debug mode fetch the run's full diagnostics before throwing, so the panel can explain
+      // WHY it failed (provider message, rejected evidence, last tool steps) instead of a code.
+      if (debug.enabled.value) {
+        try {
+          const diagnostics = await getAgentAnalysisDiagnostics(projectId(), submitted.job_id)
+          debug.error(
+            'trace.analysis',
+            `任务 ${submitted.job_id} 状态 ${completed.status}：`
+              + `${completed.error_code || '未知错误'}`,
+            diagnostics,
+          )
+        } catch (cause) {
+          debug.error('trace.analysis', '读取失败诊断信息失败', cause)
+        }
+      }
       throw new Error(completed.error_code || `${kind}_analysis_failed`)
     }
   }
@@ -182,17 +227,16 @@ export function useTrace(projectId: () => number) {
     cancelling.value = false
     cancelledRun = false
     error.value = null
-    if (force) {
-      traceLinks.value = []
-      traceRows.value = []
-      mode.value = ''
-      degraded.value = false
-      degradedReason.value = null
-      analysisLog.value = []
-      analysisProgress.value = ''
-      analysisActivity.value = ''
-      analysisStep.value = 0
-    }
+    // Only the run's own progress state is reset here. Whether the PREVIOUS round's relations
+    // survive is the user's explicit choice (see clearExisting) — a rerun must never silently
+    // discard accepted work.
+    degraded.value = false
+    degradedReason.value = null
+    analysisLog.value = []
+    analysisProgress.value = ''
+    analysisActivity.value = ''
+    analysisStep.value = 0
+    void force
     try {
       // Always force a fresh job on explicit user click. Reusing a stuck
       // queued/running fingerprint made the UI freeze on「等待 Agent 分析」.
@@ -209,8 +253,11 @@ export function useTrace(projectId: () => number) {
     } catch (cause) {
       degraded.value = true
       degradedReason.value = cause instanceof Error ? cause.message : 'agent_analysis_failed'
+      debug.error('trace.generate', 'Agent 追溯失败', cause)
       ElMessage.error('Agent 追溯失败，已保留现有追溯结果')
       console.error(cause)
+      // A failed run may still have published batches before dying; show whatever landed.
+      await loadTraceRows()
     } finally {
       generating.value = false
       cancelling.value = false
@@ -233,6 +280,7 @@ export function useTrace(projectId: () => number) {
     } catch (cause) {
       cancelling.value = false
       cancelledRun = false
+      debug.error('trace.cancel', '中止追溯失败', cause)
       ElMessage.error('中止追溯失败')
       console.error(cause)
     }
@@ -255,6 +303,7 @@ export function useTrace(projectId: () => number) {
         status === 'proposed' ? '已撤回审阅，关系回到待审状态' : `追溯关系${reviewVerb[status]}`,
       )
     } catch (cause) {
+      debug.error('trace.review', `更新追溯 ${traceId} 状态失败`, cause)
       ElMessage.error('追溯审阅状态更新失败')
       console.error(cause)
     }
@@ -279,6 +328,7 @@ export function useTrace(projectId: () => number) {
         ElMessage.info(status === 'proposed' ? '没有可撤回的审阅' : '没有可审阅的候选关系')
       }
     } catch (cause) {
+      debug.error('trace.reviewBatch', '批量审阅失败', cause)
       ElMessage.error('批量审阅失败')
       console.error(cause)
     }
@@ -301,6 +351,7 @@ export function useTrace(projectId: () => number) {
     analysisLog,
     currentJobId,
     loadTraceRows,
+    clearExisting,
     generateSuggestions,
     cancelAnalysis,
     reviewTrace,

@@ -35,8 +35,15 @@
 | --- | --- | --- | --- |
 | GET | `/settings/integrations` | 已实现 | 读取 Agent/MinerU 非敏感配置及密钥配置状态 |
 | PUT | `/settings/integrations` | 已实现 | 保存运行时设置；立即作用于新请求和新解析任务 |
+| POST | `/settings/integrations/probe` | 已实现 | 用当前填写（或已保存）的凭据实测一次连通性 |
 
 密钥字段只允许写入，响应仅返回 `api_key_configured` 或 `api_token_configured`。写入时省略密钥会保留原值，只有显式提交 `clear_api_key` 或 `clear_api_token` 才会清除。
+
+`probe` 让用户在保存前就能确认配置真的可用，而不是等到追溯或解析失败才发现。请求体 `{ target: "agent"|"mineru", base_url?, api_key?, model?, mineru_provider?, timeout_seconds? }`；省略密钥表示沿用本机已保存的值。`agent` 会向 `{base_url}/chat/completions` 发一次 `max_tokens=1` 的最小补全请求（同时验证地址、密钥与模型名，`/v1/models` 无法验证模型是否存在）；`mineru` 本地模式请求 `/health`，官方模式用不存在的 batch id 访问 `/extract-results/batch/...` 以验证 Token 而不创建解析任务。
+
+无论连通与否都返回 `200`——连不上本身就是探测结果，不是接口错误。响应为 `{ target, ok, code, detail, latency_ms }`，`code` 为 `ok`/`unauthorized`/`not_found`/`rate_limited`/`timeout`/`transport_error`/`http_{status}`/`missing_*`，`detail` 优先透传服务端自己的错误文案。
+
+Agent 请求超时上限由 120s 提升到 600s（默认 120s）：单步可能携带较大的发布载荷，思考型模型经常超过 120s 而被误判为失败。
 
 ## 论文与 MinerU
 
@@ -76,9 +83,11 @@
 | POST | `/projects/{project_id}/trace-links` | 已实现 | 创建带论文和代码证据的人工关系 |
 | POST | `/projects/{project_id}/trace-links/suggest` | 兼容 | 旧静态建议接口；新工作台不再调用 |
 | PATCH | `/projects/{project_id}/trace-links/{trace_id}/status` | 已实现 | 人工接受或拒绝 proposed 关系 |
+| DELETE | `/projects/{project_id}/trace-links?scope=` | 已实现 | 重新生成前清空历史关系（`proposed`/`agent`/`all`） |
 | POST | `/projects/{project_id}/agent/analysis-jobs` | 已实现 | 启动 Agent architecture/trace 结构化分析 |
 | GET | `/projects/{project_id}/agent/analysis-jobs/{job_id}` | 已实现 | 查询分析状态、revision 和 artifact |
 | GET | `/projects/{project_id}/agent/analysis-jobs/{job_id}/events` | 已实现 | SSE 分析进度与工具事件 |
+| GET | `/projects/{project_id}/agent/analysis-jobs/{job_id}/diagnostics` | 已实现 | 调试模式读取完整失败信息 |
 | POST | `/projects/{project_id}/agent/analysis-jobs/{job_id}/retry` | 已实现 | 强制重试相同输入 revision |
 | GET | `/projects/{project_id}/workspace/trace-matrix` | 已实现 | 工作台兼容矩阵视图 |
 

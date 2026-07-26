@@ -1,5 +1,7 @@
 import { http } from '@/api/http'
 import type {
+  IntegrationProbeRequest,
+  IntegrationProbeResult,
   IntegrationSettings,
   IntegrationSettingsUpdate,
 } from '@/types/integration-settings'
@@ -15,6 +17,19 @@ export async function updateIntegrationSettings(
   const { data } = await http.put<IntegrationSettings>(
     '/settings/integrations',
     payload,
+  )
+  return data
+}
+
+/** Never rejects on an unreachable endpoint — the failure is the answer, returned as ok=false. */
+export async function probeIntegration(
+  payload: IntegrationProbeRequest,
+): Promise<IntegrationProbeResult> {
+  const { data } = await http.post<IntegrationProbeResult>(
+    '/settings/integrations/probe',
+    payload,
+    // A cold model or a slow local MinerU can take a while; the server caps the real timeout.
+    { timeout: 180_000 },
   )
   return data
 }

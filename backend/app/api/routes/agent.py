@@ -10,6 +10,7 @@ from app.db.session import get_session
 from app.models.entities import AgentAnalysisArtifact, AgentAnalysisJob, AgentRun
 from app.schemas.agent import (
     AgentAnalysisArtifactRead,
+    AgentAnalysisDiagnosticsRead,
     AgentAnalysisJobCreate,
     AgentAnalysisJobRead,
     AgentCapabilityRead,
@@ -132,6 +133,62 @@ def cancel_analysis_job_endpoint(
     if job is None:
         raise HTTPException(status_code=404, detail="Analysis job not found")
     return job_to_read(job)
+
+
+@router.get(
+    "/analysis-jobs/{job_id}/diagnostics",
+    response_model=AgentAnalysisDiagnosticsRead,
+)
+def get_analysis_diagnostics(
+    project_id: int,
+    job_id: str,
+    event_limit: int = Query(default=200, ge=1, le=2000),
+    step_limit: int = Query(default=60, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> AgentAnalysisDiagnosticsRead:
+    """Everything known about one analysis run, for the workbench debug panel.
+
+    ``error_code`` alone hides the real cause (a provider 400, a rejected quote, a SQLite lock all
+    look alike from the outside), so this returns the run's degraded reason, its recorded events and
+    the tail of its model/tool step trace. Read-only; safe to poll after a failure.
+    """
+
+    get_project_or_404(project_id, session)
+    job = session.get(AgentAnalysisJob, job_id)
+    if job is None or job.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+    run = session.get(AgentRun, job.agent_run_id) if job.agent_run_id else None
+    events = (
+        list_run_events(session, project_id, job.agent_run_id)[-event_limit:]
+        if job.agent_run_id
+        else []
+    )
+    steps = list(run.trace_json or [])[-step_limit:] if run is not None else []
+    published = 0
+    if job.artifact_id:
+        artifact = session.get(AgentAnalysisArtifact, job.artifact_id)
+        if artifact is not None:
+            published = len(artifact.payload_json.get("candidates", []) or [])
+    return AgentAnalysisDiagnosticsRead(
+        job_id=job.job_id,
+        project_id=job.project_id,
+        kind=job.kind,
+        status=job.status,
+        error_code=job.error_code,
+        progress=job.progress_json or {},
+        run_id=job.agent_run_id,
+        run_status=run.status if run is not None else None,
+        degraded_reason=run.degraded_reason if run is not None else None,
+        provider_name=run.provider_name if run is not None else None,
+        model_name=run.model_name if run is not None else None,
+        step_count=run.step_count if run is not None else 0,
+        published_link_count=published,
+        events=events,
+        steps=steps,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        completed_at=job.completed_at,
+    )
 
 
 @router.get(

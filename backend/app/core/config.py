@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     tracelab_llm_api_key: SecretStr = SecretStr("")
     tracelab_llm_model: str = ""
     tracelab_llm_thinking_mode: str = Field(default="", pattern="^(|enabled|disabled)$")
-    tracelab_llm_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    tracelab_llm_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
     tracelab_llm_max_candidates: int = Field(default=10, ge=1, le=30)
     tracelab_llm_max_context_chars: int = Field(default=12_000, ge=1000, le=100_000)
     tracelab_agent_max_loop_steps: int = Field(default=18, ge=4, le=64)

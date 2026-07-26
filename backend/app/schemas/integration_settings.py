@@ -29,7 +29,9 @@ class AgentIntegrationUpdate(BaseModel):
     model: str = Field(default="", max_length=160)
     analysis_model: str = Field(default="", max_length=160)
     thinking_mode: Literal["", "enabled", "disabled"] = ""
-    timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    # A single agent step can carry a large publish payload and a thinking model can spend
+    # minutes on it, so the ceiling is generous; 120s was routinely hit mid-run.
+    timeout_seconds: float = Field(default=120.0, gt=0, le=600)
 
     _normalize_url = field_validator("base_url")(_validate_http_url)
 
@@ -84,3 +86,28 @@ class IntegrationSettingsRead(BaseModel):
 class IntegrationSettingsUpdate(BaseModel):
     agent: AgentIntegrationUpdate
     mineru: MinerUIntegrationUpdate
+
+
+class IntegrationProbeRequest(BaseModel):
+    """Test one endpoint with the values currently typed into the settings dialog.
+
+    Secrets are optional: omit them to probe with whatever is already stored on this machine,
+    matching the dialog's "已配置，留空则保留" behaviour.
+    """
+
+    target: Literal["agent", "mineru"]
+    base_url: str = Field(default="", max_length=500)
+    api_key: SecretStr | None = None
+    model: str = Field(default="", max_length=160)
+    mineru_provider: Literal["local", "official"] | None = None
+    timeout_seconds: float | None = Field(default=None, gt=0, le=300)
+
+    _normalize_url = field_validator("base_url")(_validate_http_url)
+
+
+class IntegrationProbeResult(BaseModel):
+    target: Literal["agent", "mineru"]
+    ok: bool
+    code: str = Field(max_length=64)
+    detail: str = Field(default="", max_length=600)
+    latency_ms: int | None = None

@@ -201,6 +201,7 @@ agent 用 `list_repository_files` / `list_code_symbols` / `get_symbol_source` **
 单条校验 `_validate_one_trace`([:517-543](../../backend/app/services/agent/analysis_tools.py)):
 - 论文侧:`resolve_anchor(block_text, quote, occurrence)` 在指定 occurrence 处定位,失败 → `paper_evidence_quote_invalid`。
 - 代码侧:先在声明的行区间内锚,失败则**对整个文件重锚并用真实命中修正行号**([:472-482](../../backend/app/services/agent/analysis_tools.py)),算出 char 偏移与行列。
+  - 降级到 `normalized` / `approximate` 时没有 char 偏移,此时行号仍只是模型的**未经核实的声明**。`locate_approximate_span`([anchoring.py](../../backend/app/services/tracing/anchoring.py))按字母数字签名在文件里定位 quote,把 `match_line_start` / `match_line_end` 收敛到**真正命中的行**;声明区间只有在包含该命中时才作为上下文保留,否则整体替换。这样 UI 上的 `:行号` 与代码栏装饰指向的一定是核实过的位置。
 
 锚定核心在 [anchoring.py](../../backend/app/services/agent/anchoring.py):`resolve_anchor` 有**降级等级** `exact → normalized → approximate`,再不行才 `AnchorError`;`quote_hash` = 规范化 quote 的 sha256。这套 occurrence + hash 机制就是「不许伪造证据」的技术底座。
 
@@ -302,7 +303,9 @@ CodeMirror 6 `StateField` + `Decoration.mark`([CodeEditor.vue:82-148](../../fron
 
 ### 5.5 装配 —— `ProjectWorkspaceView.vue`
 
-- **选中 → 一次性双侧跳转**:`selectedLinkId` watch([:1099-1117](../../frontend/src/views/ProjectWorkspaceView.vue))变化时,论文 `scrollToBlock(block, quote)` + 代码 `jumpToCode(path, match_line_start ?? line_start)`。**只 watch `selectedLinkId`**(非 hover),所以悬浮不会触发跳转。
+- **选中 → 一次性双侧跳转**:`selectedLinkId` watch([:1099-1117](../../frontend/src/views/ProjectWorkspaceView.vue))变化时,论文 `scrollToBlock(block, quote)` + 代码 `jumpToCode(path, match_line_start ?? line_start, match_line_end ?? line_end)`。**只 watch `selectedLinkId`**(非 hover),所以悬浮不会触发跳转。
+  - 切文件会**异步重建** CodeMirror 视图(语言模式是动态 import),所以 `goToLine` 在视图尚未挂载时把请求**排队**,由 `mountEditor` 按路径校验后重放([CodeEditor.vue](../../frontend/src/features/repository/CodeEditor.vue))。否则跳转会静默丢失,代码栏停在文件顶部 —— 那里往往正好有**另一条**追溯目标的蓝色装饰,看起来就像「跳到了错误的行」。
+  - reveal 用 `scrollIntoView(pos, { y: 'center' })` 居中,并在下一帧重发一次(新建视图尚未完成测量时首次滚动会偏短);命中区间较短时居中整段,较长时居中首行。
 - **固定摘要框 + 悬浮预览框**(右下角 `position:fixed`):固定框显示选中关系两侧摘要 + 分数 + rationale;悬浮不同关系时上方叠临时预览框;`hoveredSummary` 在 hover===selected 时返回 null,避免重复。
   - 「论文锚点不可用」:`selectedPaperUnresolved` 查 `paperReaderRef.unresolvedTargetIds`([:754-758](../../frontend/src/views/ProjectWorkspaceView.vue))。
   - 「另有 N 条更低相关度关系」:读 `otherLinkCount`([:625-627](../../frontend/src/views/ProjectWorkspaceView.vue))。

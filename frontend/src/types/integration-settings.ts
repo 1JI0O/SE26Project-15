@@ -46,3 +46,21 @@ export interface IntegrationSettingsUpdate {
     clear_api_token: boolean
   }
 }
+
+/** Probe one endpoint with the values typed into the dialog; secrets fall back to the stored ones. */
+export interface IntegrationProbeRequest {
+  target: 'agent' | 'mineru'
+  base_url?: string
+  api_key?: string
+  model?: string
+  mineru_provider?: MinerUProvider
+  timeout_seconds?: number
+}
+
+export interface IntegrationProbeResult {
+  target: 'agent' | 'mineru'
+  ok: boolean
+  code: string
+  detail: string
+  latency_ms: number | null
+}

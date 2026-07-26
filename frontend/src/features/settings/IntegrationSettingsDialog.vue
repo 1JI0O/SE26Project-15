@@ -74,10 +74,24 @@
                 <el-input-number
                   v-model="form.agent.timeout_seconds"
                   :min="1"
-                  :max="120"
+                  :max="600"
                   controls-position="right"
                 />
               </el-form-item>
+            </div>
+
+            <div class="probe-row">
+              <el-button :loading="probing === 'agent'" @click="testAgent">测试连接</el-button>
+              <el-alert
+                v-if="agentProbe"
+                :type="agentProbe.ok ? 'success' : 'error'"
+                :closable="false"
+                :title="probeTitle(agentProbe)"
+                :description="agentProbe.detail"
+              />
+              <span v-else class="probe-hint">
+                会用当前填写的地址、密钥与模型发一次最小请求，验证是否真的可用。
+              </span>
             </div>
           </el-form>
         </el-tab-pane>
@@ -184,6 +198,24 @@
                 />
               </el-form-item>
             </div>
+
+            <div class="probe-row">
+              <el-button :loading="probing === 'mineru'" @click="testMinerU">测试连接</el-button>
+              <el-alert
+                v-if="mineruProbe"
+                :type="mineruProbe.ok ? 'success' : 'error'"
+                :closable="false"
+                :title="probeTitle(mineruProbe)"
+                :description="mineruProbe.detail"
+              />
+              <span v-else class="probe-hint">
+                {{
+                  form.mineru.provider === 'local'
+                    ? '会请求本地服务的 /health 接口确认它已启动。'
+                    : '会用当前 Token 访问官方 API，验证令牌是否有效（不会创建解析任务）。'
+                }}
+              </span>
+            </div>
           </el-form>
         </el-tab-pane>
       </el-tabs>
@@ -204,9 +236,11 @@ import { computed, ref } from 'vue'
 
 import {
   getIntegrationSettings,
+  probeIntegration,
   updateIntegrationSettings,
 } from '@/api/integration-settings-api'
 import type {
+  IntegrationProbeResult,
   IntegrationSettings,
   IntegrationSettingsUpdate,
 } from '@/types/integration-settings'
@@ -223,6 +257,56 @@ const agentApiKey = ref('')
 const mineruApiToken = ref('')
 const clearAgentKey = ref(false)
 const clearMineruToken = ref(false)
+const probing = ref<'agent' | 'mineru' | null>(null)
+const agentProbe = ref<IntegrationProbeResult | null>(null)
+const mineruProbe = ref<IntegrationProbeResult | null>(null)
+
+function probeTitle(result: IntegrationProbeResult): string {
+  const latency = result.latency_ms == null ? '' : ` · ${result.latency_ms}ms`
+  return result.ok ? `连接成功${latency}` : `连接失败（${result.code}）${latency}`
+}
+
+async function testAgent(): Promise<void> {
+  if (!form.value) return
+  probing.value = 'agent'
+  agentProbe.value = null
+  try {
+    agentProbe.value = await probeIntegration({
+      target: 'agent',
+      base_url: form.value.agent.base_url,
+      // Omitted key means "use the one already saved on this machine".
+      ...(agentApiKey.value ? { api_key: agentApiKey.value } : {}),
+      model: form.value.agent.analysis_model || form.value.agent.model,
+      timeout_seconds: form.value.agent.timeout_seconds,
+    })
+  } catch (cause) {
+    ElMessage.error('无法发起测试，请确认本地后端已启动')
+    console.error(cause)
+  } finally {
+    probing.value = null
+  }
+}
+
+async function testMinerU(): Promise<void> {
+  if (!form.value) return
+  const isLocal = form.value.mineru.provider === 'local'
+  probing.value = 'mineru'
+  mineruProbe.value = null
+  try {
+    mineruProbe.value = await probeIntegration({
+      target: 'mineru',
+      mineru_provider: form.value.mineru.provider,
+      base_url: isLocal ? form.value.mineru.local_url : form.value.mineru.official_api_url,
+      ...(!isLocal && mineruApiToken.value ? { api_key: mineruApiToken.value } : {}),
+      timeout_seconds: form.value.mineru.request_timeout_seconds,
+    })
+  } catch (cause) {
+    ElMessage.error('无法发起测试，请确认本地后端已启动')
+    console.error(cause)
+  } finally {
+    probing.value = null
+  }
+}
 
 const agentKeyPlaceholder = computed(() => {
   if (clearAgentKey.value) return '密钥将在保存后清除'
@@ -244,6 +328,8 @@ async function loadSettings() {
     mineruApiToken.value = ''
     clearAgentKey.value = false
     clearMineruToken.value = false
+    agentProbe.value = null
+    mineruProbe.value = null
   } catch {
     ElMessage.error('无法读取集成设置，请确认本地后端已启动')
   } finally {
@@ -416,6 +502,33 @@ async function saveSettings() {
 .compact-grid {
   padding-top: 8px;
   border-top: 1px solid #e4e9ee;
+}
+
+.probe-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid #e4e9ee;
+}
+
+.probe-row :deep(.el-alert) {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+}
+
+.probe-row :deep(.el-alert__description) {
+  margin: 2px 0 0;
+  word-break: break-word;
+}
+
+.probe-hint {
+  flex: 1;
+  color: #8a95a1;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 :deep(.el-input-number),

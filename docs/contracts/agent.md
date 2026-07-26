@@ -12,6 +12,7 @@ Agent 路由注册在 `/api/v1/projects/{project_id}/agent`。运行时由会话
 | GET | `/analysis-jobs/{job_id}` | 查询 queued/running/validating/succeeded/failed/stale |
 | GET | `/analysis-jobs/{job_id}/events` | SSE 读取可审计进度和工具事件 |
 | GET | `/analysis-jobs/{job_id}/artifact` | 读取通过证据校验的结构化结果 |
+| GET | `/analysis-jobs/{job_id}/diagnostics` | 读取该 Run 的完整失败信息，供工作台调试模式展示 |
 | POST | `/analysis-jobs/{job_id}/retry` | 基于相同 artifact revision 强制重试 |
 | POST | `/analysis-jobs/{job_id}/cancel` | 提前中止分析，保留已发布的追溯关系 |
 
@@ -19,7 +20,9 @@ Agent 路由注册在 `/api/v1/projects/{project_id}/agent`。运行时由会话
 
 阶段 3 支持**并行子代理派发**：父 Agent 在 SCOUT/MAP 后调用 `dispatch_trace_subagents`，参数为 `regions`（1..8 个，每个含 `name`、`paper_target_hints[]`、`code_hints[]`、`notes`；hints 只是导航线索）。后端把每个区域交给独立子代理（只读工具 + `publish_trace_candidates` 白名单，无 `finish_analysis`/`dispatch`/`get_analysis_artifact`），在有界线程池中并行取证并直接发布；工具返回每区域 `{status, published_count, dropped_count, unresolved, summary, steps_used}` 供父 Agent 核对覆盖。每次分析最多 2 次 dispatch、累计 12 个区域（重名去重）；并行度与每区域步数预算由 `TRACELAB_TRACE_SUBAGENT_PARALLELISM`（0/1 退化为顺序）与 `TRACELAB_TRACE_SUBAGENT_STEPS` 控制。父 Agent 不调用该工具时行为与单 Agent 流程完全一致。
 
-`cancel` 用于用户提前中止：将 job 置为 `cancelling`，运行中的 worker 在下一步边界检测到后收尾并**保留已发布的追溯关系**，job 以 `succeeded` 结束（进度 `code=analysis_cancelled`）。尚未启动的排队 job 直接结束、不占用 worker。已处于终态的 job 幂等返回。
+`cancel` 用于用户提前中止：将 job 置为 `cancelling`，运行中的 worker 在下一步边界检测到后收尾并**保留已发布的追溯关系**，job 以 `succeeded` 结束（进度 `code=analysis_cancelled`）。尚未启动的排队 job 直接结束、不占用 worker。已处于终态的 job 幂等返回。中止后保留的关系与正常产出完全等价：它们已按 fingerprint 落库，下一轮重新生成会在其基础上 upsert，无需特殊处理。
+
+`diagnostics` 是只读诊断接口，仅在工作台开启调试模式时调用。`error_code` 只是短代码（provider 4xx、证据校验失败、SQLite 锁都长得一样），该接口额外返回 Run 的 `degraded_reason`、`provider_name`/`model_name`、已记录的 run event 列表和 `trace_json` 末尾的模型/工具步骤，用于定位真实失败原因。`event_limit`/`step_limit` 控制返回条数（默认 200/60）。
 
 论文解析成功、代码分析就绪且 provider 可用后，追溯协调器（`services/tracing/coordinator.py`）自动创建 architecture+trace 任务，无需手动触发；`create_analysis_job` 按 fingerprint 幂等。
 

@@ -1,3 +1,5 @@
+import time
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -27,6 +29,26 @@ class RetryStreamProvider(FinalProvider):
         return AgentProviderStep(action="final", answer="complete")
 
 
+def _wait_for_run_events(client: TestClient, project_id: int, run_id: str) -> None:
+    """Block until the background run has persisted its terminal events.
+
+    The run executes on a background thread, and the SSE endpoint stops as soon as the run is
+    terminal *and* the current batch came back empty. A reader that lands between the worker's
+    commits therefore sees a short stream. Waiting for the persisted events first makes the
+    stream a deterministic replay instead of a race.
+    """
+
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        events = client.get(
+            f"/api/v1/projects/{project_id}/agent/runs/{run_id}/event-list"
+        ).json()
+        if any(item["event_type"] == "message.completed" for item in events):
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"run {run_id} did not persist message.completed in time")
+
+
 def test_submitted_run_persists_events_and_final_message(monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
@@ -47,6 +69,7 @@ def test_submitted_run_persists_events_and_final_message(monkeypatch) -> None:
         )
         assert submission.status_code == 202
         run_id = submission.json()["run_id"]
+        _wait_for_run_events(client, project_id, run_id)
         stream = client.get(f"/api/v1/projects/{project_id}/agent/runs/{run_id}/events")
         detail = client.get(f"/api/v1/projects/{project_id}/agent/conversations/{conversation_id}")
 

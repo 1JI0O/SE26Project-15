@@ -23,6 +23,8 @@ export interface PaperMark {
 
 const MARK_SELECTOR = 'mark[data-trace-target]'
 const BLOCK_CLASS = 'trace-block-target'
+/** Comma-separated list of every target that resolved to one block-level element. */
+const TARGET_LIST_ATTR = 'data-trace-targets'
 
 const FORMULA_TARGET_TYPES = new Set([
   'formula',
@@ -38,6 +40,31 @@ const FORMULA_TARGET_TYPES = new Set([
 const VISUAL_BLOCK_SELECTOR = '.math-display, .table-scroll, table, pre, img, blockquote'
 
 const normalize = (value: string): string => value.replace(/\s+/g, ' ').trim()
+
+/**
+ * Reduce a TeX string to a comparison key.
+ *
+ * The agent quotes a formula from the markdown source (`$$\hat{y} = Wx + b$$`), while the DOM shows
+ * KaTeX glyphs — so a text comparison never matches and the old code fell back to "the first
+ * `.math-display` in the document", painting an unrelated formula. KaTeX keeps the original TeX in
+ * a MathML `<annotation encoding="application/x-tex">`, so comparing normalized TeX against that
+ * annotation locates the right formula exactly. Delimiters, whitespace, and the `\left`/`\right`
+ * and `\,`-style spacing macros that MinerU adds inconsistently are stripped.
+ */
+function texKey(value: string): string {
+  return value
+    .replace(/\$\$?/g, ' ')
+    .replace(/\\(?:left|right|!|,|;|:|quad|qquad|displaystyle|nonumber)\b/g, ' ')
+    .replace(/\\begin\{[^}]*\}|\\end\{[^}]*\}/g, ' ')
+    .replace(/[\s{}]/g, '')
+    .toLowerCase()
+}
+
+/** The TeX a rendered KaTeX block was built from, or '' when the element isn't a formula. */
+function renderedTex(el: HTMLElement): string {
+  const annotation = el.querySelector('annotation[encoding="application/x-tex"]')
+  return annotation?.textContent ?? ''
+}
 
 function isBlockLevelTarget(targetType?: string, quote?: string): boolean {
   if (targetType && FORMULA_TARGET_TYPES.has(targetType)) return true
@@ -209,52 +236,86 @@ export function clearPaperDecorations(root: HTMLElement): void {
       'trace-block-1_to_n',
       'trace-block-n_to_1',
       'trace-block-n_to_n',
+      'trace-target-active',
+      'trace-target-hover',
     )
     if (el.dataset.traceTarget && el.matches(`.${BLOCK_CLASS}, .math-display, .table-scroll`)) {
       delete el.dataset.traceTarget
       delete el.dataset.fanout
     }
+    el.removeAttribute(TARGET_LIST_ATTR)
     el.querySelectorAll('.trace-mark-badge').forEach((badge) => badge.remove())
   })
   root.normalize()
+}
+
+/** Locate the rendered formula whose source TeX matches `quote`, or null when none does. */
+function findFormulaByTex(root: HTMLElement, quote: string): HTMLElement | null {
+  const needle = texKey(quote)
+  if (needle.length < 4) return null
+  const blocks = [...root.querySelectorAll<HTMLElement>('.math-display')]
+  let partial: HTMLElement | null = null
+  for (const block of blocks) {
+    const candidate = texKey(renderedTex(block))
+    if (!candidate) continue
+    if (candidate === needle) return block
+    // A quote may cover one line of a multi-line aligned environment, or carry extra trailing
+    // context; accept containment either way but keep looking for an exact hit first.
+    if (!partial && (candidate.includes(needle) || needle.includes(candidate))) partial = block
+  }
+  return partial
 }
 
 /** Locate a visual block by fuzzy-matching its quote text, used when the backend never resolved
  * an anchor for the target's block id (anchor_resolved=false → no `data-paper-block-id` in DOM).
  * Scans normalized text of candidate blocks so a target still lands somewhere visible. */
 function findBlockByQuote(root: HTMLElement, quote: string, targetType?: string): HTMLElement | null {
+  const blockLevel = isBlockLevelTarget(targetType, quote)
+  // Formulas are matched on their source TeX, since the DOM only carries KaTeX glyphs.
+  if (blockLevel) {
+    const formula = findFormulaByTex(root, quote)
+    if (formula) return formula
+  }
   const needle = normalize(quote).slice(0, 120)
-  if (needle.length < 12 && !isBlockLevelTarget(targetType, quote)) return null
+  if (needle.length < 12) return null
   const candidates = root.querySelectorAll<HTMLElement>('p, li, td, blockquote, .math-display')
   for (const el of candidates) {
-    if (isBlockLevelTarget(targetType, quote) && el.matches('.math-display, .table-scroll')) {
-      if (needle.length >= 12 && normalize(el.textContent ?? '').includes(needle)) return el
-      if (isBlockLevelTarget(targetType)) continue
+    if (!normalize(el.textContent ?? '').includes(needle)) continue
+    const resolved = el.matches('span') ? resolveVisualBlock(el) : el
+    if (blockLevel && !resolved.matches(VISUAL_BLOCK_SELECTOR)) {
+      return findNearbyVisualBlock(resolved) ?? resolved
     }
-    if (normalize(el.textContent ?? '').includes(needle)) {
-      const resolved = el.matches('span') ? resolveVisualBlock(el) : el
-      if (isBlockLevelTarget(targetType) && !resolved.matches(VISUAL_BLOCK_SELECTOR)) {
-        return findNearbyVisualBlock(resolved) ?? resolved
-      }
-      return resolved
-    }
+    return resolved
   }
-  if (isBlockLevelTarget(targetType, quote)) {
-    return root.querySelector<HTMLElement>('.math-display')
-  }
+  // Deliberately NOT falling back to "the first formula in the document": painting an unrelated
+  // block reads as a wrong trace result, which is worse than reporting the target as unresolved.
   return null
 }
 
+/**
+ * Mark a whole block as a coarse target (formula/table/figure, or a quote we could not wrap).
+ *
+ * Several relations regularly land on the same block — a formula referenced by two code sites, or
+ * two fragments of one paragraph. The old code kept only the FIRST target's id, so every later
+ * relation lost its highlight and its hover/click handler silently pointed at the wrong relation.
+ * All ids are now kept in `data-trace-targets`; `data-trace-target` stays as the primary for the
+ * existing `closest('[data-trace-target]')` lookups.
+ */
 function applyBlockFallback(block: HTMLElement, target: PaperMark): void {
-  if (block.dataset.traceTarget && block.dataset.traceTarget !== target.targetId) {
-    // A block already claimed by another target keeps its first owner.
-  } else {
+  const existing = (block.getAttribute(TARGET_LIST_ATTR) ?? '').split(',').filter(Boolean)
+  if (!existing.includes(target.targetId)) existing.push(target.targetId)
+  block.setAttribute(TARGET_LIST_ATTR, existing.join(','))
+  if (!block.dataset.traceTarget) {
     block.dataset.traceTarget = target.targetId
     if (target.fanoutCount && target.fanoutCount > 1) {
       block.dataset.fanout = String(target.fanoutCount)
     }
   }
-  block.classList.add(BLOCK_CLASS, `trace-block-${target.status}`, ...multiplicityClasses(target.multiplicity))
+  block.classList.add(
+    BLOCK_CLASS,
+    `trace-block-${target.status}`,
+    ...multiplicityClasses(target.multiplicity),
+  )
 }
 
 /**
@@ -271,9 +332,14 @@ export function decoratePaperTargets(
   const unresolved = new Set<string>()
   for (const target of targets) {
     // Prefer the injected anchor; when the backend never resolved it, fall back to quote search.
-    const block =
-      blockElement(root, target.blockId, target.targetType) ??
-      findBlockByQuote(root, target.quote, target.targetType)
+    let block = blockElement(root, target.blockId, target.targetType)
+    // A formula anchor that resolved to a non-formula element (MinerU block drift) is worse than
+    // useless — the highlight would sit on neighbouring prose. Re-locate it by its source TeX.
+    if (isBlockLevelTarget(target.targetType, target.quote)) {
+      const byTex = findFormulaByTex(root, target.quote)
+      if (byTex && (!block || !block.matches('.math-display'))) block = byTex
+    }
+    if (!block) block = findBlockByQuote(root, target.quote, target.targetType)
     if (!block) {
       unresolved.add(target.targetId)
       continue
@@ -290,18 +356,40 @@ export function decoratePaperTargets(
   return { decorated, unresolved }
 }
 
+/** Every target id an element stands for (a block can back several relations). */
+function elementTargetIds(el: HTMLElement): string[] {
+  const list = (el.getAttribute(TARGET_LIST_ATTR) ?? '').split(',').filter(Boolean)
+  if (list.length) return list
+  return el.dataset.traceTarget ? [el.dataset.traceTarget] : []
+}
+
 export function setActivePaperTargets(
   root: HTMLElement,
   activeIds: Set<string>,
   hoverIds: Set<string> = new Set(),
 ): void {
   root.querySelectorAll<HTMLElement>('[data-trace-target]').forEach((el) => {
-    const id = el.dataset.traceTarget
-    const isActive = !!id && activeIds.has(id)
+    const ids = elementTargetIds(el)
+    const isActive = ids.some((id) => activeIds.has(id))
     el.classList.toggle('trace-target-active', isActive)
     // Weak hover highlight only when it isn't already the strong (selected) one.
-    el.classList.toggle('trace-target-hover', !isActive && !!id && hoverIds.has(id))
+    el.classList.toggle('trace-target-hover', !isActive && ids.some((id) => hoverIds.has(id)))
   })
+}
+
+/**
+ * Resolve the element a hover/click landed on to the relation it should act on.
+ *
+ * When a block backs several relations, prefer the one already selected so re-clicking a shared
+ * formula does not jump the user to a different relation; otherwise take the first.
+ */
+export function resolveEventTargetId(
+  el: HTMLElement,
+  preferredIds: Set<string> = new Set(),
+): string | null {
+  const ids = elementTargetIds(el)
+  if (!ids.length) return null
+  return ids.find((id) => preferredIds.has(id)) ?? ids[0]
 }
 
 export { normalize as normalizePaperQuote }

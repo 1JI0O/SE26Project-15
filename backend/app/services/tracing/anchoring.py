@@ -57,6 +57,39 @@ class AnchorError(ValueError):
     """Raised when a quote cannot be anchored to its declared occurrence."""
 
 
+def locate_approximate_span(
+    container: str, quote: str, probe_length: int = 60
+) -> tuple[int, int] | None:
+    """Best-effort char span of ``quote`` inside ``container``, ignoring non-alphanumerics.
+
+    Used when neither the raw nor the whitespace-normalized quote matches (unicode math,
+    re-indented code, smart quotes) but the alphanumeric signature is still present. The
+    returned span is in ``container`` coordinates and covers the full quote when it is all
+    there, otherwise just the leading probe. Returns ``None`` when even the signature is absent.
+
+    This is what lets a caller replace a *claimed* line range with a range that was actually
+    verified against the file, instead of trusting an unverified number.
+    """
+
+    offsets: list[int] = []
+    folded: list[str] = []
+    for index, char in enumerate(container):
+        if char.isalnum():
+            folded.append(char.lower())
+            offsets.append(index)
+    haystack = "".join(folded)
+    needle = _alnum(quote)
+    if not needle or not haystack:
+        return None
+    probe = needle[:probe_length]
+    start = haystack.find(probe)
+    if start < 0:
+        return None
+    matched = len(needle) if haystack.startswith(needle, start) else len(probe)
+    end = min(start + matched - 1, len(offsets) - 1)
+    return offsets[start], offsets[end] + 1
+
+
 def resolve_anchor(container: str, quote: str, occurrence: int) -> dict[str, object]:
     """Resolve a quote to a concrete char range + hash inside ``container``.
 
