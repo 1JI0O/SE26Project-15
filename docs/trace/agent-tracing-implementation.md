@@ -31,9 +31,10 @@
 ├─────────────────────────────────────────────────────────────────────┤
 │  层 2 · 语义/自动化层  (backend/app/services/agent + tracing)          │
 │    coordinator.maybe_start_trace ── 幂等触发 ──> AgentAnalysisJob      │
-│    _execute_job 单 Run 四阶段循环 (侦察→制图→取证→归并)                 │
+│    _execute_job 单 Run 四阶段循环 (侦察→制图→派发取证→归并)             │
+│    dispatch_trace_subagents ──> subagents.py 并行区域子代理(有界线程池) │
 │    工具集(只读代码/论文) + publish_trace_candidates + finish_analysis   │
-│    证据校验(anchoring) + 渐进发布(analysis.published SSE)              │
+│    证据校验(anchoring) + 单写者发布汇 + 渐进发布(analysis.published)    │
 ├─────────────────────────────────────────────────────────────────────┤
 │  层 3 · 交互层  (frontend/src)                                         │
 │    useTrace(SSE 消费+渐进合并) ── traceLinks ──> useTraceIndex(共享索引) │
@@ -47,7 +48,7 @@
 1. 用户上传论文 PDF → MinerU 解析 → `pages_json` 落库,解析回调触发 `maybe_start_trace`([papers.py:36-41](../../backend/app/api/routes/papers.py))。
 2. 用户导入代码 → 静态分析产出 `symbols_json`/`file_tree_json`/张量图,分析就绪回调也触发 `maybe_start_trace`([repositories.py:201-203](../../backend/app/api/routes/repositories.py))。
 3. 协调器确认「论文 succeeded + 代码分析 current + provider 可用」三者齐备 → 幂等创建 `kind="trace"` 的 `AgentAnalysisJob`([coordinator.py:40-70](../../backend/app/services/tracing/coordinator.py))。
-4. `_execute_job` 起单 Run 循环,四阶段读证据、分批 `publish_trace_candidates`([analysis_jobs.py:660](../../backend/app/services/agent/analysis_jobs.py))。
+4. `_execute_job` 起单 Run 循环,四阶段读证据、分批 `publish_trace_candidates`([analysis_jobs.py:660](../../backend/app/services/agent/analysis_jobs.py));阶段 3 通常经 `dispatch_trace_subagents` 把区域取证派发给并行子代理直接发布(见 [§4.8](#48-并行子代理执行模型))。
 5. 每批发布立即校验、落库、发 `analysis.published` SSE([analysis_jobs.py:1046-1056](../../backend/app/services/agent/analysis_jobs.py))。
 6. 前端 `useTrace` 消费 SSE,每收到一批就增量拉 `listTraceLinks` 并原地合并 → 矩阵与两侧装饰实时刷新([useTrace.ts:106-145](../../frontend/src/composables/useTrace.ts))。
 7. agent 发完所有可辩护候选后调用 `finish_analysis` 显式收尾([analysis_jobs.py:968-973](../../backend/app/services/agent/analysis_jobs.py))。
@@ -111,9 +112,9 @@ agent 用 `list_repository_files` / `list_code_symbols` / `get_symbol_source` **
 
 > 注意:这一步的产物只是**导航用的地图,不是结论**。prompt 明确要求「treat this as navigation only」—— 找到「疑似 loss 的函数」不等于「它就实现了论文那个 loss」,还得靠阶段 3 验证。这一步也是 `symbols_json` 好坏直接影响追溯质量的地方(见 [§7.9](#79-张量图与追溯的关系澄清项非-bug))。
 
-#### 阶段 3 · REGION EVIDENCE —— 把两边真正「对上」
+#### 阶段 3 · DISPATCH & REGION EVIDENCE —— 把两边真正「对上」
 
-这是**对应关系诞生**的阶段,也是最关键的一步。对阶段 1 挑出的**每一个论文重点**,agent 做三件事:
+这是**对应关系诞生**的阶段,也是最关键的一步。父 agent 先把阶段 1 的重点分组为 2-6 个区域,调用 `dispatch_trace_subagents` 派发给**并行子代理**(每区域独立上下文与预算,见 §4.8),收到各区域摘要后核对覆盖、自行补漏;dispatch 不可用或父 agent 不调用时,退化为在单 Run 内顺序完成同样的取证。无论谁执行,对**每一个论文重点**都做三件事:
 
 1. **把论文语义翻译成「代码搜索意图」** —— 不搜论文里的词,而是想清楚「要实现这个,代码里必然会发生什么计算」,再据此去读真实源码(`read_source_lines` / `get_symbol_source` / `search_repository_text`)。
 2. **反证检查(counter-check)** —— 同名的符号是不是只是个配置项、包装器、或测试?prompt 明确要求排除这些假阳性,**只有当「真实计算确实发生」时才保留这条关系**。
@@ -182,7 +183,10 @@ agent 用 `list_repository_files` / `list_code_symbols` / `get_symbol_source` **
 | `get_analysis_artifact` | ✅ | ✅ | 当前 revision 的 `AgentAnalysisArtifact` |
 | `publish_trace_candidates` | ✅ | — | 发布(见 §4.4) |
 | `finish_analysis` | ✅ | — | 显式收尾 |
+| `dispatch_trace_subagents` | ✅(仅父循环) | — | 并行派发区域子代理(见 §4.8) |
 | `publish_architecture_graph` | — | ✅ | 发布架构图 |
+
+`tool_definitions(kind, role="parent"|"subagent")`:`role="subagent"` 返回 8 个读工具 + `publish_trace_candidates`,**排除** `finish_analysis`/`dispatch_trace_subagents`/`get_analysis_artifact` —— 子代理只对自己的区域负责,不能结束整个分析、继续派生或读聚合 artifact。`execute_tool` 对 `dispatch_trace_subagents` 直接拒绝(`dispatch_not_available_here`),该工具只能由父循环拦截执行。
 
 > **张量图/架构图工具**(`get_architecture`/`get_graph_node`/`get_tensor_flow`)只在**交互式对话** Agent([tools.py](../../backend/app/services/agent/tools.py))里可用,**不在 trace 白名单内**。这就是「TF 流程图生成失败不干扰追溯」的根本原因。
 
@@ -228,7 +232,25 @@ agent 用 `list_repository_files` / `list_code_symbols` / `get_symbol_source` **
 - job 级 `GET /analysis-jobs/{job_id}/events`([:151-192](../../backend/app/api/routes/agent.py)),0.4s 轮询,job 终态即结束。
 - run 级 `GET /runs/{run_id}/events`([:328-370](../../backend/app/api/routes/agent.py))。
 
-**渐进发布契约**:`analysis.published` 带 `new_links`/`total_links`/`artifact_id`/`code_revision`。同一 run **复用一个 artifact**:首发建 artifact,后续 `_append_trace_links` 追加([analysis_jobs.py:562-579](../../backend/app/services/agent/analysis_jobs.py)),links 按内容指纹幂等累加、不互相清除。
+**渐进发布契约**:`analysis.published` 带 `new_links`/`total_links`/`artifact_id`/`code_revision`(子代理发布额外带 `subagent` 区域名)。同一 run **复用一个 artifact**:首发建 artifact,后续 `_append_trace_links` 追加([analysis_jobs.py:562-579](../../backend/app/services/agent/analysis_jobs.py)),links 按内容指纹幂等累加、不互相清除。
+
+分析路径的事件发射已从会话绑定的 `RunEventEmitter` 换成线程安全的 `SharedRunEventBus`(见 §4.8);两者共用 `run_events.append_event`,行为一致,聊天路径不受影响。并行派发新增事件:`analysis.subagents.started`(`regions`/`names`)与 `analysis.subagents.progress`(`done`/`total`/`region`/`status`/`published`);子代理的 `analysis.tool.*` 事件带 `subagent` 字段,`activity` 以 `[区域名]` 前缀区分。
+
+### 4.8 并行子代理执行模型
+
+[subagents.py](../../backend/app/services/agent/subagents.py) 实现蓝图 §9.2 的简化形态:**单 AgentRun 内的有界并行**,不建父子 Run、不改 SSE 端点、不改前端。
+
+执行流程:父循环拦截 `dispatch_trace_subagents`(pydantic 校验 → 去重 → 限额:每次 ≤8 区域、每分析 ≤2 次 dispatch、累计 ≤12 区域)→ `run_trace_subagents` 为本次 dispatch **临建临关**一个 `ThreadPoolExecutor`(`tracelab-trace-subagent`,并行度 = `TRACELAB_TRACE_SUBAGENT_PARALLELISM`,绝不复用 2-worker 分析池以避免自死锁)→ 每个区域跑一个 mini ReAct 循环(`_run_region`:独立 LLM 上下文、独立 `seen_calls` 读缓存、独立只读 Session、步数预算 `TRACELAB_TRACE_SUBAGENT_STEPS`,`action=="final"` 即区域正常结束)→ 工具结果返回每区域 `{status, published_count, dropped_count, unresolved, summary, steps_used}` 供父 agent 归并。
+
+并发纪律(SQLite 单写者 + SSE 序号唯一):
+
+- **一把 `RLock` 串行所有写**:`SharedRunEventBus.emit` 在锁内完成「序号分配 + INSERT + commit」(乱序提交会被 SSE 游标跳过);`TracePublishSink.publish` 在锁内串行 `_persist_artifact`/`_append_trace_links`(select-then-upsert 不可并发),父与子的发布走同一个 sink。
+- **每线程独立 Session**:ORM 实例不跨线程;区域线程只拿 `RegionJobContext` 纯值快照;engine 以参数传入(测试 monkeypatch `analysis_jobs.engine` 即可,conftest 无需新增补丁)。
+- **父会话步首 `rollback()`**:事件/发布改在独立会话提交后,父长会话不再周期性 commit,必须在每步开头结束读事务,否则 WAL 快照钉住、`cancelling` 永远读不到。
+- **取消与超时**:每区域一个 `_CancelProbe`(共享 `Event` + ≥2s 节流 DB 轮询 job.status),任一线程发现 `cancelling/failed` 即广播;dispatch 墙钟 900s,超时置 `timeout` 并广播停止。已发布的关系在取消定稿时保留;定稿前 `sink.close()` 丢弃迟到发布。
+- **退避**:`backoff_seconds`(指数 + 全抖动,仅 `llm_rate_limited`/`llm_timeout`)同时用于父循环重试与子代理重试(≤4 次),抑制 N 路并行放大的 429 风暴。
+
+测试:[test_trace_subagents.py](../../backend/tests/agent/test_trace_subagents.py)(并行/顺序回退/同指纹幂等/取消保留/校验与限额/退避/无 dispatch 等价 8 项,全部用文件型 SQLite 跑真实线程)。
 
 ---
 
@@ -306,6 +328,9 @@ CodeMirror 6 `StateField` + `Decoration.mark`([CodeEditor.vue:82-148](../../fron
 6. **渐进发布幂等**:trace publish 是非终止的、可多次的;links 靠 `trace_fingerprint` 幂等累加,别改成「每批建新 artifact」(迭代 3 修过互相清除)。
 7. **协调器不抛异常、不自动跑 architecture**:`maybe_start_trace` 失败必须静默;追溯交付不得依赖架构图/张量图。
 8. **provider 不可用时降级而非伪造**:不得用本地静态规则冒充语义追溯结果。
+9. **并行写必须过锁**:子代理/父循环的所有发布只能经 `TracePublishSink`,事件只能经 `SharedRunEventBus`;序号分配与 commit 必须同锁完成,否则撞 `(run_id, sequence)` 唯一约束或被 SSE 游标跳过。
+10. **子代理任务绝不提交进模块级分析线程池**:2-worker 池里父等子即自死锁;dispatch 必须用独立的临时线程池。
+11. **父循环步首的 `session.rollback()` 不能删**:发布/事件在独立会话提交后,不结束父会话的读事务,WAL 快照会钉住,取消信号永远不可见(见 §4.8)。
 
 ---
 

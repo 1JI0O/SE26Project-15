@@ -73,6 +73,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { TraceRowView } from '@/composables/useTrace'
+import { confidenceColor as sharedConfidenceColor } from './confidence'
 
 const props = defineProps<{
   visible: boolean
@@ -92,9 +93,7 @@ const codeEvidence = computed(() => props.row?.evidence.find((item) => item.side
 
 const confidenceColor = computed(() => {
   if (!props.row) return '#9aa7b4'
-  if (props.row.confidence >= 80) return '#1f8f78'
-  if (props.row.confidence >= 50) return '#d97706'
-  return '#e15a4a'
+  return sharedConfidenceColor(props.row.confidence)
 })
 </script>
 

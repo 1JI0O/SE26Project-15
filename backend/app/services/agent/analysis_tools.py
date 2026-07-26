@@ -226,6 +226,19 @@ class FinishAnalysisArguments(TolerantModel):
     summary: str = Field(default="", max_length=2000)
 
 
+class DispatchRegion(TolerantModel):
+    """One trace region for a parallel sub-agent. Hints are navigation aids, not conclusions."""
+
+    name: str = Field(min_length=1, max_length=80)
+    paper_target_hints: list[str] = Field(default_factory=list, max_length=12)
+    code_hints: list[str] = Field(default_factory=list, max_length=12)
+    notes: str = Field(default="", max_length=600)
+
+
+class DispatchSubagentsArguments(StrictModel):
+    regions: list[DispatchRegion] = Field(min_length=1, max_length=8)
+
+
 TOOL_MODELS: dict[str, type[StrictModel]] = {
     "list_repository_files": RepositoryFilesArguments,
     "search_repository_text": RepositorySearchArguments,
@@ -239,6 +252,7 @@ TOOL_MODELS: dict[str, type[StrictModel]] = {
     "publish_architecture_graph": PublishArchitectureArguments,
     "publish_trace_candidates": PublishTraceArguments,
     "finish_analysis": FinishAnalysisArguments,
+    "dispatch_trace_subagents": DispatchSubagentsArguments,
 }
 
 TOOL_DESCRIPTIONS = {
@@ -287,10 +301,19 @@ TOOL_DESCRIPTIONS = {
         "checked each must-inspect target. It ends the analysis. Do NOT call it before your "
         "first successful publish unless no defensible relation exists at all."
     ),
+    "dispatch_trace_subagents": (
+        "Fan out the STAGE 3 region evidence work to parallel sub-agents. Call this once after "
+        "SCOUT and MAP: group the core paper targets into 2-6 coherent regions and give each a "
+        "name, paper_target_hints (block ids or short quotes), code_hints (paths or symbol ids), "
+        "and notes on what computation must exist. Each region is investigated independently and "
+        "its confirmed candidates are published directly; you receive a per-region summary to "
+        "verify coverage against. Hints are navigation aids, not conclusions. At most 2 dispatch "
+        "calls per analysis."
+    ),
 }
 
 
-def tool_definitions(kind: str) -> list[dict[str, Any]]:
+def tool_definitions(kind: str, *, role: str = "parent") -> list[dict[str, Any]]:
     allowed = {
         "architecture": {
             "list_repository_files",
@@ -314,8 +337,13 @@ def tool_definitions(kind: str) -> list[dict[str, Any]]:
             "get_analysis_artifact",
             "publish_trace_candidates",
             "finish_analysis",
+            "dispatch_trace_subagents",
         },
     }[kind]
+    if role == "subagent":
+        # A region sub-agent reads evidence and publishes for its region only: it must not
+        # end the whole analysis, fan out further, or read the aggregate artifact.
+        allowed = allowed - {"finish_analysis", "dispatch_trace_subagents", "get_analysis_artifact"}
     return [
         {
             "type": "function",
@@ -686,6 +714,10 @@ def execute_tool(
     model = TOOL_MODELS.get(tool_name)
     if model is None:
         raise ValueError("unknown_analysis_tool")
+    if tool_name == "dispatch_trace_subagents":
+        # Dispatch needs the provider, thread pool, and event bus; the parent analysis loop
+        # intercepts it before this function. Reaching here means a disallowed caller.
+        raise ValueError("dispatch_not_available_here")
     arguments = _normalize_publish_arguments(tool_name, arguments)
     if tool_name == "publish_trace_candidates":
         return _execute_publish_trace(session, project_id, repository_id, paper_id, arguments)

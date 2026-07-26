@@ -211,6 +211,9 @@ TraceLab/
 │   │           ├── service.py           # query、确认、写工具、回调
 │   │           ├── conversations.py     # 会话、Run、上下文、恢复
 │   │           ├── provider.py          # OpenAI-compatible 与流式解析
+│   │           ├── analysis_jobs.py     # 追溯/架构分析 job 父循环
+│   │           ├── analysis_tools.py    # 分析工具白名单与证据校验
+│   │           ├── subagents.py         # 并行区域子代理、事件总线、发布汇
 │   │           ├── tools.py             # 内置只读/写工具
 │   │           ├── capabilities.py     # Skill/Tool/MCP registry
 │   │           ├── skills.py            # 兼容导出
@@ -375,6 +378,8 @@ flowchart LR
 ```
 
 `static_candidates.py` 以论文块、代码 symbol、模块名和 token 重叠生成低成本候选；`provider.py` 可用 LLM 补充 confidence、rationale、evidence 和 model 信息；`service.py` 负责 fingerprint 去重和写入 `TraceLink`。关系绑定 `paper_document_id`、`code_repository_id` 和 `code_revision`，默认 `proposed`，代码 revision 改变后标记 `stale`。
+
+当前候选发现的主路径是 Agent 追溯任务（静态关键词候选写入已退役）：`agent/analysis_jobs.py` 的父循环在 SCOUT/MAP 之后可调用 `dispatch_trace_subagents`，由 `agent/subagents.py` 在独立有界线程池中并行运行区域子代理；所有发布经单写者发布汇（`TracePublishSink`）串行落库，事件经线程安全总线（`SharedRunEventBus`）保持 `(run_id, sequence)` 单调。详见 `docs/trace/agent-tracing-implementation.md`。
 
 ## 9. Agent 运行时
 
@@ -563,6 +568,8 @@ erDiagram
 | 远程账号/同步服务器 | 用户显式启用 | HTTPS `/api/v1` | `server/.env` | 不可用时本地工作台继续运行 |
 
 应用设置优先于环境默认值：`integration_settings.py` 先读取数据库 `IntegrationConfig`，尚未保存时才构造环境默认值。读取接口只返回密钥是否已配置，不返回密钥正文。
+
+追溯并行子代理由环境变量控制（不进应用设置）：`TRACELAB_TRACE_SUBAGENT_PARALLELISM`（默认 3，0/1 退化为顺序执行）与 `TRACELAB_TRACE_SUBAGENT_STEPS`（每区域步数预算，默认 14）。
 
 ## 12. 关键业务闭环
 

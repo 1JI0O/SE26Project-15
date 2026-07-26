@@ -3,15 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
+from threading import Lock, RLock
 from typing import Any
 from uuid import uuid4
 
 from pydantic import ValidationError
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.db.session import engine
 from app.models.entities import (
     AgentAnalysisArtifact,
@@ -26,10 +28,24 @@ from app.models.entities import (
     utc_now,
 )
 from app.schemas.agent import AgentAnalysisJobCreate, AgentAnalysisJobRead
-from app.services.agent.analysis_tools import execute_tool, tool_definitions
+from app.services.agent.analysis_tools import (
+    DispatchSubagentsArguments,
+    execute_tool,
+    tool_definitions,
+)
 from app.services.agent.provider import AgentProviderFailure
 from app.services.agent.run_events import RunEventEmitter
 from app.services.agent.service import _provider_from_settings
+from app.services.agent.subagents import (
+    MAX_DISPATCH_CALLS,
+    MAX_TOTAL_REGIONS,
+    RETRYABLE_PROVIDER_FAILURES,
+    RegionJobContext,
+    SharedRunEventBus,
+    TracePublishSink,
+    backoff_seconds,
+    run_trace_subagents,
+)
 from app.services.tracing.service import trace_fingerprint
 
 logger = logging.getLogger("tracelab.agent.analysis")
@@ -239,11 +255,20 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
             "list_code_symbols, get_symbol_source) to locate where the model, losses, tensor "
             "transforms, main train/inference loops, constraints, and update rules live. Treat "
             "this as navigation only, not a conclusion.\n\n"
-            "STAGE 3 — REGION EVIDENCE. For each core paper target, turn its meaning into a code "
-            "search intent (what computation must happen), then read the actual source. Do a "
-            "counter-check: is a same-named symbol merely config, a wrapper, or a test? Only keep "
-            "a relation when the real computation happens. A paper target implemented across "
-            "several places yields several candidates (one-to-many).\n\n"
+            "STAGE 3 — DISPATCH & REGION EVIDENCE. Group the core targets from STAGE 1 into "
+            "2-6 coherent regions (one region = one method component, e.g. 'contrastive loss', "
+            "'sampler update rule'). Call dispatch_trace_subagents ONCE with all regions, giving "
+            "each a name, paper_target_hints (block ids or short quotes), code_hints (paths or "
+            "symbol ids from STAGE 2), and notes on what computation must exist. Parallel "
+            "sub-agents read the real evidence for every region and publish candidates directly; "
+            "you receive a per-region summary. After it returns, verify coverage against the "
+            "summaries: fill gaps yourself with the read tools (or one more dispatch — at most 2 "
+            "total), and handle failed or unresolved regions. If dispatch is unavailable or "
+            "errors, do the region evidence yourself: for each core paper target, turn its "
+            "meaning into a code search intent (what computation must happen), then read the "
+            "actual source. Do a counter-check: is a same-named symbol merely config, a wrapper, "
+            "or a test? Only keep a relation when the real computation happens. A paper target "
+            "implemented across several places yields several candidates (one-to-many).\n\n"
             "STAGE 4 — MERGE & SELF-CHECK. Keep only targets that matter: a core contribution, a "
             "must-inspect formula/algorithm, a defining variable/constraint, or something with a "
             "direct important implementation. Merge adjacent synonymous targets; do not stack "
@@ -307,6 +332,9 @@ def _activity(tool_name: str, arguments: dict[str, Any]) -> str:
         case "publish_trace_candidates":
             count = len(payload.get("candidates", []) or [])
             return f"发布 {count} 条追溯候选并校验证据"
+        case "dispatch_trace_subagents":
+            count = len(args.get("regions", []) or [])
+            return f"并行取证：派发 {count} 个区域子代理"
         case "publish_architecture_graph":
             return "发布架构图"
         case "finish_analysis":
@@ -649,7 +677,7 @@ def _finalize_trace_run(
     session: Session,
     job: AgentAnalysisJob,
     run: AgentRun,
-    emitter: RunEventEmitter,
+    emitter: RunEventEmitter | SharedRunEventBus,
     artifact: AgentAnalysisArtifact | None,
     published_count: int,
     trace_entries: list[dict[str, Any]] | None = None,
@@ -776,7 +804,33 @@ def _execute_job(job_id: str) -> None:
             if provider is None:
                 _fail(session, job, run, reason or "agent_not_configured")
                 return
-            emitter = RunEventEmitter(session, run)
+            # All writes of this run (event rows, publishes, progress updates) are serialized
+            # behind one re-entrant lock so parallel sub-agent threads respect SQLite's single
+            # writer and the (run_id, sequence) uniqueness the SSE cursor depends on.
+            write_lock = RLock()
+            emitter = SharedRunEventBus(engine, run.run_id, write_lock)
+            sink = (
+                TracePublishSink(
+                    engine,
+                    job.job_id,
+                    run.run_id,
+                    write_lock,
+                    emitter,
+                    persist_artifact=_persist_artifact,
+                    append_links=_append_trace_links,
+                )
+                if job.kind == "trace"
+                else None
+            )
+
+            def _current_artifact() -> AgentAnalysisArtifact | None:
+                if sink is None or sink.artifact_id is None:
+                    return None
+                return session.get(AgentAnalysisArtifact, sink.artifact_id)
+
+            def _published() -> int:
+                return sink.published_count if sink is not None else 0
+
             emitter.emit("analysis.started", {"job_id": job.job_id, "kind": job.kind})
             soft_target = _trace_soft_target(session, job) if job.kind == "trace" else 40
             system_prompt, request = _system_prompt(job, soft_target)
@@ -807,14 +861,6 @@ def _execute_job(job_id: str) -> None:
             # Transient provider hiccups (malformed/truncated JSON on a big publish payload,
             # empty responses, rate limits) should not kill an otherwise-successful run. Retry
             # them a bounded number of times before giving up.
-            _RETRYABLE = {
-                "llm_invalid_json",
-                "llm_empty_response",
-                "llm_rate_limited",
-                "llm_timeout",
-                "llm_transport_error",
-                "llm_upstream_error",
-            }
             provider_failures = 0
             # Hard safety cap on tool steps only. Normal termination is the model calling
             # finish_analysis (trace) or publishing once (architecture); soft_target just nudges.
@@ -834,8 +880,8 @@ def _execute_job(job_id: str) -> None:
                 "get_analysis_artifact",
             }
             converge_nudged = False
-            run_artifact: AgentAnalysisArtifact | None = None
-            published_count = 0
+            dispatch_calls = 0
+            dispatched_regions = 0
             publish_name = (
                 "publish_architecture_graph"
                 if job.kind == "architecture"
@@ -846,18 +892,28 @@ def _execute_job(job_id: str) -> None:
                 # sets status=cancelling to interrupt early while KEEPING whatever was already
                 # published; a hard failure (manual abort) sets status=failed. Reloading the
                 # job is one cheap SELECT per step under WAL.
+                #
+                # rollback() first: events and publishes now commit on their own sessions
+                # (sink/bus), so this session no longer commits inside the loop. Without
+                # ending the read transaction here, its WAL snapshot would pin and the
+                # re-SELECT below would keep returning the stale pre-cancel status forever.
+                session.rollback()
                 session.expire(job)
                 if job.status == "cancelling":
+                    if sink is not None:
+                        sink.close()
                     emitter.emit(
                         "analysis.progress",
                         {"message": "正在中止追溯（保留已发现的关系）", "step": step_number},
                     )
                     _finalize_trace_run(
-                        session, job, run, emitter, run_artifact, published_count,
+                        session, job, run, emitter, _current_artifact(), _published(),
                         trace_entries=trace_entries, cancelled=True,
                     )
                     return
                 if job.status == "failed":
+                    if sink is not None:
+                        sink.close()
                     run.status = "failed"
                     run.degraded_reason = job.error_code or "externally_aborted"
                     run.updated_at = utc_now()
@@ -874,7 +930,7 @@ def _execute_job(job_id: str) -> None:
                 try:
                     step = provider.next_step(request, context, tool_results)
                 except AgentProviderFailure as exc:
-                    if exc.reason in _RETRYABLE and provider_failures < 6:
+                    if exc.reason in RETRYABLE_PROVIDER_FAILURES and provider_failures < 6:
                         provider_failures += 1
                         emitter.emit(
                             "analysis.tool.failed",
@@ -899,7 +955,13 @@ def _execute_job(job_id: str) -> None:
                                 ),
                             }
                         )
+                        # Rate limits and timeouts back off exponentially (with jitter) so
+                        # parallel runs don't hammer the provider; other retryable reasons
+                        # are model mistakes and retry immediately.
+                        time.sleep(backoff_seconds(provider_failures, exc.reason))
                         continue
+                    if sink is not None:
+                        sink.close()
                     emitter.emit("analysis.failed", {"code": exc.reason})
                     _fail(session, job, run, exc.reason, trace_entries=trace_entries)
                     return
@@ -927,6 +989,123 @@ def _execute_job(job_id: str) -> None:
                     continue
                 tool_name = step.tool_name or ""
                 activity = _activity(tool_name, step.arguments)
+                if job.kind == "trace" and tool_name == "dispatch_trace_subagents":
+                    assert sink is not None
+                    try:
+                        dispatch_args = DispatchSubagentsArguments.model_validate(step.arguments)
+                    except ValidationError as exc:
+                        details = "; ".join(
+                            f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
+                            for item in exc.errors()[:8]
+                        )
+                        feedback = {
+                            "tool": tool_name,
+                            "ok": False,
+                            "error": "invalid_tool_arguments",
+                            "details": details[:600],
+                            "instruction": (
+                                "Each region needs a short name; paper_target_hints and "
+                                "code_hints are string lists; at most 8 regions per call."
+                            ),
+                        }
+                        tool_results.append(feedback)
+                        _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
+                        emitter.emit(
+                            "analysis.tool.failed",
+                            {
+                                "tool_name": tool_name,
+                                "code": "invalid_tool_arguments",
+                                "step": step_number,
+                                "budget": budget,
+                            },
+                        )
+                        continue
+                    if (
+                        dispatch_calls >= MAX_DISPATCH_CALLS
+                        or dispatched_regions >= MAX_TOTAL_REGIONS
+                    ):
+                        feedback = {
+                            "tool": tool_name,
+                            "ok": False,
+                            "error": "dispatch_limit_reached",
+                            "instruction": (
+                                "No more dispatches: do the remaining region evidence yourself "
+                                "with the read tools, publish, then call finish_analysis."
+                            ),
+                        }
+                        tool_results.append(feedback)
+                        _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
+                        emitter.emit(
+                            "analysis.tool.failed",
+                            {
+                                "tool_name": tool_name,
+                                "code": "dispatch_limit_reached",
+                                "step": step_number,
+                                "budget": budget,
+                            },
+                        )
+                        continue
+                    regions = dispatch_args.regions[: MAX_TOTAL_REGIONS - dispatched_regions]
+                    dispatch_calls += 1
+                    emitter.emit(
+                        "analysis.subagents.started",
+                        {
+                            "regions": len(regions),
+                            "names": [region.name for region in regions],
+                            "step": step_number,
+                            "budget": budget,
+                            "activity": f"并行取证：启动 {len(regions)} 个区域子代理",
+                        },
+                    )
+                    outcome = run_trace_subagents(
+                        engine=engine,
+                        provider=provider,
+                        ctx=RegionJobContext(
+                            job_id=job.job_id,
+                            project_id=job.project_id,
+                            repository_id=job.code_repository_id,
+                            paper_document_id=job.paper_document_id,
+                            requested_depth=job.requested_depth,
+                            code_revision=job.code_revision,
+                            system_prompt=system_prompt,
+                            environment=context["environment"],
+                        ),
+                        regions=regions,
+                        sink=sink,
+                        bus=emitter,
+                        write_lock=write_lock,
+                        parallelism=settings.tracelab_trace_subagent_parallelism,
+                        step_budget=settings.tracelab_trace_subagent_steps,
+                    )
+                    dispatched_regions += outcome.regions_used
+                    trace_entries.extend(outcome.trace_entries)
+                    feedback = {"tool": tool_name, "ok": True, "result": outcome.tool_payload}
+                    tool_results.append(feedback)
+                    _trace_step(
+                        run,
+                        {
+                            "type": "tool_result",
+                            "tool": tool_name,
+                            "ok": True,
+                            "regions": outcome.regions_used,
+                            "published": outcome.total_published,
+                        },
+                        trace_entries,
+                    )
+                    emitter.emit(
+                        "analysis.tool.completed",
+                        {
+                            "tool_name": tool_name,
+                            "activity": (
+                                f"并行取证完成：{outcome.regions_used} 个区域、"
+                                f"新增 {outcome.total_published} 条候选"
+                            ),
+                            "step": step_number,
+                            "budget": budget,
+                            "published": outcome.total_published > 0,
+                        },
+                    )
+                    continue
                 call_key = (
                     tool_name
                     + "|"
@@ -1071,8 +1250,10 @@ def _execute_job(job_id: str) -> None:
                 )
                 if tool_name == "finish_analysis" and result.get("finished"):
                     # Explicit model-declared completion (trace).
+                    if sink is not None:
+                        sink.close()
                     _finalize_trace_run(
-                        session, job, run, emitter, run_artifact, published_count,
+                        session, job, run, emitter, _current_artifact(), _published(),
                         trace_entries=trace_entries,
                     )
                     return
@@ -1119,16 +1300,11 @@ def _execute_job(job_id: str) -> None:
                         )
                         emitter.emit("run.completed", {"status": "completed"})
                         return
-                    # Trace: incremental, NON-terminal publish — persist and render now.
+                    # Trace: incremental, NON-terminal publish — persist and render now,
+                    # through the same single-writer sink the sub-agents use.
+                    assert sink is not None
                     try:
-                        if run_artifact is None:
-                            emitter.emit("analysis.validating", {"job_id": job.job_id})
-                            run_artifact = _persist_artifact(session, job, run, result["payload"])
-                        else:
-                            _append_trace_links(session, job, run_artifact, result["payload"])
-                        session.add(job)
-                        session.add(run_artifact)
-                        session.commit()
+                        sink.publish(result["payload"], step=step_number)
                     except ValueError as exc:
                         feedback = {
                             "tool": tool_name,
@@ -1151,19 +1327,6 @@ def _execute_job(job_id: str) -> None:
                             },
                         )
                         continue
-                    new_links = len(result["payload"].get("candidates", []))
-                    published_count += new_links
-                    emitter.emit(
-                        "analysis.published",
-                        {
-                            "job_id": job.job_id,
-                            "artifact_id": run_artifact.artifact_id,
-                            "new_links": new_links,
-                            "total_links": published_count,
-                            "code_revision": job.code_revision,
-                            "step": step_number,
-                        },
-                    )
                     # Past the soft target with results in hand: push to wrap up so runs don't
                     # drift toward the hard cap re-publishing overlapping candidates.
                     if step_number >= soft_target:
@@ -1173,7 +1336,7 @@ def _execute_job(job_id: str) -> None:
                                 "ok": False,
                                 "error": "wrap_up",
                                 "instruction": (
-                                    f"You have published {published_count} relations and passed "
+                                    f"You have published {_published()} relations and passed "
                                     "the soft target. If the core contributions and must-inspect "
                                     "targets are covered, call finish_analysis NOW to end. Only "
                                     "publish again for a genuinely new, defensible target."
@@ -1183,9 +1346,12 @@ def _execute_job(job_id: str) -> None:
                     continue
             # Budget exhausted. If the run already produced results, finalize as succeeded;
             # otherwise nothing defensible was ever published.
-            if run_artifact is not None or published_count > 0:
+            if sink is not None:
+                sink.close()
+            final_artifact = _current_artifact()
+            if final_artifact is not None or _published() > 0:
                 _finalize_trace_run(
-                    session, job, run, emitter, run_artifact, published_count,
+                    session, job, run, emitter, final_artifact, _published(),
                     trace_entries=trace_entries,
                 )
                 return
