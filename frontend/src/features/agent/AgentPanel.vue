@@ -297,7 +297,8 @@
           maxlength="8000"
           resize="none"
           :disabled="hasPendingConfirmation"
-          :placeholder="hasPendingConfirmation ? '请先处理待确认的工具操作' : '询问或要求 Agent 修改当前环境'"
+          :placeholder="hasPendingConfirmation ? '请先处理待确认的工具操作' : '询问或要求 Agent 修改当前环境（Enter 发送，Shift+Enter 换行）'"
+          @keydown.enter.exact="onComposerEnter"
           @keydown.meta.enter.prevent="send"
           @keydown.ctrl.enter.prevent="send"
         />
@@ -536,6 +537,16 @@ async function archiveActive(): Promise<void> {
   } catch (cause) {
     if (cause !== 'cancel' && cause !== 'close') console.error(cause)
   }
+}
+
+// Plain Enter sends; Shift+Enter falls through to the default newline (the `.exact`
+// modifier keeps this handler off modified keys). Enter pressed to confirm an IME
+// composition (Chinese input) must NOT send — the event still fires with isComposing
+// set (keyCode 229 on some engines), so bail out without preventing the default.
+function onComposerEnter(event: KeyboardEvent): void {
+  if (event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  void send()
 }
 
 async function send(): Promise<void> {
