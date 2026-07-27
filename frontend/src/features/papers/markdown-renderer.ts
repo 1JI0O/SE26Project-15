@@ -4,6 +4,8 @@ import MarkdownIt from 'markdown-it'
 import type StateBlock from 'markdown-it/lib/rules_block/state_block.mjs'
 import type StateInline from 'markdown-it/lib/rules_inline/state_inline.mjs'
 
+import { extractPaperMarkdownSnippet } from './paper-snippet'
+
 type AssetResolver = (path: string) => string
 
 function mathPlugin(markdown: MarkdownIt): void {
@@ -146,4 +148,22 @@ export function renderPaperMarkdown(markdownText: string, resolveAsset: AssetRes
     wrapper.append(table)
   }
   return template.innerHTML
+}
+
+/** Render a short markdown snippet (paper quote / rationale) with the same math rules as the paper pane. */
+export function renderTraceRichText(text: string): string {
+  const value = text.trim()
+  if (!value) return ''
+  return renderPaperMarkdown(value, () => '')
+}
+
+/** Render paper evidence by slicing the MinerU markdown source (keeps `$` / `$$`), not bare TeX quotes. */
+export function renderPaperEvidenceHtml(
+  markdown: string,
+  blockId: string,
+  quote = '',
+  occurrence = 1,
+): string {
+  const snippet = extractPaperMarkdownSnippet(markdown, blockId, quote, occurrence)
+  return renderTraceRichText(snippet || quote || blockId)
 }

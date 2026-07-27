@@ -59,7 +59,13 @@ export interface TraceLinkSummary {
   relevance: number
   confidence: number
   rationale: string
-  paper: { targetId: string | null; blockId: string; quote: string; targetType: string }
+  paper: {
+    targetId: string | null
+    blockId: string
+    quote: string
+    targetType: string
+    occurrence: number
+  }
   code: { symbol: string; path: string; line: number | null }
   /** How many other (lower-relevance) relations share this relation's paper target. */
   otherLinkCount: number
@@ -291,6 +297,7 @@ export function useTraceIndex(links: Ref<TraceLink[]>) {
         blockId: link.paper_block_id,
         quote: paper?.quote ?? '',
         targetType: paper?.target_type ?? '',
+        occurrence: paper?.occurrence ?? 1,
       },
       code: {
         symbol: link.code_symbol_id,

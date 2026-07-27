@@ -567,7 +567,17 @@
         <div class="trace-box-body">
           <section class="trace-box-side">
             <span class="trace-box-side-label">论文</span>
-            <div class="trace-box-quote">{{ traceIndex.hoveredSummary.value.paper.quote || traceIndex.hoveredSummary.value.paper.blockId }}</div>
+            <div
+              class="trace-box-quote"
+              v-html="
+                renderPaperEvidenceHtml(
+                  paper.paperDocument.value?.markdown || '',
+                  traceIndex.hoveredSummary.value.paper.blockId,
+                  traceIndex.hoveredSummary.value.paper.quote,
+                  traceIndex.hoveredSummary.value.paper.occurrence,
+                )
+              "
+            />
             <div class="trace-box-meta">{{ traceIndex.hoveredSummary.value.paper.blockId }}<template v-if="traceIndex.hoveredSummary.value.paper.targetType"> · {{ traceIndex.hoveredSummary.value.paper.targetType }}</template></div>
           </section>
           <section class="trace-box-side">
@@ -599,7 +609,17 @@
               论文锚点不可用（后端未解析该块）
             </div>
             <template v-else>
-              <div class="trace-box-quote">{{ traceIndex.selectedSummary.value.paper.quote || traceIndex.selectedSummary.value.paper.blockId }}</div>
+              <div
+                class="trace-box-quote"
+                v-html="
+                  renderPaperEvidenceHtml(
+                    paper.paperDocument.value?.markdown || '',
+                    traceIndex.selectedSummary.value.paper.blockId,
+                    traceIndex.selectedSummary.value.paper.quote,
+                    traceIndex.selectedSummary.value.paper.occurrence,
+                  )
+                "
+              />
               <div class="trace-box-meta">{{ traceIndex.selectedSummary.value.paper.blockId }}<template v-if="traceIndex.selectedSummary.value.paper.targetType"> · {{ traceIndex.selectedSummary.value.paper.targetType }}</template></div>
             </template>
           </section>
@@ -615,9 +635,11 @@
           <p v-if="traceIndex.selectedSummary.value.otherLinkCount" class="trace-box-more">
             另有 {{ traceIndex.selectedSummary.value.otherLinkCount }} 条更低相关度关系
           </p>
-          <p v-if="traceIndex.selectedSummary.value.rationale" class="trace-box-rationale">
-            {{ traceIndex.selectedSummary.value.rationale }}
-          </p>
+          <p
+            v-if="traceIndex.selectedSummary.value.rationale"
+            class="trace-box-rationale"
+            v-html="renderTraceRichText(traceIndex.selectedSummary.value.rationale)"
+          />
         </div>
       </div>
     </div>
@@ -672,6 +694,7 @@ import { useTrace } from '@/composables/useTrace'
 import { useTraceIndex } from '@/composables/useTraceIndex'
 import { useWorkspace } from '@/composables/useWorkspace'
 import type { PaperMark } from '@/features/papers/trace-decorations'
+import { renderPaperEvidenceHtml, renderTraceRichText } from '@/features/papers/markdown-renderer'
 import AgentPanel from '@/features/agent/AgentPanel.vue'
 import DebugPanel from '@/components/DebugPanel.vue'
 import PaperOutlineTree from '@/features/papers/PaperOutlineTree.vue'
@@ -686,6 +709,7 @@ import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
 import type { TensorFlowNode } from '@/composables/useTensorFlow'
 import type { TraceRowView } from '@/composables/useTrace'
 import type { AgentUiAction } from '@/types/agent'
+import 'katex/dist/katex.min.css'
 
 type BottomPanelKey = 'trace' | 'flow' | 'conflict'
 type PaneKey = 'paper' | 'code'
@@ -2269,10 +2293,33 @@ watch(activeBottomPanel, (tab) => {
   font-weight: 600;
   color: #1c2b38;
   word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  max-height: 4.8em;
+  overflow: auto;
+  line-height: 1.45;
+}
+
+.trace-box-quote :deep(p),
+.trace-box-quote :deep(.math-display),
+.trace-box-rationale :deep(p),
+.trace-box-rationale :deep(.math-display) {
+  margin: 0;
+}
+
+.trace-box-quote :deep(p + p),
+.trace-box-rationale :deep(p + p) {
+  margin-top: 0.35em;
+}
+
+.trace-box-quote :deep(.math-display),
+.trace-box-rationale :deep(.math-display) {
+  margin: 0.25em 0;
+  overflow-x: auto;
+}
+
+.trace-box-quote :deep(.katex),
+.trace-box-rationale :deep(.katex) {
+  font-size: 1.05em;
+  font-weight: 400;
 }
 
 .trace-box-meta {
@@ -2294,10 +2341,9 @@ watch(activeBottomPanel, (tab) => {
   font-size: 11px;
   line-height: 1.5;
   color: #6b7785;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  max-height: 4.8em;
+  overflow: auto;
+  font-weight: 400;
 }
 
 .trace-box-unresolved {
