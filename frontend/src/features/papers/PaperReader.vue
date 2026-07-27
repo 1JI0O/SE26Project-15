@@ -34,7 +34,6 @@
             PDF 原件
           </button>
         </div>
-        <span class="toolbar-hint">{{ toolbarHint }}</span>
         <div class="zoom-controls">
           <button aria-label="缩小论文" @click="zoom = Math.max(75, zoom - 10)">−</button>
           <button aria-label="重置论文缩放" @click="zoom = 100">{{ zoom }}%</button>
@@ -118,23 +117,6 @@ const zoom = ref(100)
 type ViewMode = 'markdown' | 'pdf'
 const viewMode = ref<ViewMode>('markdown')
 
-/**
- * True once any block carries line boxes.
- *
- * Highlights land on the PDF either way — every block has a box — but papers parsed
- * before geometry capture only reach block precision, which is worth saying rather than
- * leaving the user to wonder why a whole paragraph lit up.
- */
-const hasLineGeometry = computed(() =>
-  (props.blocks ?? []).some((block) => (block.lines?.length ?? 0) > 0),
-)
-
-const toolbarHint = computed(() => {
-  if (viewMode.value === 'pdf') {
-    return hasLineGeometry.value ? 'PDF 原件 · 行级高亮' : 'PDF 原件 · 块级高亮（重新解析可提升到行级）'
-  }
-  return props.source === 'mineru-markdown' ? 'MinerU 结构化 Markdown' : '结构化文本兼容模式'
-})
 const desktopRuntime = '__TAURI_INTERNALS__' in window
 const imageObjectUrls = new Set<string>()
 // While a programmatic block/target jump is animating we must fully own the scroll: the section
@@ -595,13 +577,6 @@ defineExpose({ scrollToSection, scrollToBlock, unresolvedTargetIds })
 .view-switch button:disabled {
   color: #b3bcc6;
   cursor: not-allowed;
-}
-
-.toolbar-hint {
-  overflow: hidden;
-  flex: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .zoom-controls {

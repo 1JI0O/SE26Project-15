@@ -16,17 +16,6 @@
         </el-tag>
       </div>
 
-      <div class="mode-switch" aria-label="工作模式">
-        <button
-          v-for="mode in reviewModes"
-          :key="mode"
-          :class="{ active: activeMode === mode }"
-          @click="activeMode = mode"
-        >
-          {{ mode }}
-        </button>
-      </div>
-
       <div class="command-actions">
         <el-button size="small" aria-label="交换论文与代码视图" @click="paperFirst = !paperFirst">
           <span>交换视图</span>
@@ -52,20 +41,11 @@
             size="small"
             :icon="Download"
             :loading="code.importingGithub.value"
-            @click="githubDialogVisible = true"
+            @click="promptGitHubImport"
           >
             <span>GitHub</span>
           </el-button>
         </el-tooltip>
-        <el-button
-          size="small"
-          type="primary"
-          :icon="MagicStick"
-          :loading="trace.generating.value"
-          @click="openTraceAndGenerate"
-        >
-          <span>生成追溯</span>
-        </el-button>
         <el-button size="small" @click="openArtifactVersions">版本历史</el-button>
         <el-tooltip
           :content="
@@ -150,16 +130,6 @@
             <el-icon :size="21"><Warning /></el-icon>
           </button>
         </el-tooltip>
-        <el-tooltip content="报告与质量" placement="right">
-          <button
-            :class="['activity-button', { active: bottomPanelOpen && activeBottomPanel === 'report' }]"
-            aria-label="报告与质量"
-            @click="openBottomPanel('report')"
-          >
-            <el-icon :size="21"><DataAnalysis /></el-icon>
-          </button>
-        </el-tooltip>
-
         <div class="activity-spacer" />
 
         <el-tooltip content="论文与代码 Agent" placement="right">
@@ -218,26 +188,6 @@
                 </div>
               </button>
             </div>
-          </section>
-
-          <section class="github-import">
-            <el-input
-              v-model="githubUrl"
-              size="small"
-              placeholder="GitHub 仓库 URL"
-              clearable
-              @keyup.enter="onGitHubImport"
-            />
-            <el-tooltip content="从 GitHub 导入公开仓库" placement="bottom">
-              <el-button
-                size="small"
-                :icon="Download"
-                :loading="code.importingGithub.value"
-                :disabled="!githubUrl.trim()"
-                aria-label="从 GitHub 导入"
-                @click="onGitHubImport"
-              />
-            </el-tooltip>
           </section>
 
           <div v-if="code.analysisSummary.value" class="repository-stats">
@@ -433,15 +383,10 @@
               <TraceMatrix
                 :rows="trace.traceRows.value"
                 :loading="trace.loading.value"
-                :generating="trace.generating.value"
-                :cancelling="trace.cancelling.value"
                 :error="trace.error.value"
                 :mode="trace.mode.value"
                 :degraded="trace.degraded.value"
-                :has-generated="hasGeneratedTrace"
                 :selected-id="traceIndex.selectedLinkId.value"
-                @suggest="generateAgentAnalysis(hasGeneratedTrace)"
-                @cancel="trace.cancelAnalysis"
                 @review="trace.reviewTrace"
                 @review-batch="trace.reviewBatch"
                 @select-row="onTraceRowSelect"
@@ -481,30 +426,32 @@
                 <p v-if="trace.degradedReason.value" class="agent-degraded">
                   {{ trace.degradedReason.value }}
                 </p>
-                <el-button
-                  size="small"
-                  type="primary"
-                  :loading="trace.generating.value"
-                  @click="generateAgentAnalysis(hasGeneratedTrace)"
-                >
-                  {{
-                    trace.generating.value
-                      ? 'Agent 追溯中…'
-                      : hasGeneratedTrace
-                        ? '重新生成'
-                        : '生成追溯'
-                  }}
-                </el-button>
-                <el-button
-                  v-if="trace.generating.value"
-                  size="small"
-                  type="warning"
-                  plain
-                  :loading="trace.cancelling.value"
-                  @click="trace.cancelAnalysis"
-                >
-                  {{ trace.cancelling.value ? '正在中止…' : '中止（保留已发现）' }}
-                </el-button>
+                <div class="trace-summary-actions">
+                  <el-button
+                    size="small"
+                    type="primary"
+                    :loading="trace.generating.value"
+                    @click="generateAgentAnalysis(hasGeneratedTrace)"
+                  >
+                    {{
+                      trace.generating.value
+                        ? 'Agent 追溯中…'
+                        : hasGeneratedTrace
+                          ? '重新生成'
+                          : '生成追溯'
+                    }}
+                  </el-button>
+                  <el-button
+                    v-if="trace.generating.value"
+                    size="small"
+                    type="warning"
+                    plain
+                    :loading="trace.cancelling.value"
+                    @click="trace.cancelAnalysis"
+                  >
+                    {{ trace.cancelling.value ? '正在中止…' : '中止' }}
+                  </el-button>
+                </div>
               </aside>
             </div>
 
@@ -543,16 +490,6 @@
               v-else-if="activeBottomPanel === 'conflict'"
               :items="insights.conflictItems.value"
             />
-
-            <div v-else-if="activeBottomPanel === 'report'" class="report-panel-wrap">
-              <div class="report-actions">
-                <span>质量指标与报告接口状态</span>
-                <el-tooltip content="报告导出接口已预留，当前迭代不生成文件">
-                  <span><el-button size="small" :icon="Download" disabled>导出报告</el-button></span>
-                </el-tooltip>
-              </div>
-              <ReportPanel :cards="insights.reportCards.value" />
-            </div>
           </div>
         </section>
       </main>
@@ -685,32 +622,6 @@
       </div>
     </div>
     <DebugPanel />
-    <el-dialog v-model="githubDialogVisible" title="从 GitHub 导入代码" width="min(520px, calc(100vw - 32px))">
-      <el-form label-position="top">
-        <el-form-item label="公开仓库地址">
-          <el-input
-            v-model="githubUrl"
-            placeholder="https://github.com/owner/repo"
-            clearable
-            @keyup.enter="onGitHubImport"
-          />
-        </el-form-item>
-      </el-form>
-      <p class="github-hint">
-        工作台会浅克隆该仓库的默认分支并直接完成静态分析，无需手动下载打包。仅支持 HTTPS 公开仓库。
-      </p>
-      <template #footer>
-        <el-button @click="githubDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="code.importingGithub.value"
-          :disabled="!githubUrl.trim()"
-          @click="onGitHubImport"
-        >
-          导入
-        </el-button>
-      </template>
-    </el-dialog>
     <el-dialog v-model="artifactVersionsVisible" title="本机保留的云端文件版本" width="760px">
       <el-table :data="artifactVersions">
         <el-table-column prop="entity_type" label="类型" width="150" />
@@ -731,13 +642,11 @@ import {
   ChatLineRound,
   Close,
   Connection,
-  DataAnalysis,
   Document,
   DocumentAdd,
   Download,
   Files,
   FolderOpened,
-  MagicStick,
   Refresh,
   Share,
   Tickets,
@@ -773,13 +682,12 @@ import TensorFlowCanvas from '@/features/tensor-flow/TensorFlowCanvas.vue'
 import TensorFlowInspector from '@/features/tensor-flow/TensorFlowInspector.vue'
 import ConflictPanel from '@/features/tracing/ConflictPanel.vue'
 import EvidenceDrawer from '@/features/tracing/EvidenceDrawer.vue'
-import ReportPanel from '@/features/tracing/ReportPanel.vue'
 import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
 import type { TensorFlowNode } from '@/composables/useTensorFlow'
 import type { TraceRowView } from '@/composables/useTrace'
 import type { AgentUiAction } from '@/types/agent'
 
-type BottomPanelKey = 'trace' | 'flow' | 'conflict' | 'report'
+type BottomPanelKey = 'trace' | 'flow' | 'conflict'
 type PaneKey = 'paper' | 'code'
 type ResizeMode = 'explorer' | 'editor' | 'bottom' | 'agent' | 'traceSummary'
 interface LocalArtifactVersionRow {
@@ -857,15 +765,12 @@ const repositoryStatusLabel = computed(() => {
   return '仓库分析中'
 })
 
-const activeMode = ref('审阅')
-const reviewModes = ['审阅', '标注', '冲突']
 const activeBottomPanel = ref<BottomPanelKey>('trace')
 const bottomPanelOpen = ref(false)
 const bottomPanelMaximized = ref(false)
 const explorerOpen = ref(true)
 const agentOpen = ref(false)
 const githubUrl = ref('')
-const githubDialogVisible = ref(false)
 const activeExplorerView = ref<'files' | 'outline'>('files')
 const paperFirst = ref(true)
 const draggedPane = ref<PaneKey | null>(null)
@@ -904,7 +809,6 @@ const bottomTabs: Array<{ key: BottomPanelKey; label: string }> = [
   { key: 'trace', label: '追溯矩阵' },
   { key: 'flow', label: '张量流图' },
   { key: 'conflict', label: '冲突分析' },
-  { key: 'report', label: '报告与质量' },
 ]
 
 const evidenceDrawerVisible = ref(false)
@@ -1097,11 +1001,6 @@ function openBottomPanel(tab: BottomPanelKey): void {
 const hasGeneratedTrace = computed(
   () => trace.mode.value === 'agent' || trace.traceLinks.value.length > 0,
 )
-
-function openTraceAndGenerate(): void {
-  openBottomPanel('trace')
-  void generateAgentAnalysis(hasGeneratedTrace.value)
-}
 
 /**
  * Run the trace agent. When a previous round exists, ask first whether to keep it.
@@ -1303,13 +1202,36 @@ async function onEvidenceReject(row: TraceRowView): Promise<void> {
   evidenceDrawerVisible.value = false
 }
 
+async function promptGitHubImport(): Promise<void> {
+  let url: string
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '工作台会浅克隆该仓库的默认分支并直接完成静态分析。仅支持 HTTPS 公开仓库。',
+      '从 GitHub 导入代码',
+      {
+        confirmButtonText: '导入',
+        cancelButtonText: '取消',
+        inputPlaceholder: 'https://github.com/owner/repo',
+        inputValue: githubUrl.value,
+        inputPattern: /\S+/,
+        inputErrorMessage: '请输入仓库地址',
+      },
+    )
+    url = String(value || '').trim()
+  } catch {
+    return
+  }
+  if (!url) return
+  githubUrl.value = url
+  await onGitHubImport()
+}
+
 async function onGitHubImport(): Promise<void> {
   const url = githubUrl.value.trim()
   if (!url) return
   const success = await code.handleGitHubImport(url)
   if (success) {
     githubUrl.value = ''
-    githubDialogVisible.value = false
     await reloadDerivedViews()
   }
 }
@@ -1357,7 +1279,7 @@ async function handleAgentUiAction(action: AgentUiAction): Promise<void> {
 
 watch(activeBottomPanel, (tab) => {
   if (tab === 'flow') void tensorFlow.loadTensorFlow()
-  if (tab === 'conflict' || tab === 'report') void insights.loadInsights()
+  if (tab === 'conflict') void insights.loadInsights()
 })
 </script>
 
@@ -1367,10 +1289,13 @@ watch(activeBottomPanel, (tab) => {
   --ide-muted: #6b7785;
   --ide-surface: #ffffff;
   display: grid;
+  width: 100%;
   height: 100%;
+  max-height: 100%;
   min-height: 0;
   grid-template-rows: 42px minmax(0, 1fr) 23px;
   overflow: hidden;
+  overscroll-behavior: none;
   background: #f5f7f9;
   color: #26323d;
 }
@@ -1386,6 +1311,7 @@ watch(activeBottomPanel, (tab) => {
 
 .command-bar {
   z-index: 4;
+  flex-shrink: 0;
   justify-content: space-between;
   gap: 12px;
   padding: 0 8px;
@@ -1424,31 +1350,6 @@ watch(activeBottomPanel, (tab) => {
   color: #a0a9b3;
 }
 
-.mode-switch {
-  display: flex;
-  padding: 2px;
-  border: 1px solid var(--ide-border);
-  border-radius: 5px;
-  background: #f6f8fa;
-}
-
-.mode-switch button {
-  padding: 4px 10px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  color: #667382;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.mode-switch button.active {
-  background: #ffffff;
-  color: #147866;
-  box-shadow: 0 1px 3px rgba(28, 43, 54, 0.12);
-  font-weight: 700;
-}
-
 .command-actions {
   gap: 4px;
   white-space: nowrap;
@@ -1460,6 +1361,7 @@ watch(activeBottomPanel, (tab) => {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .activity-bar {
@@ -1690,14 +1592,6 @@ watch(activeBottomPanel, (tab) => {
 .import-state.ready > span,
 .import-state.ready small {
   color: #1f8f78;
-}
-
-.github-import {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 5px;
-  padding: 7px;
-  border-bottom: 1px solid var(--ide-border);
 }
 
 .repository-stats {
@@ -2080,6 +1974,23 @@ watch(activeBottomPanel, (tab) => {
   color: #b64a3c;
 }
 
+.trace-summary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  width: 100%;
+}
+
+.trace-summary-actions :deep(.el-button) {
+  width: 100%;
+  margin: 0;
+}
+
+/* When only the primary action is visible, let it span the full row. */
+.trace-summary-actions :deep(.el-button:only-child) {
+  grid-column: 1 / -1;
+}
+
 .tensor-flow-layout {
   display: grid;
   height: 100%;
@@ -2125,14 +2036,12 @@ watch(activeBottomPanel, (tab) => {
   font-size: 11px;
 }
 
-.bottom-panel-content :deep(.conflict-grid),
-.bottom-panel-content :deep(.report-layout) {
+.bottom-panel-content :deep(.conflict-grid) {
   gap: 8px;
   padding: 9px 10px;
 }
 
-.bottom-panel-content :deep(.conflict-card),
-.bottom-panel-content :deep(.report-card) {
+.bottom-panel-content :deep(.conflict-card) {
   gap: 7px;
   padding: 10px;
   border-radius: 4px;
@@ -2142,25 +2051,10 @@ watch(activeBottomPanel, (tab) => {
   font-size: 13px;
 }
 
-.bottom-panel-content :deep(.conflict-card p),
-.bottom-panel-content :deep(.report-card p) {
+.bottom-panel-content :deep(.conflict-card p) {
   margin: 0;
   font-size: 11px;
   line-height: 1.45;
-}
-
-.bottom-panel-content :deep(.report-card strong) {
-  font-size: 20px;
-}
-
-.report-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--ide-border);
-  color: #667382;
-  font-size: 11px;
 }
 
 .agent-sidebar {
@@ -2178,6 +2072,7 @@ watch(activeBottomPanel, (tab) => {
 }
 
 .status-bar {
+  flex-shrink: 0;
   gap: 14px;
   padding: 0 9px;
   overflow: hidden;
@@ -2199,10 +2094,6 @@ watch(activeBottomPanel, (tab) => {
   .explorer-sidebar {
     width: 230px;
     flex-basis: 230px;
-  }
-
-  .command-bar .mode-switch {
-    display: none;
   }
 }
 
@@ -2276,13 +2167,6 @@ watch(activeBottomPanel, (tab) => {
   .status-bar span:nth-of-type(3) {
     display: none;
   }
-}
-
-.github-hint {
-  margin: 0;
-  color: #7a8794;
-  font-size: 12px;
-  line-height: 1.6;
 }
 
 .trace-box-stack {

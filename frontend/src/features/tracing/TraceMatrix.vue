@@ -5,20 +5,6 @@
         <h2>双向追溯矩阵</h2>
         <p>论文段落、公式、图表与代码文件/符号的关联审阅队列。点击任意行选中该关系并两侧联动定位。</p>
       </div>
-      <div class="header-actions">
-        <el-button
-          v-if="generating"
-          type="warning"
-          plain
-          :loading="cancelling"
-          @click="$emit('cancel')"
-        >
-          {{ cancelling ? '正在中止…' : '中止追溯（保留已发现）' }}
-        </el-button>
-        <el-button type="primary" :loading="generating" @click="$emit('suggest')">
-          {{ generating ? 'Agent 追溯中…' : hasGenerated ? '重新生成' : '生成追溯' }}
-        </el-button>
-      </div>
     </header>
 
     <el-alert
@@ -166,20 +152,15 @@ const props = withDefaults(
   defineProps<{
     rows: TraceRowView[]
     loading: boolean
-    generating: boolean
-    cancelling?: boolean
     error: string | null
     mode: string
     degraded: boolean
-    hasGenerated?: boolean
     selectedId?: string | null
   }>(),
-  { cancelling: false, hasGenerated: false, selectedId: null },
+  { selectedId: null },
 )
 
 const emit = defineEmits<{
-  suggest: []
-  cancel: []
   review: [traceId: string, status: Extract<TraceStatus, 'accepted' | 'rejected'>]
   reviewBatch: [
     status: Extract<TraceStatus, 'accepted' | 'rejected' | 'proposed'>,
@@ -352,12 +333,6 @@ function statusType(status: MergedTraceRow['status']): 'success' | 'warning' | '
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 12px;
-}
-
-.header-actions {
-  display: flex;
-  flex-shrink: 0;
-  gap: 8px;
 }
 
 .batch-bar {

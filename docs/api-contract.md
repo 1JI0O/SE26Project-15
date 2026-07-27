@@ -133,7 +133,7 @@ LLM 未配置或调用失败时保存会话并返回安全降级响应，不创�
 | 方法 | 路径 | 状态 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/projects/{project_id}/workspace` | 已实现 | 聚合当前项目数据 |
-| GET | `/projects/{project_id}/workspace/report-summary` | 已实现 | 按真实论文/代码/追溯统计生成摘要卡片 |
+| GET | `/projects/{project_id}/workspace/report-summary` | 已实现（前端暂未挂载） | 按真实论文/代码/追溯统计生成摘要卡片；工作台「报告与质量」面板已移除 |
 | GET | `/projects/{project_id}/workspace/conflicts` | 接口预留 | 返回稳定冲突演示结构 |
 | GET | `/projects/{project_id}/workspace/flow-graph` | 接口预留 | 旧流程节点结构；张量流请使用 `tensor-flow` |
 | POST | `/projects/{project_id}/workspace/analyze` | 接口预留 | 返回 `202` 和占位 job id |

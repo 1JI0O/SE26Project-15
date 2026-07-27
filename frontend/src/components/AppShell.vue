@@ -74,9 +74,12 @@ async function logout() {
 .app-shell {
   display: grid;
   grid-template-rows: 38px minmax(0, 1fr);
-  height: 100vh;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
   min-height: 0;
   overflow: hidden;
+  overscroll-behavior: none;
   background: #eef1f4;
   color: #24313d;
 }
@@ -132,10 +135,12 @@ async function logout() {
 
 .workspace {
   width: 100%;
+  height: 100%;
   min-height: 0;
   margin: 0;
   padding: 0;
   overflow: auto;
+  overscroll-behavior: none;
 }
 
 .workspace-mode {
@@ -144,6 +149,7 @@ async function logout() {
 
 .workspace-mode .workspace {
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 @media (max-width: 720px) {
