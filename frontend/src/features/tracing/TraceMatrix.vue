@@ -268,13 +268,13 @@ const someProposedSelected = computed(() =>
 
 const analysisAlertType = computed(() => {
   if (props.degraded) return 'warning'
-  if (props.generating) return 'info'
+  if (props.loading) return 'info'
   return 'success'
 })
 
 const analysisAlertTitle = computed(() => {
   if (props.degraded) return `${props.mode} · Agent 分析失败，已保留现有结果`
-  if (props.generating) return `${props.mode} · Agent 分析中，已发布 ${props.rows.length} 条关系`
+  if (props.loading) return `${props.mode} · Agent 分析中，已发布 ${props.rows.length} 条关系`
   return `${props.mode} · 分析完成`
 })
 

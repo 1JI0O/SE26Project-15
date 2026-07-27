@@ -24,8 +24,6 @@ from app.schemas.agent import (
     AgentAnalysisDiagnosticsRead,
     AgentAnalysisJobCreate,
     AgentAnalysisJobRead,
-    AgentQueueItemRead,
-    AgentQueueRead,
     AgentCapabilityRead,
     AgentCapabilityUpdate,
     AgentConfirmationRead,
@@ -39,6 +37,8 @@ from app.schemas.agent import (
     AgentMemoryRead,
     AgentQueryRequest,
     AgentQueryResponse,
+    AgentQueueItemRead,
+    AgentQueueRead,
     AgentRunEventRead,
     AgentRunSubmission,
     AgentTurnRequest,
@@ -297,7 +297,10 @@ def list_agent_queue(session: Session = Depends(get_session)) -> AgentQueueRead:
                 category="repository_analysis",
                 kind="code",
                 status=job.status,
-                summary=job.error_summary or (repo.filename if repo is not None else "代码仓库分析"),
+                summary=(
+                    job.error_summary
+                    or (repo.filename if repo is not None else "代码仓库分析")
+                ),
                 job_id=job.job_id,
                 created_at=_queue_time(job.created_at),
                 updated_at=_queue_time(updated_at),
