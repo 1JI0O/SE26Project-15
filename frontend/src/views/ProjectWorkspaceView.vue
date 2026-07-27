@@ -386,6 +386,8 @@
                 :error="trace.error.value"
                 :mode="trace.mode.value"
                 :degraded="trace.degraded.value"
+                :analyzing="trace.generating.value"
+                :published-count="trace.publishedLinkCount.value"
                 :selected-id="traceIndex.selectedLinkId.value"
                 @review="trace.reviewTrace"
                 @review-batch="trace.reviewBatch"

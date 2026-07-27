@@ -38,6 +38,7 @@ from app.models.entities import (
     AgentAnalysisJob,
     AgentRun,
     AgentRunEvent,
+    TraceLink,
     utc_now,
 )
 from app.services.agent.analysis_tools import DispatchRegion, execute_tool, tool_definitions
@@ -168,6 +169,13 @@ class TracePublishSink:
                 run = session.get(AgentRun, self._run_id)
                 if job is None or run is None:
                     raise ValueError("analysis_job_missing")
+                before_count = 0
+                if self.artifact_id is not None:
+                    before_count = session.exec(
+                        select(func.count(TraceLink.id)).where(
+                            TraceLink.artifact_id == self.artifact_id
+                        )
+                    ).one()
                 if self.artifact_id is None:
                     self._bus.emit("analysis.validating", {"job_id": job.job_id})
                     artifact = self._persist_artifact(session, job, run, payload)
@@ -176,12 +184,23 @@ class TracePublishSink:
                     if artifact is None:
                         raise ValueError("analysis_artifact_missing")
                     self._append_links(session, job, artifact, payload)
+                session.flush()
+                after_count = session.exec(
+                    select(func.count(TraceLink.id)).where(
+                        TraceLink.artifact_id == artifact.artifact_id
+                    )
+                ).one()
+                job.progress_json = {
+                    "message": f"Agent 分析中，已发布 {after_count} 条关系",
+                    "code": "trace_published",
+                    "published_link_count": after_count,
+                }
                 session.add(job)
                 session.add(artifact)
                 session.commit()
                 self.artifact_id = artifact.artifact_id
-                new_links = len(payload.get("candidates", []) or [])
-                self.published_count += new_links
+                new_links = max(0, after_count - before_count)
+                self.published_count = after_count
                 event: dict[str, Any] = {
                     "job_id": job.job_id,
                     "artifact_id": artifact.artifact_id,
@@ -520,7 +539,7 @@ def _run_region(
                     continue
                 if tool_name == "publish_trace_candidates" and outcome.get("published"):
                     try:
-                        sink.publish(outcome["payload"], region=region.name)
+                        publish_result = sink.publish(outcome["payload"], region=region.name)
                     except ValueError as exc:
                         tool_results.append(
                             {
@@ -544,7 +563,7 @@ def _run_region(
                             },
                         )
                         continue
-                    batch = len(outcome["payload"].get("candidates", []) or [])
+                    batch = int(publish_result.get("new_links", 0) or 0)
                     result.published_count += batch
                     result.dropped_count += len(outcome.get("dropped", []) or [])
                     result.unresolved.extend(

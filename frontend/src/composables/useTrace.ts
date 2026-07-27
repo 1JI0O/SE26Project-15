@@ -80,6 +80,7 @@ export function useTrace(projectId: () => number) {
   const analysisStep = ref(0)
   const analysisBudget = ref(0)
   const analysisLog = ref<string[]>([])
+  const publishedLinkCount = ref(0)
   // Id of the in-flight analysis job, so the user can interrupt it and keep partial results.
   const currentJobId = ref<string | null>(null)
   const cancelling = ref(false)
@@ -133,16 +134,23 @@ export function useTrace(projectId: () => number) {
   // Progressive render: pull the links published so far and swap them in as batches arrive,
   // instead of waiting for the whole run to finish. Guarded so overlapping events don't race.
   let mergingLinks = false
+  let mergeQueued = false
   async function mergePublishedLinks(): Promise<void> {
-    if (mergingLinks) return
+    if (mergingLinks) {
+      mergeQueued = true
+      return
+    }
     mergingLinks = true
     try {
-      const links = await listTraceLinks(projectId())
-      if (links.length) {
-        traceLinks.value = links
-        traceRows.value = links.map(fromTraceLink)
-        mode.value = 'agent'
-      }
+      do {
+        mergeQueued = false
+        const links = await listTraceLinks(projectId())
+        if (links.length) {
+          traceLinks.value = links
+          traceRows.value = links.map(fromTraceLink)
+          mode.value = 'agent'
+        }
+      } while (mergeQueued)
     } catch (cause) {
       console.warn('progressive trace merge failed', cause)
     } finally {
@@ -187,8 +195,13 @@ export function useTrace(projectId: () => number) {
         } else if (event.event_type === 'analysis.failed') {
           debug.error('trace.analysis', `分析中止：${String(p.code ?? '未知原因')}`, p)
         } else if (event.event_type === 'analysis.published') {
-          const total = Number(p.total_links ?? 0)
-          pushLog(`✓ 新增 ${Number(p.new_links ?? 0)} 条（累计 ${total}）`)
+          const total = Number(p.total_links ?? p.published_link_count ?? 0)
+          const newLinks = Number(p.new_links ?? 0)
+          if (Number.isFinite(total)) {
+            publishedLinkCount.value = Math.max(publishedLinkCount.value, total)
+          }
+          const safeNewLinks = Number.isFinite(newLinks) ? newLinks : 0
+          pushLog(`✓ 新增 ${safeNewLinks} 条（累计 ${publishedLinkCount.value}）`)
           void mergePublishedLinks() // render progressively as batches land
         } else if (event.event_type === 'analysis.completed') {
           pushLog('✓ 追溯完成')
@@ -233,6 +246,7 @@ export function useTrace(projectId: () => number) {
     degraded.value = false
     degradedReason.value = null
     analysisLog.value = []
+    publishedLinkCount.value = 0
     analysisProgress.value = ''
     analysisActivity.value = ''
     analysisStep.value = 0
@@ -245,6 +259,7 @@ export function useTrace(projectId: () => number) {
       degraded.value = false
       degradedReason.value = null
       await loadTraceRows()
+      publishedLinkCount.value = traceRows.value.length
       if (cancelledRun) {
         ElMessage.success(`已中止追溯，保留 ${traceRows.value.length} 条已发现关系`)
       } else {
@@ -258,6 +273,7 @@ export function useTrace(projectId: () => number) {
       console.error(cause)
       // A failed run may still have published batches before dying; show whatever landed.
       await loadTraceRows()
+      publishedLinkCount.value = traceRows.value.length
     } finally {
       generating.value = false
       cancelling.value = false
@@ -349,6 +365,7 @@ export function useTrace(projectId: () => number) {
     analysisStep,
     analysisBudget,
     analysisLog,
+    publishedLinkCount,
     currentJobId,
     loadTraceRows,
     clearExisting,

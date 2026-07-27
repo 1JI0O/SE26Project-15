@@ -155,9 +155,11 @@ const props = withDefaults(
     error: string | null
     mode: string
     degraded: boolean
+    analyzing?: boolean
+    publishedCount?: number
     selectedId?: string | null
   }>(),
-  { selectedId: null },
+  { analyzing: false, publishedCount: 0, selectedId: null },
 )
 
 const emit = defineEmits<{
@@ -249,13 +251,13 @@ const someProposedSelected = computed(() =>
 
 const analysisAlertType = computed(() => {
   if (props.degraded) return 'warning'
-  if (props.loading) return 'info'
+  if (props.analyzing) return 'info'
   return 'success'
 })
 
 const analysisAlertTitle = computed(() => {
   if (props.degraded) return `${props.mode} · Agent 分析失败，已保留现有结果`
-  if (props.loading) return `${props.mode} · Agent 分析中，已发布 ${props.rows.length} 条关系`
+  if (props.analyzing) return `${props.mode} · Agent 分析中，已发布 ${props.publishedCount} 条关系`
   return `${props.mode} · 分析完成`
 })
 

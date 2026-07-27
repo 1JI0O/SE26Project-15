@@ -279,6 +279,8 @@ def test_dispatch_two_regions_parallel_publishes_and_finishes(
         "Region A",
         "Region B",
     }
+    assert sorted(event.payload_json.get("new_links") for event in published) == [1, 1]
+    assert sorted(event.payload_json.get("total_links") for event in published) == [1, 2]
     assert "analysis.completed" in types
     # Sequences must be strictly increasing and unique (SSE cursor correctness).
     sequences = [event.sequence for event in events]
@@ -336,6 +338,12 @@ def test_dispatch_same_fingerprint_regions_are_idempotent(
         job = session.get(AgentAnalysisJob, job_id)
         assert job is not None and job.status == "succeeded"
     assert len(_links(engine, project_id)) == 1
+    published = [
+        event for event in _events(engine, job_id) if event.event_type == "analysis.published"
+    ]
+    assert len(published) == 2
+    assert sorted(event.payload_json.get("new_links") for event in published) == [0, 1]
+    assert {event.payload_json.get("total_links") for event in published} == {1}
 
 
 def test_cancel_during_dispatch_keeps_published_links(
