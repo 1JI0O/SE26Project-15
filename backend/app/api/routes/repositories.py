@@ -1,6 +1,17 @@
 import zipfile
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from sqlmodel import Session, select
 
 from app.api.routes.helpers import parse_workspace_project_id
@@ -12,7 +23,11 @@ from app.models.entities import CodeRepository
 from app.schemas.repositories import (
     CodeAnalysisRead,
     CodeRepositoryRead,
+    DefinitionCandidate,
     GitHubRepositoryImport,
+    MaterializeCheckoutResponse,
+    ResolveDefinitionRequest,
+    ResolveDefinitionResponse,
     WorkspaceCodeFileRead,
     WorkspaceCodeFileSaveResult,
     WorkspaceCodeFileUpdate,
@@ -34,6 +49,7 @@ from app.services.code_analysis.editor import (
     InvalidRepositoryPathError,
     RepositoryFileNotFoundError,
 )
+from app.services.code_analysis.lsp_bridge import run_websocket_bridge
 from app.services.code_analyzer import analyze_code_archive, is_editor_readable_file
 from app.services.local_sync import record_local_operation, repository_payload
 from app.services.workspace_placeholder import (
@@ -316,6 +332,97 @@ def save_code_file(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return WorkspaceCodeFileSaveResult(**result)
+
+
+@router.post("/workspace/resolve-definition", response_model=ResolveDefinitionResponse)
+def resolve_definition_endpoint(
+    project_id: str,
+    payload: ResolveDefinitionRequest,
+    session: Session = Depends(get_session),
+) -> ResolveDefinitionResponse:
+    numeric_id = parse_workspace_project_id(project_id)
+    if numeric_id is None:
+        raise HTTPException(status_code=404, detail="Definition resolution requires a real project")
+
+    get_project_or_404(numeric_id, session)
+    try:
+        result = workspace_service.resolve_code_definition(
+            session,
+            numeric_id,
+            path=payload.path,
+            line=payload.line,
+            column=payload.column,
+            identifier=payload.identifier,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ResolveDefinitionResponse(
+        status=result.status,
+        symbol_id=result.symbol_id,
+        path=result.path,
+        line_start=result.line_start,
+        line_end=result.line_end,
+        reason=result.reason,
+        candidates=[DefinitionCandidate(**item) for item in result.candidates or []],
+    )
+
+
+@router.post("/workspace/materialize-checkout", response_model=MaterializeCheckoutResponse)
+def materialize_checkout_endpoint(
+    project_id: str,
+    session: Session = Depends(get_session),
+) -> MaterializeCheckoutResponse:
+    numeric_id = parse_workspace_project_id(project_id)
+    if numeric_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Checkout materialization requires a real project",
+        )
+
+    get_project_or_404(numeric_id, session)
+    try:
+        payload = workspace_service.materialize_code_checkout(session, numeric_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MaterializeCheckoutResponse(**payload)
+
+
+@router.websocket("/workspace/lsp")
+async def lsp_workspace_endpoint(
+    websocket: WebSocket,
+    project_id: str,
+    session: Session = Depends(get_session),
+) -> None:
+    numeric_id = parse_workspace_project_id(project_id)
+    if numeric_id is None:
+        await websocket.close(code=4404)
+        return
+
+    get_project_or_404(numeric_id, session)
+    try:
+        checkout = workspace_service.materialize_code_checkout(session, numeric_id)
+    except FileNotFoundError:
+        await websocket.close(code=4404)
+        return
+
+    await websocket.accept()
+    workspace_root = Path(checkout["path"])
+
+    async def receive_text() -> str | None:
+        try:
+            return await websocket.receive_text()
+        except WebSocketDisconnect:
+            return None
+
+    async def send_text(message: str) -> None:
+        await websocket.send_text(message)
+
+    await run_websocket_bridge(
+        project_id=numeric_id,
+        workspace_root=workspace_root,
+        receive_text=receive_text,
+        send_text=send_text,
+    )
 
 
 @router.get("/workspace/tensor-flow", response_model=WorkspaceTensorFlowRead)

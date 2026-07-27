@@ -130,6 +130,15 @@
             <el-icon :size="21"><Warning /></el-icon>
           </button>
         </el-tooltip>
+        <el-tooltip v-if="desktop.isDesktop.value" content="终端" placement="right">
+          <button
+            :class="['activity-button', { active: bottomPanelOpen && activeBottomPanel === 'terminal' }]"
+            aria-label="终端"
+            @click="openBottomPanel('terminal')"
+          >
+            <el-icon :size="21"><Monitor /></el-icon>
+          </button>
+        </el-tooltip>
         <div class="activity-spacer" />
 
         <el-tooltip content="论文与代码 Agent" placement="right">
@@ -326,11 +335,15 @@
               :active-target-ids="traceIndex.activeCodeTargetIds.value"
               :hover-target-ids="traceIndex.hoverCodeTargetIds.value"
               :reveal-active="false"
+              :lsp-enabled="desktop.isDesktop.value && lspReady"
+              :lsp-client="lspClient"
+              :lsp-checkout-root="lspCheckoutRoot"
               @change="code.handleEditorInput"
               @save="onSaveCode"
               @trace-hover="(id: string) => traceIndex.hoverTarget('code', id)"
               @trace-leave="traceIndex.clearHover"
               @trace-pin="(id: string) => traceIndex.selectTarget('code', id)"
+              @goto-definition="onGotoDefinition"
             />
           </article>
         </section>
@@ -491,6 +504,11 @@
             <ConflictPanel
               v-else-if="activeBottomPanel === 'conflict'"
               :items="insights.conflictItems.value"
+            />
+
+            <DesktopTerminal
+              v-else-if="activeBottomPanel === 'terminal' && desktop.isDesktop.value"
+              :project-id="workspace.projectId.value"
             />
           </div>
         </section>
@@ -677,11 +695,13 @@ import {
   Loading,
   UploadFilled,
   Warning,
+  Monitor,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { localCloudSyncAvailable, localHttp } from '@/api/http'
+import { resolveDefinition } from '@/api/repository-api'
 import { useAuthStore } from '@/stores/auth'
 import { useSyncStore } from '@/stores/sync'
 
@@ -702,10 +722,12 @@ import DebugPanel from '@/components/DebugPanel.vue'
 import PaperOutlineTree from '@/features/papers/PaperOutlineTree.vue'
 import PaperReader from '@/features/papers/PaperReader.vue'
 import CodeEditor from '@/features/repository/CodeEditor.vue'
+import { useDesktopPythonLsp } from '@/features/repository/useDesktopPythonLsp'
 import RepositoryTree from '@/features/repository/RepositoryTree.vue'
 import TensorFlowCanvas from '@/features/tensor-flow/TensorFlowCanvas.vue'
 import TensorFlowInspector from '@/features/tensor-flow/TensorFlowInspector.vue'
 import ConflictPanel from '@/features/tracing/ConflictPanel.vue'
+import DesktopTerminal from '@/features/terminal/DesktopTerminal.vue'
 import EvidenceDrawer from '@/features/tracing/EvidenceDrawer.vue'
 import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
 import type { TensorFlowNode } from '@/composables/useTensorFlow'
@@ -713,7 +735,7 @@ import type { TraceRowView } from '@/composables/useTrace'
 import type { AgentUiAction } from '@/types/agent'
 import 'katex/dist/katex.min.css'
 
-type BottomPanelKey = 'trace' | 'flow' | 'conflict'
+type BottomPanelKey = 'trace' | 'flow' | 'conflict' | 'terminal'
 type PaneKey = 'paper' | 'code'
 type ResizeMode = 'explorer' | 'editor' | 'bottom' | 'agent' | 'traceSummary'
 interface LocalArtifactVersionRow {
@@ -777,6 +799,16 @@ const selectedPaperUnresolved = computed(() => {
 })
 const insights = useInsights(() => workspace.projectId.value)
 const desktop = useDesktop()
+
+async function openCodeRelativePath(path: string): Promise<void> {
+  await code.openCodeFile(path)
+}
+
+const { lspClient, lspCheckoutRoot, lspReady } = useDesktopPythonLsp(
+  () => workspace.projectId.value,
+  openCodeRelativePath,
+)
+
 const debug = useDebug()
 const { importSteps } = useImport(
   () => paper.hasPaper.value,
@@ -831,11 +863,17 @@ const traceSummaryWidth = ref(
     : 220,
 )
 
-const bottomTabs: Array<{ key: BottomPanelKey; label: string }> = [
-  { key: 'trace', label: '追溯矩阵' },
-  { key: 'flow', label: '张量流图' },
-  { key: 'conflict', label: '冲突分析' },
-]
+const bottomTabs = computed<Array<{ key: BottomPanelKey; label: string }>>(() => {
+  const tabs: Array<{ key: BottomPanelKey; label: string }> = [
+    { key: 'trace', label: '追溯矩阵' },
+    { key: 'flow', label: '张量流图' },
+    { key: 'conflict', label: '冲突分析' },
+  ]
+  if (desktop.isDesktop.value) {
+    tabs.push({ key: 'terminal', label: '终端' })
+  }
+  return tabs
+})
 
 const evidenceDrawerVisible = ref(false)
 const selectedTraceRow = ref<TraceRowView | null>(null)
@@ -870,6 +908,14 @@ async function selectArtifactVersion(row: LocalArtifactVersionRow) {
 
 function onGlobalKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape' && traceIndex.pinned.value) traceIndex.unselect()
+  if (
+    desktop.isDesktop.value &&
+    event.key === '`' &&
+    (event.metaKey || event.ctrlKey)
+  ) {
+    event.preventDefault()
+    openBottomPanel('terminal')
+  }
 }
 
 function onWindowResize(): void {
@@ -1142,6 +1188,29 @@ async function jumpToCode(path: string, line: number, endLine?: number): Promise
   await code.openCodeFile(path)
   await nextTick()
   codeEditorRef.value?.goToLine(line, endLine)
+}
+
+async function onGotoDefinition(payload: {
+  path: string
+  line: number
+  column: number
+  identifier: string
+}): Promise<void> {
+  if (!workspace.projectId.value || Number.isNaN(workspace.projectId.value)) return
+  try {
+    const result = await resolveDefinition(workspace.projectId.value, payload)
+    if (result.status === 'resolved' && result.path && result.line_start) {
+      await jumpToCode(result.path, result.line_start, result.line_end ?? undefined)
+      return
+    }
+    if (result.status === 'ambiguous') {
+      ElMessage.warning(result.reason || '存在多个候选定义，无法自动跳转')
+      return
+    }
+    ElMessage.info(result.reason || '无法跳转到定义')
+  } catch {
+    ElMessage.error('跳转定义失败')
+  }
 }
 
 // Clicking a matrix row selects that relation (single source of truth = link id); the

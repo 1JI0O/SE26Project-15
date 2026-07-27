@@ -159,6 +159,52 @@
 
 编辑覆盖目录中的符号链接逃逸同样被拒绝。
 
+### 跳转到定义（非 LSP）
+
+`POST /workspace/resolve-definition`
+
+请求：
+
+```json
+{
+  "path": "models/net.py",
+  "line": 6,
+  "column": 20,
+  "identifier": "encode"
+}
+```
+
+`line` 为 1-based 行号，`column` 为 0-based 列偏移（与 CodeMirror 一致）。响应：
+
+```json
+{
+  "status": "resolved",
+  "symbol_id": "models/net.py::Model.encode",
+  "path": "models/net.py",
+  "line_start": 2,
+  "line_end": 3
+}
+```
+
+`status` 还可为 `ambiguous`（附 `candidates[]`）或 `unresolved`（附 `reason`）。解析基于已上传仓库的 Python AST 索引与启发式 import/调用图，**不是**语言服务器；行为与架构图跨文件解析一致（同文件优先 → import alias → 全局唯一短名）。
+
+### Desktop 终端检出目录
+
+`POST /workspace/materialize-checkout`
+
+将当前仓库 ZIP 解压到本机 `{upload_root}/project-{id}/code-checkout/{repository_id}/`，并叠加 `code-edits` 覆盖层；以 `code_revision` 缓存失效。响应 `{ path, revision, repository_id }`，其中 `path` 为绝对路径，供 Desktop 内嵌终端作为 `cwd`，以及 Desktop LSP 作为工作区根目录。Web 模式不提供终端 UI，但 materialize API 在本地 sidecar 上可用。
+
+### Desktop Python LSP（basedpyright）
+
+`WS /workspace/lsp`
+
+仅 Desktop 前端连接。建立 WebSocket 后，后端 materialize 检出目录并 spawn `basedpyright-langserver --stdio`，在 WebSocket 文本帧与 LSP stdio（Content-Length 帧）之间双向转发 JSON-RPC。客户端使用 `@codemirror/lsp-client` 的 `languageServerExtensions()`，提供跳转定义、hover、补全、签名帮助、诊断、引用与重命名等能力。
+
+- 工作区根：`materialize-checkout` 返回的绝对路径
+- 文件 URI：`file://{checkout}/{path}`（与检出镜像一致）
+- 保存代码时，若检出缓存 revision 匹配，后端同步写穿到检出目录，供跨文件分析读取最新内容
+- Web 模式不连接此 WebSocket；Web 仍使用 `POST /workspace/resolve-definition`（AST 启发式）
+
 ## 6. 已知限制
 
 - 静态分析不执行用户仓库代码，无法保证动态调用、反射和运行时 shape 的完整性。

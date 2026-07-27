@@ -46,6 +46,8 @@ const pyinstallerArgs = [
   'app',
   '--collect-all',
   'uvicorn',
+  '--collect-all',
+  'basedpyright',
   '--add-data',
   `${migrations}${addDataSeparator}app/db/migrations`,
   '--add-data',

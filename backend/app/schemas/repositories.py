@@ -155,3 +155,33 @@ class WorkspaceTensorFlowRead(BaseModel):
     stale: bool = False
     nodes: list[WorkspaceTensorFlowNode]
     edges: list[WorkspaceTensorFlowEdge]
+
+
+class ResolveDefinitionRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+    line: int = Field(ge=1, le=100_000)
+    column: int = Field(ge=0, le=100_000)
+    identifier: str | None = Field(default=None, max_length=200)
+
+
+class DefinitionCandidate(BaseModel):
+    symbol_id: str
+    path: str
+    line_start: int
+    line_end: int
+
+
+class ResolveDefinitionResponse(BaseModel):
+    status: str
+    symbol_id: str | None = None
+    path: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    reason: str | None = None
+    candidates: list[DefinitionCandidate] = Field(default_factory=list)
+
+
+class MaterializeCheckoutResponse(BaseModel):
+    path: str
+    revision: int
+    repository_id: int
