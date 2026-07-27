@@ -24,12 +24,12 @@ export async function updateIntegrationSettings(
 /** Never rejects on an unreachable endpoint — the failure is the answer, returned as ok=false. */
 export async function probeIntegration(
   payload: IntegrationProbeRequest,
+  timeoutMs = 35_000,
 ): Promise<IntegrationProbeResult> {
   const { data } = await http.post<IntegrationProbeResult>(
     '/settings/integrations/probe',
     payload,
-    // A cold model or a slow local MinerU can take a while; the server caps the real timeout.
-    { timeout: 180_000 },
+    { timeout: timeoutMs },
   )
   return data
 }

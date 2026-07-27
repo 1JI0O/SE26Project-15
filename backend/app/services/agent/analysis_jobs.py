@@ -1393,6 +1393,7 @@ def recover_analysis_jobs() -> None:
             ).all()
         )
         now = utc_now()
+        linked_run_ids = {job.agent_run_id for job in jobs if job.agent_run_id}
         for job in jobs:
             # Drop zombie runs left by a previous process so they cannot occupy
             # both ThreadPoolExecutor slots forever after restart.
@@ -1425,6 +1426,19 @@ def recover_analysis_jobs() -> None:
             job.progress_json = {"message": "排队等待 Agent 分析"}
             job.updated_at = now
             session.add(job)
+        orphan_runs = list(
+            session.exec(
+                select(AgentRun).where(AgentRun.status.in_(["queued", "running", "cancelling"]))
+            ).all()
+        )
+        for run in orphan_runs:
+            if run.run_id in linked_run_ids:
+                continue
+            run.status = "failed"
+            run.degraded_reason = "analysis_restarted"
+            run.updated_at = now
+            run.completed_at = now
+            session.add(run)
         session.commit()
         # Capture ids before the session closes; committed instances expire and would
         # raise DetachedInstanceError if their attributes were read outside the session.
