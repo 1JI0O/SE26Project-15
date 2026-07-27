@@ -53,8 +53,11 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirro
 import { syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching, foldGutter } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
+import type { LSPClient } from '@codemirror/lsp-client'
+import { jumpToDefinition } from '@codemirror/lsp-client'
 import type { CodeFile } from '@/composables/useCode'
 import type { CodeTargetView } from '@/composables/useTraceIndex'
+import { checkoutFileUri } from '@/features/repository/lspTransport'
 
 const props = defineProps<{
   file: CodeFile | undefined
@@ -65,6 +68,9 @@ const props = defineProps<{
   activeTargetIds?: Set<string>
   hoverTargetIds?: Set<string>
   revealActive?: boolean
+  lspEnabled?: boolean
+  lspClient?: LSPClient | null
+  lspCheckoutRoot?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -73,6 +79,7 @@ const emit = defineEmits<{
   traceHover: [targetId: string]
   traceLeave: []
   tracePin: [targetId: string]
+  gotoDefinition: [payload: { path: string; line: number; column: number; identifier: string }]
 }>()
 
 const editorContainer = ref<HTMLDivElement | null>(null)
@@ -118,6 +125,92 @@ const flashField = StateField.define<DecorationSet>({
   },
   provide: (field) => EditorView.decorations.from(field),
 })
+
+const gotoTargetDeco = Decoration.mark({ class: 'cm-goto-target' })
+const setGotoHover = StateEffect.define<{ from: number; to: number } | null>()
+const gotoHoverField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes)
+    for (const effect of tr.effects) {
+      if (effect.is(setGotoHover)) {
+        value =
+          effect.value === null
+            ? Decoration.none
+            : Decoration.set([gotoTargetDeco.range(effect.value.from, effect.value.to)])
+      }
+    }
+    return value
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
+
+const IDENTIFIER_RE = /[A-Za-z_][A-Za-z0-9_]*/g
+
+function extractIdentifier(lineText: string, column: number): string | null {
+  let hit: { start: number; end: number; text: string } | null = null
+  for (const match of lineText.matchAll(IDENTIFIER_RE)) {
+    const start = match.index ?? 0
+    const end = start + match[0].length
+    if (start <= column && column <= end) {
+      hit = { start, end, text: match[0] }
+      break
+    }
+  }
+  if (!hit) return null
+  let expandedStart = hit.start
+  let expandedEnd = hit.end
+  while (expandedStart > 0 && lineText[expandedStart - 1] === '.') {
+    const prefix = lineText.slice(0, expandedStart - 1)
+    const priorMatches = [...prefix.matchAll(IDENTIFIER_RE)]
+    const prior = priorMatches.length > 0 ? priorMatches[priorMatches.length - 1] : undefined
+    if (!prior || (prior.index ?? 0) + prior[0].length !== expandedStart - 1) break
+    expandedStart = prior.index ?? expandedStart
+  }
+  while (expandedEnd < lineText.length && lineText[expandedEnd] === '.') {
+    const suffix = lineText.slice(expandedEnd + 1)
+    const next = IDENTIFIER_RE.exec(suffix)
+    IDENTIFIER_RE.lastIndex = 0
+    if (!next || next.index !== 0) break
+    expandedEnd = expandedEnd + 1 + next[0].length
+  }
+  return lineText.slice(expandedStart, expandedEnd)
+}
+
+function modifierHeld(event: MouseEvent | KeyboardEvent): boolean {
+  return event.metaKey || event.ctrlKey
+}
+
+function updateGotoHover(view: EditorView, event: MouseEvent): void {
+  if (props.lspEnabled) {
+    view.dispatch({ effects: setGotoHover.of(null) })
+    return
+  }
+  if (!modifierHeld(event)) {
+    view.dispatch({ effects: setGotoHover.of(null) })
+    return
+  }
+  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+  if (pos == null) {
+    view.dispatch({ effects: setGotoHover.of(null) })
+    return
+  }
+  const line = view.state.doc.lineAt(pos)
+  const column = pos - line.from
+  const ident = extractIdentifier(line.text, column)
+  if (!ident) {
+    view.dispatch({ effects: setGotoHover.of(null) })
+    return
+  }
+  const start = line.text.indexOf(ident, Math.max(0, column - ident.length))
+  if (start < 0) {
+    view.dispatch({ effects: setGotoHover.of(null) })
+    return
+  }
+  view.dispatch({
+    effects: setGotoHover.of({ from: line.from + start, to: line.from + start + ident.length }),
+  })
+}
 
 function currentFileTargets(): CodeTargetView[] {
   const path = props.file?.path
@@ -202,6 +295,14 @@ function traceTargetFromEvent(event: Event): string | null {
 let lastHoveredTarget: string | null = null
 
 const traceDomHandlers = EditorView.domEventHandlers({
+  mousemove: (event, view) => {
+    updateGotoHover(view, event)
+    return false
+  },
+  mouseleave: (_event, view) => {
+    view.dispatch({ effects: setGotoHover.of(null) })
+    return false
+  },
   mouseover: (event) => {
     const id = traceTargetFromEvent(event)
     if (id === lastHoveredTarget) return
@@ -218,9 +319,37 @@ const traceDomHandlers = EditorView.domEventHandlers({
       emit('traceLeave')
     }
   },
-  mousedown: (event) => {
+  mousedown: (event, view) => {
+    if (props.lspEnabled && modifierHeld(event) && props.file?.path.endsWith('.py')) {
+      event.preventDefault()
+      jumpToDefinition(view)
+      return true
+    }
+    if (
+      !props.lspEnabled
+      && modifierHeld(event)
+      && props.file?.path.endsWith('.py')
+    ) {
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+      if (pos != null) {
+        const line = view.state.doc.lineAt(pos)
+        const column = pos - line.from
+        const identifier = extractIdentifier(line.text, column)
+        if (identifier) {
+          event.preventDefault()
+          emit('gotoDefinition', {
+            path: props.file.path,
+            line: line.number,
+            column,
+            identifier,
+          })
+          return true
+        }
+      }
+    }
     const id = traceTargetFromEvent(event)
     if (id) emit('tracePin', id)
+    return false
   },
 })
 
@@ -315,7 +444,7 @@ const workbenchHighlight = HighlightStyle.define([
 ])
 
 function createExtensions(langExt: Extension): Extension[] {
-  return [
+  const extensions: Extension[] = [
     lineNumbers(),
     highlightActiveLineGutter(),
     history(),
@@ -339,9 +468,24 @@ function createExtensions(langExt: Extension): Extension[] {
     }),
     traceField,
     flashField,
+    gotoHoverField,
     traceDomHandlers,
     langExt,
   ]
+  if (
+    props.lspEnabled
+    && props.lspClient
+    && props.lspCheckoutRoot
+    && props.file?.path.endsWith('.py')
+  ) {
+    extensions.push(
+      props.lspClient.plugin(
+        checkoutFileUri(props.lspCheckoutRoot, props.file.path),
+        'python',
+      ),
+    )
+  }
+  return extensions
 }
 
 async function mountEditor(token: number): Promise<void> {
@@ -387,6 +531,22 @@ watch(() => props.file, async (newFile) => {
     if (pendingReveal) applyPendingReveal()
   }
 }, { immediate: true, flush: 'post' })
+
+watch(
+  () => [props.lspEnabled, props.lspClient, props.lspCheckoutRoot] as const,
+  async () => {
+    if (!props.file) return
+    const token = ++mountToken
+    mounting = true
+    destroyEditor()
+    await nextTick()
+    await mountEditor(token)
+    if (token === mountToken) {
+      mounting = false
+      if (pendingReveal) applyPendingReveal()
+    }
+  },
+)
 
 // Watch for external content updates (e.g., after save)
 watch(() => props.content, (newContent) => {
@@ -638,6 +798,13 @@ defineExpose({ getEditorContent, goToLine })
 /* One-shot flash on the line a jump landed on. */
 .editor-body :deep(.cm-line-flash) {
   background: rgba(31, 143, 120, 0.18);
+}
+
+.editor-body :deep(.cm-goto-target) {
+  text-decoration: underline;
+  text-decoration-color: #2563eb;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }
 
 @media (max-width: 820px) {

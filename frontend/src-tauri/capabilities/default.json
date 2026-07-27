@@ -14,6 +14,7 @@
     "dialog:allow-ask",
     "dialog:allow-confirm",
     "fs:default",
-    "fs:allow-read-file"
+    "fs:allow-read-file",
+    "pty:default"
   ]
 }

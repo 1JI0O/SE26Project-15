@@ -104,3 +104,31 @@ export interface WorkspaceTensorFlow {
     points: number[][]
   }>
 }
+
+export interface ResolveDefinitionRequest {
+  path: string
+  line: number
+  column: number
+  identifier?: string | null
+}
+
+export interface ResolveDefinitionResponse {
+  status: 'resolved' | 'ambiguous' | 'unresolved' | string
+  symbol_id?: string | null
+  path?: string | null
+  line_start?: number | null
+  line_end?: number | null
+  reason?: string | null
+  candidates?: Array<{
+    symbol_id: string
+    path: string
+    line_start: number
+    line_end: number
+  }>
+}
+
+export interface MaterializeCheckoutResponse {
+  path: string
+  revision: number
+  repository_id: number
+}

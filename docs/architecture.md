@@ -70,6 +70,10 @@ flowchart LR
 
 `frontend/src-tauri/src/lib.rs` 创建应用数据目录，启动 `backend-runtime/tracelab-backend`，注入 `TRACELAB_APP_DATA_DIR`、`TRACELAB_BACKEND_PORT=8765` 和父进程 PID，等待 TCP ready 后显示窗口，退出时终止后端。`frontend/scripts/build-backend-sidecar.mjs` 使用 PyInstaller 打包 `backend/app`、迁移文件和内置 skills；`tauri.conf.json` 将 runtime 作为应用资源。
 
+Desktop 集成 `tauri-plugin-pty` 与 `@xterm/xterm`：工作台底部「终端」在本机 spawn 用户 shell，`cwd` 为 `POST /workspace/materialize-checkout` 返回的项目检出路径（ZIP + 编辑覆盖层）。Web 模式不显示终端面板。
+
+Desktop Python 编辑器接入 **basedpyright** LSP：经 `WS /workspace/lsp` 桥接到 sidecar 内语言服务，提供跳转、hover、补全、诊断等完整 IDE 能力（`@codemirror/lsp-client`）。Web 模式仍用 Cmd/Ctrl+点击 + `POST /workspace/resolve-definition`（AST 索引，非 LSP）。
+
 ## 3. 分层架构与源码关系
 
 ```mermaid
@@ -241,7 +245,8 @@ TraceLab/
 │   │   ├── features/
 │   │   │   ├── agent/AgentPanel.vue
 │   │   │   ├── papers/                  # 导入条、目录树、Markdown/PDF 阅读器、追溯高亮
-│   │   │   ├── repository/              # RepositoryTree、CodeEditor
+│   │   │   ├── repository/              # RepositoryTree、CodeEditor（Cmd/Ctrl+点击跳转定义）
+│   │   │   ├── terminal/                # DesktopTerminal（xterm + tauri-plugin-pty，仅 Desktop）
 │   │   │   ├── tensor-flow/             # Canvas、Inspector
 │   │   │   ├── tracing/                 # Matrix、Evidence、Conflict、Report 等
 │   │   │   └── settings/                # IntegrationSettingsDialog
@@ -349,6 +354,10 @@ flowchart TD
   Repo --> Workspace[workspace_service]
   Workspace --> UI[RepositoryTree / CodeEditor / TensorFlowCanvas]
   UI --> Edit[PUT code-files]
+  CodeEditor --> Resolve[POST resolve-definition Web]
+  Desktop --> LSP[WS workspace/lsp basedpyright]
+  Desktop --> Terminal[DesktopTerminal PTY]
+  Terminal --> Checkout[POST materialize-checkout]
   Edit --> Overlay[repository-specific edits/]
   Edit --> Revision[revision +1]
   Revision --> Stale[tracing.lifecycle\n旧追溯标记 stale]

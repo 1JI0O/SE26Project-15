@@ -1,4 +1,6 @@
 import hashlib
+import shutil
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,8 @@ from app.models.entities import (
     Project,
     TraceLink,
 )
+from app.services.code_analysis.archive import list_archive_entries, read_member_bytes
+from app.services.code_analysis.definition_resolve import DefinitionResolution, resolve_definition
 from app.services.code_analysis.editor import FileAccessError, RepositoryFileNotFoundError
 from app.services.code_analyzer import (
     build_hierarchical_tree,
@@ -350,6 +354,7 @@ def save_code_file(
         file_path,
         content,
     )
+    _sync_saved_file_to_checkout(code, file_path, content)
     from app.services.tracing.lifecycle import record_artifact_revision_change
 
     stale_count = record_artifact_revision_change(
@@ -561,3 +566,92 @@ def get_filtered_file_summary(session: Session, project_id: int) -> str:
 def fallback_code_file(project_id: str, file_path: str) -> dict[str, Any] | None:
     payload = code_file_payload(project_id, file_path)
     return payload
+
+
+def _sync_saved_file_to_checkout(
+    repository: CodeRepository,
+    file_path: str,
+    content: str,
+) -> None:
+    checkout_root = _repository_checkout_root(repository)
+    marker = checkout_root / ".revision"
+    if not marker.is_file():
+        return
+    if marker.read_text(encoding="utf-8").strip() != str(repository.revision):
+        return
+    destination = checkout_root / file_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(content, encoding="utf-8")
+
+
+def _repository_checkout_root(repository: CodeRepository) -> Path:
+    repository_key = repository.id or Path(repository.storage_path).stem
+    return (
+        Path(settings.upload_root)
+        / f"project-{repository.project_id}"
+        / "code-checkout"
+        / str(repository_key)
+    )
+
+
+def materialize_code_checkout(session: Session, project_id: int) -> dict[str, Any]:
+    code = _latest_code(session, project_id)
+    if code is None:
+        raise FileNotFoundError("Code archive has not been uploaded")
+
+    checkout_root = _repository_checkout_root(code)
+    marker = checkout_root / ".revision"
+    if marker.is_file() and marker.read_text(encoding="utf-8").strip() == str(code.revision):
+        return {
+            "path": str(checkout_root.resolve()),
+            "revision": code.revision,
+            "repository_id": code.id or 0,
+        }
+
+    shutil.rmtree(checkout_root, ignore_errors=True)
+    checkout_root.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(code.storage_path) as archive:
+        entries, _root, _ignored = list_archive_entries(archive)
+        for entry in entries:
+            destination = checkout_root / entry.display_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(read_member_bytes(archive, entry.member_name))
+
+    edits_root = _repository_edits_root(code)
+    if edits_root.is_dir():
+        for edited in edits_root.rglob("*"):
+            if not edited.is_file() or edited.is_symlink():
+                continue
+            relative = edited.relative_to(edits_root)
+            target = checkout_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(edited, target)
+
+    marker.write_text(str(code.revision), encoding="utf-8")
+    return {
+        "path": str(checkout_root.resolve()),
+        "revision": code.revision,
+        "repository_id": code.id or 0,
+    }
+
+
+def resolve_code_definition(
+    session: Session,
+    project_id: int,
+    *,
+    path: str,
+    line: int,
+    column: int,
+    identifier: str | None,
+) -> DefinitionResolution:
+    code = _latest_code(session, project_id)
+    if code is None:
+        raise FileNotFoundError("Code archive has not been uploaded")
+    return resolve_definition(
+        code,
+        path=path,
+        line=line,
+        column=column,
+        identifier=identifier,
+        edits_root=_repository_edits_root(code),
+    )

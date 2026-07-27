@@ -5,6 +5,9 @@ import type {
   WorkspaceCodeFile,
   WorkspaceCodeTreeNode,
   WorkspaceTensorFlow,
+  ResolveDefinitionRequest,
+  ResolveDefinitionResponse,
+  MaterializeCheckoutResponse,
 } from '@/types/repositories'
 
 export async function uploadCode(projectId: number, file: File): Promise<CodeRepository> {
@@ -88,6 +91,26 @@ export async function getWorkspaceTensorFlow(
         root_symbol: options.rootSymbol || undefined,
       },
     },
+  )
+  return data
+}
+
+export async function resolveDefinition(
+  projectId: number | string,
+  payload: ResolveDefinitionRequest,
+): Promise<ResolveDefinitionResponse> {
+  const { data } = await http.post<ResolveDefinitionResponse>(
+    `/projects/${projectId}/workspace/resolve-definition`,
+    payload,
+  )
+  return data
+}
+
+export async function materializeCheckout(
+  projectId: number | string,
+): Promise<MaterializeCheckoutResponse> {
+  const { data } = await http.post<MaterializeCheckoutResponse>(
+    `/projects/${projectId}/workspace/materialize-checkout`,
   )
   return data
 }
