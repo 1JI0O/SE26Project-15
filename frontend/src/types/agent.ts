@@ -165,6 +165,30 @@ export interface AgentRunEvent {
   created_at: string
 }
 
+export interface AgentQueueItem {
+  id: string
+  project_id: number
+  project_name: string
+  category: 'agent_analysis' | 'agent_run' | 'orphan_run' | 'repository_analysis'
+  kind: string
+  status: string
+  summary: string
+  model_name: string | null
+  run_id: string | null
+  job_id: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+  stale: boolean
+}
+
+export interface AgentQueue {
+  items: AgentQueueItem[]
+  active_count: number
+  stale_count: number
+  capacity: number
+}
+
 export interface AgentCapability {
   capability_id: string
   name: string

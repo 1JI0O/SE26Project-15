@@ -196,6 +196,30 @@ class AgentAnalysisDiagnosticsRead(BaseModel):
     completed_at: datetime | None
 
 
+class AgentQueueItemRead(BaseModel):
+    id: str
+    project_id: int
+    project_name: str
+    category: str
+    kind: str
+    status: str
+    summary: str = ""
+    model_name: str | None = None
+    run_id: str | None = None
+    job_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    stale: bool = False
+
+
+class AgentQueueRead(BaseModel):
+    items: list[AgentQueueItemRead] = Field(default_factory=list)
+    active_count: int = 0
+    stale_count: int = 0
+    capacity: int = 0
+
+
 class AgentAnalysisArtifactRead(BaseModel):
     artifact_id: str
     job_id: str

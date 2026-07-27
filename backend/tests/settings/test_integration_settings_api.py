@@ -8,6 +8,7 @@ from sqlmodel import Session, SQLModel
 
 from app.api.routes.integration_settings import router
 from app.db.session import get_session
+from app.services.tracing import coordinator
 
 
 def _client() -> TestClient:
@@ -94,3 +95,17 @@ def test_blank_secret_preserves_it_and_clear_flag_removes_it() -> None:
     assert preserved.json()["mineru"]["api_token_configured"] is True
     assert cleared.json()["agent"]["api_key_configured"] is False
     assert cleared.json()["mineru"]["api_token_configured"] is False
+
+
+def test_saving_agent_settings_does_not_start_trace_jobs(monkeypatch) -> None:
+    def fail_auto_trace(_project_id: int) -> list[str]:
+        raise AssertionError("settings save must not start trace analysis")
+
+    monkeypatch.setattr(coordinator, "maybe_start_trace", fail_auto_trace)
+    with _client() as client:
+        saved = client.put(
+            "/api/v1/settings/integrations",
+            json=_payload("agent-secret", "mineru-secret"),
+        )
+
+    assert saved.status_code == 200

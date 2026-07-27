@@ -7,12 +7,25 @@ from sqlmodel import Session, select
 
 from app.api.routes.projects import get_project_or_404
 from app.db.session import get_session
-from app.models.entities import AgentAnalysisArtifact, AgentAnalysisJob, AgentRun
+from app.models.entities import (
+    AgentAnalysisArtifact,
+    AgentAnalysisJob,
+    AgentConversation,
+    AgentRun,
+    AgentRunEvent,
+    CodeRepository,
+    Project,
+    RepositoryAnalysisJob,
+    as_utc,
+    utc_now,
+)
 from app.schemas.agent import (
     AgentAnalysisArtifactRead,
     AgentAnalysisDiagnosticsRead,
     AgentAnalysisJobCreate,
     AgentAnalysisJobRead,
+    AgentQueueItemRead,
+    AgentQueueRead,
     AgentCapabilityRead,
     AgentCapabilityUpdate,
     AgentConfirmationRead,
@@ -61,6 +74,341 @@ from app.services.agent.service import (
 )
 
 router = APIRouter(prefix="/projects/{project_id}/agent", tags=["agent"])
+queue_router = APIRouter(prefix="/agent", tags=["agent"])
+
+_ACTIVE_JOB_STATUSES = {"queued", "running", "validating", "cancelling"}
+_STALE_AFTER_SECONDS = 15 * 60
+
+
+def _is_stale(updated_at) -> bool:
+    return (utc_now() - as_utc(updated_at)).total_seconds() > _STALE_AFTER_SECONDS
+
+def _queue_time(value):
+    return as_utc(value) if value is not None else None
+
+
+def _project_names(session: Session) -> dict[int, str]:
+    return {
+        project.id or 0: project.name
+        for project in session.exec(select(Project).where(Project.deleted_at.is_(None))).all()
+    }
+
+
+def _latest_terminal_event(session: Session, run_id: str) -> str | None:
+    event = session.exec(
+        select(AgentRunEvent)
+        .where(
+            AgentRunEvent.run_id == run_id,
+            AgentRunEvent.event_type.in_(
+                ["analysis.completed", "analysis.failed", "run.completed", "run.failed"]
+            ),
+        )
+        .order_by(AgentRunEvent.sequence.desc())
+    ).first()
+    return event.event_type if event is not None else None
+
+
+def _latest_analysis_artifact(session: Session, job_id: str) -> AgentAnalysisArtifact | None:
+    return session.exec(
+        select(AgentAnalysisArtifact)
+        .where(AgentAnalysisArtifact.job_id == job_id)
+        .order_by(AgentAnalysisArtifact.created_at.desc())
+    ).first()
+
+
+def _complete_analysis_job(
+    session: Session,
+    job: AgentAnalysisJob,
+    run: AgentRun | None,
+    artifact: AgentAnalysisArtifact | None,
+    message: str = "Agent 分析完成",
+) -> None:
+    now = utc_now()
+    job.status = "succeeded"
+    job.error_code = None
+    job.progress_json = {"message": message}
+    if artifact is not None:
+        job.artifact_id = artifact.artifact_id
+    if run is not None:
+        run.status = "completed"
+        run.updated_at = now
+        run.completed_at = run.completed_at or now
+        session.add(run)
+    job.updated_at = now
+    job.completed_at = job.completed_at or now
+    session.add(job)
+
+
+def _fail_analysis_job(
+    session: Session,
+    job: AgentAnalysisJob,
+    run: AgentRun | None,
+    code: str,
+    message: str = "Agent 分析失败",
+) -> None:
+    now = utc_now()
+    job.status = "failed"
+    job.error_code = job.error_code or code[:128]
+    job.progress_json = {"message": message, "code": job.error_code}
+    if run is not None:
+        run.status = "failed"
+        run.degraded_reason = run.degraded_reason or job.error_code
+        run.updated_at = now
+        run.completed_at = run.completed_at or now
+        session.add(run)
+    job.updated_at = now
+    job.completed_at = job.completed_at or now
+    session.add(job)
+
+
+def _reconcile_analysis_job(session: Session, job: AgentAnalysisJob) -> None:
+    if job.status not in _ACTIVE_JOB_STATUSES:
+        return
+    run = session.get(AgentRun, job.agent_run_id) if job.agent_run_id else None
+    terminal_event = _latest_terminal_event(session, job.agent_run_id) if job.agent_run_id else None
+    artifact = _latest_analysis_artifact(session, job.job_id)
+    if run is not None and run.status in {"completed", "failed"}:
+        terminal_event = terminal_event or (
+            "run.completed" if run.status == "completed" else "run.failed"
+        )
+    if terminal_event in {"analysis.completed", "run.completed"}:
+        _complete_analysis_job(session, job, run, artifact)
+        return
+    if terminal_event in {"analysis.failed", "run.failed"}:
+        _fail_analysis_job(session, job, run, "run_finished_failed")
+        return
+    if not _is_stale(job.updated_at):
+        return
+    if artifact is not None:
+        _complete_analysis_job(
+            session,
+            job,
+            run,
+            artifact,
+            "Agent 分析超时未更新，已保留已发布结果",
+        )
+        return
+    _fail_analysis_job(
+        session,
+        job,
+        run,
+        "analysis_stale_timeout",
+        "Agent 分析超时未更新，已自动结束",
+    )
+
+
+@queue_router.get("/queue", response_model=AgentQueueRead)
+def list_agent_queue(session: Session = Depends(get_session)) -> AgentQueueRead:
+    projects = _project_names(session)
+    items: list[AgentQueueItemRead] = []
+
+    active_jobs = list(
+        session.exec(
+            select(AgentAnalysisJob)
+            .where(AgentAnalysisJob.status.in_(_ACTIVE_JOB_STATUSES))
+            .order_by(AgentAnalysisJob.updated_at.desc())
+        ).all()
+    )
+    for job in active_jobs:
+        _reconcile_analysis_job(session, job)
+    session.commit()
+    analysis_jobs = [job for job in active_jobs if job.status in _ACTIVE_JOB_STATUSES]
+    linked_run_ids = {job.agent_run_id for job in analysis_jobs if job.agent_run_id}
+    for job in analysis_jobs:
+        progress = dict(job.progress_json or {})
+        summary = str(progress.get("message") or job.error_code or "等待 Agent 分析")
+        items.append(
+            AgentQueueItemRead(
+                id=job.job_id,
+                project_id=job.project_id,
+                project_name=projects.get(job.project_id, f"项目 {job.project_id}"),
+                category="agent_analysis",
+                kind=job.kind,
+                status=job.status,
+                summary=summary,
+                run_id=job.agent_run_id,
+                job_id=job.job_id,
+                created_at=_queue_time(job.created_at),
+                updated_at=_queue_time(job.updated_at),
+                completed_at=_queue_time(job.completed_at),
+                stale=_is_stale(job.updated_at),
+            )
+        )
+
+    runs = list(
+        session.exec(
+            select(AgentRun)
+            .where(AgentRun.status.in_(["queued", "running", "cancelling"]))
+            .order_by(AgentRun.updated_at.desc())
+        ).all()
+    )
+    conversation_ids = {run.conversation_id for run in runs}
+    conversations = {
+        conv.conversation_id: conv
+        for conv in session.exec(
+            select(AgentConversation).where(AgentConversation.conversation_id.in_(conversation_ids))
+        ).all()
+    } if conversation_ids else {}
+    for run in runs:
+        if run.run_id in linked_run_ids:
+            continue
+        conv = conversations.get(run.conversation_id)
+        stale = _is_stale(run.updated_at)
+        items.append(
+            AgentQueueItemRead(
+                id=run.run_id,
+                project_id=run.project_id,
+                project_name=projects.get(run.project_id, f"项目 {run.project_id}"),
+                category="agent_run" if conv is not None else "orphan_run",
+                kind=conv.kind if conv is not None else "unknown",
+                status=run.status,
+                summary=conv.title if conv is not None else "孤立 Agent 运行记录",
+                model_name=run.model_name or None,
+                run_id=run.run_id,
+                created_at=_queue_time(run.created_at),
+                updated_at=_queue_time(run.updated_at),
+                completed_at=_queue_time(run.completed_at),
+                stale=stale,
+            )
+        )
+
+    repository_jobs = list(
+        session.exec(
+            select(RepositoryAnalysisJob)
+            .where(RepositoryAnalysisJob.status.in_(["queued", "running"]))
+            .order_by(RepositoryAnalysisJob.created_at.desc())
+        ).all()
+    )
+    repository_ids = {job.repository_id for job in repository_jobs}
+    repositories = {
+        repo.id or 0: repo
+        for repo in session.exec(
+            select(CodeRepository).where(CodeRepository.id.in_(repository_ids))
+        ).all()
+    } if repository_ids else {}
+    for job in repository_jobs:
+        repo = repositories.get(job.repository_id)
+        updated_at = job.started_at or job.created_at
+        items.append(
+            AgentQueueItemRead(
+                id=job.job_id,
+                project_id=job.project_id,
+                project_name=projects.get(job.project_id, f"项目 {job.project_id}"),
+                category="repository_analysis",
+                kind="code",
+                status=job.status,
+                summary=job.error_summary or (repo.filename if repo is not None else "代码仓库分析"),
+                job_id=job.job_id,
+                created_at=_queue_time(job.created_at),
+                updated_at=_queue_time(updated_at),
+                completed_at=_queue_time(job.completed_at),
+                stale=_is_stale(updated_at),
+            )
+        )
+
+    items.sort(key=lambda item: item.updated_at, reverse=True)
+    return AgentQueueRead(
+        items=items,
+        active_count=len(items),
+        stale_count=sum(1 for item in items if item.stale),
+        capacity=2,
+    )
+
+
+def _finish_run(session: Session, run: AgentRun, reason: str) -> None:
+    now = utc_now()
+    run.status = "failed"
+    run.degraded_reason = reason
+    run.updated_at = now
+    run.completed_at = now
+    session.add(run)
+
+
+def _finish_analysis_job(session: Session, job: AgentAnalysisJob, reason: str) -> None:
+    now = utc_now()
+    if job.agent_run_id:
+        run = session.get(AgentRun, job.agent_run_id)
+        if run is not None and run.status in {"queued", "running", "cancelling"}:
+            _finish_run(session, run, reason)
+    job.status = "failed"
+    job.error_code = reason
+    job.progress_json = {"message": "任务已从队列移除", "code": reason}
+    job.updated_at = now
+    job.completed_at = now
+    session.add(job)
+
+
+def _finish_repository_job(session: Session, job: RepositoryAnalysisJob, reason: str) -> None:
+    now = utc_now()
+    job.status = "failed"
+    job.error_summary = reason
+    job.completed_at = now
+    repository = session.get(CodeRepository, job.repository_id)
+    if repository is not None and repository.analysis_status in {"queued", "running"}:
+        repository.analysis_status = "failed"
+        repository.analysis_error = reason
+        repository.updated_at = now
+        session.add(repository)
+    session.add(job)
+
+
+@queue_router.post("/queue/{category}/{item_id}/stop", status_code=status.HTTP_204_NO_CONTENT)
+def stop_agent_queue_item(
+    category: str,
+    item_id: str,
+    session: Session = Depends(get_session),
+) -> Response:
+    if category == "agent_analysis":
+        job = session.get(AgentAnalysisJob, item_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Queue item not found")
+        cancel_analysis_job(session, job.project_id, job.job_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if category in {"agent_run", "orphan_run"}:
+        run = session.get(AgentRun, item_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Queue item not found")
+        _finish_run(session, run, "queue_stop_requested")
+        session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if category == "repository_analysis":
+        job = session.get(RepositoryAnalysisJob, item_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Queue item not found")
+        _finish_repository_job(session, job, "queue_stop_requested")
+        session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    raise HTTPException(status_code=404, detail="Queue item not found")
+
+
+@queue_router.delete("/queue/{category}/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_agent_queue_item(
+    category: str,
+    item_id: str,
+    session: Session = Depends(get_session),
+) -> Response:
+    if category == "agent_analysis":
+        job = session.get(AgentAnalysisJob, item_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Queue item not found")
+        _finish_analysis_job(session, job, "queue_delete_requested")
+        session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if category in {"agent_run", "orphan_run"}:
+        run = session.get(AgentRun, item_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Queue item not found")
+        _finish_run(session, run, "queue_delete_requested")
+        session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if category == "repository_analysis":
+        job = session.get(RepositoryAnalysisJob, item_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Queue item not found")
+        _finish_repository_job(session, job, "queue_delete_requested")
+        session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    raise HTTPException(status_code=404, detail="Queue item not found")
 
 
 @router.post(

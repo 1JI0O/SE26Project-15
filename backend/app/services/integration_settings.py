@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from sqlalchemy.exc import OperationalError
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.core.config import settings
 from app.models.entities import IntegrationConfig, utc_now
@@ -139,22 +139,4 @@ def save_integration_config(
     session.add(config)
     session.commit()
     session.refresh(config)
-    _kick_auto_trace_if_provider_ready(session, config)
     return config
-
-
-def _kick_auto_trace_if_provider_ready(session: Session, config: IntegrationConfig) -> None:
-    """When the Agent provider just became usable, resume auto trace for ready projects."""
-
-    if not (config.agent_enabled and config.agent_base_url and config.agent_model):
-        return
-    if not config.agent_api_key:
-        return
-    from app.models.entities import PaperDocument
-    from app.services.tracing.coordinator import maybe_start_trace
-
-    project_ids = {
-        row for row in session.exec(select(PaperDocument.project_id)).all() if row is not None
-    }
-    for project_id in project_ids:
-        maybe_start_trace(int(project_id))

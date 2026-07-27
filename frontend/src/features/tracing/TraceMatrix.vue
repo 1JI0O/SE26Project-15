@@ -23,9 +23,9 @@
 
     <el-alert
       v-if="mode"
-      :type="degraded ? 'warning' : 'success'"
+      :type="analysisAlertType"
       :closable="false"
-      :title="degraded ? `${mode} · Agent 分析失败，已保留现有结果` : `${mode} · 分析完成`"
+      :title="analysisAlertTitle"
     />
 
     <div v-if="rows.length" class="trace-legend" aria-label="高亮图例">
@@ -265,6 +265,18 @@ const allProposedSelected = computed(
 const someProposedSelected = computed(() =>
   allProposedIds.value.some((id) => selectedSet.value.has(id)),
 )
+
+const analysisAlertType = computed(() => {
+  if (props.degraded) return 'warning'
+  if (props.generating) return 'info'
+  return 'success'
+})
+
+const analysisAlertTitle = computed(() => {
+  if (props.degraded) return `${props.mode} · Agent 分析失败，已保留现有结果`
+  if (props.generating) return `${props.mode} · Agent 分析中，已发布 ${props.rows.length} 条关系`
+  return `${props.mode} · 分析完成`
+})
 
 watch(allProposedIds, (ids) => {
   const valid = new Set(ids)

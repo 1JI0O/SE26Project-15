@@ -260,6 +260,7 @@ const clearMineruToken = ref(false)
 const probing = ref<'agent' | 'mineru' | null>(null)
 const agentProbe = ref<IntegrationProbeResult | null>(null)
 const mineruProbe = ref<IntegrationProbeResult | null>(null)
+const PROBE_TIMEOUT_SECONDS = 30
 
 function probeTitle(result: IntegrationProbeResult): string {
   const latency = result.latency_ms == null ? '' : ` · ${result.latency_ms}ms`
@@ -277,8 +278,9 @@ async function testAgent(): Promise<void> {
       // Omitted key means "use the one already saved on this machine".
       ...(agentApiKey.value ? { api_key: agentApiKey.value } : {}),
       model: form.value.agent.analysis_model || form.value.agent.model,
-      timeout_seconds: form.value.agent.timeout_seconds,
-    })
+      timeout_seconds: Math.min(form.value.agent.timeout_seconds, PROBE_TIMEOUT_SECONDS),
+    },
+    (PROBE_TIMEOUT_SECONDS + 5) * 1000)
   } catch (cause) {
     ElMessage.error('无法发起测试，请确认本地后端已启动')
     console.error(cause)
@@ -298,8 +300,9 @@ async function testMinerU(): Promise<void> {
       mineru_provider: form.value.mineru.provider,
       base_url: isLocal ? form.value.mineru.local_url : form.value.mineru.official_api_url,
       ...(!isLocal && mineruApiToken.value ? { api_key: mineruApiToken.value } : {}),
-      timeout_seconds: form.value.mineru.request_timeout_seconds,
-    })
+      timeout_seconds: Math.min(form.value.mineru.request_timeout_seconds, PROBE_TIMEOUT_SECONDS),
+    },
+    (PROBE_TIMEOUT_SECONDS + 5) * 1000)
   } catch (cause) {
     ElMessage.error('无法发起测试，请确认本地后端已启动')
     console.error(cause)

@@ -11,10 +11,28 @@ import type {
   AgentConversationDetail,
   AgentMemory,
   AgentQueryResponse,
+  AgentQueue,
   AgentRunEvent,
   AgentRunSubmission,
   AgentTurnResponse,
 } from '@/types/agent'
+
+export async function getAgentQueue(): Promise<AgentQueue> {
+  const { data } = await http.get<AgentQueue>('/agent/queue')
+  return data
+}
+
+export async function stopAgentQueueItem(category: string, itemId: string): Promise<void> {
+  await http.post(
+    `/agent/queue/${encodeURIComponent(category)}/${encodeURIComponent(itemId)}/stop`,
+  )
+}
+
+export async function deleteAgentQueueItem(category: string, itemId: string): Promise<void> {
+  await http.delete(
+    `/agent/queue/${encodeURIComponent(category)}/${encodeURIComponent(itemId)}`,
+  )
+}
 
 export async function createAgentAnalysisJob(
   projectId: number,
