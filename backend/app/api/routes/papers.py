@@ -1,10 +1,13 @@
 import mimetypes
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 
 from app.api.routes.helpers import parse_workspace_project_id
 from app.api.routes.projects import get_project_or_404
+from app.core.config import settings
 from app.db.session import get_session
 from app.models.entities import PaperDocument
 from app.schemas.papers import (
@@ -56,6 +59,34 @@ def _paper_read(document: PaperDocument) -> PaperDocumentRead:
         content_hash=document.content_hash,
         created_at=document.created_at,
     )
+
+
+def _latest_paper(project_id: int, session: Session) -> PaperDocument | None:
+    return session.exec(
+        select(PaperDocument)
+        .where(PaperDocument.project_id == project_id)
+        .order_by(PaperDocument.created_at.desc(), PaperDocument.id.desc())
+    ).first()
+
+
+def _stored_pdf_path(document: PaperDocument) -> Path | None:
+    """Resolve a document's PDF on disk, refusing anything outside the upload root.
+
+    ``storage_path`` is recorded at upload time and could otherwise be an absolute path
+    left behind by a restored database or an earlier install, so it is re-checked
+    against the configured root before any bytes are served.
+    """
+
+    if not document.storage_path:
+        return None
+    root = Path(settings.upload_root).resolve()
+    try:
+        path = Path(document.storage_path).resolve()
+    except OSError:
+        return None
+    if not path.is_relative_to(root) or not path.is_file():
+        return None
+    return path
 
 
 def _document_for_job(
@@ -261,11 +292,7 @@ def read_workspace_paper_document(
     service: PaperParsingService = Depends(get_paper_parsing_service),
 ) -> WorkspacePaperDocument:
     get_project_or_404(project_id, session)
-    document = session.exec(
-        select(PaperDocument)
-        .where(PaperDocument.project_id == project_id)
-        .order_by(PaperDocument.created_at.desc(), PaperDocument.id.desc())
-    ).first()
+    document = _latest_paper(project_id, session)
     if document is None:
         raise HTTPException(status_code=404, detail="Paper has not been uploaded or parsed")
 
@@ -280,10 +307,45 @@ def read_workspace_paper_document(
         markdown=markdown,
         sections=extract_markdown_sections(markdown, document.sections_json),
         asset_base_url=f"/projects/{project_id}/paper/assets",
+        # Absent when the upload predates PDF retention or the file has since been
+        # removed; the reader then offers markdown only.
+        pdf_url=(
+            f"/projects/{project_id}/paper/file"
+            if _stored_pdf_path(document) is not None
+            else None
+        ),
         parser=document.parser,
         parser_version=document.parser_version,
         source="mineru-markdown" if mineru_markdown else "normalized-fallback",
         blocks=blocks,
+    )
+
+
+@router.get("/paper/file")
+def read_paper_file(
+    project_id: int,
+    session: Session = Depends(get_session),
+) -> FileResponse:
+    """Stream the original uploaded PDF.
+
+    The reader overlays trace highlights on the real page rather than on rendered
+    markdown, so it needs the source document itself — MinerU's markdown is a
+    reading-oriented approximation and its line breaks do not correspond to the PDF's.
+    """
+
+    get_project_or_404(project_id, session)
+    document = _latest_paper(project_id, session)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Paper has not been uploaded or parsed")
+    path = _stored_pdf_path(document)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Original PDF file is unavailable")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=document.filename or path.name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 
@@ -295,11 +357,7 @@ def read_paper_asset(
     service: PaperParsingService = Depends(get_paper_parsing_service),
 ) -> Response:
     get_project_or_404(project_id, session)
-    document = session.exec(
-        select(PaperDocument)
-        .where(PaperDocument.project_id == project_id)
-        .order_by(PaperDocument.created_at.desc(), PaperDocument.id.desc())
-    ).first()
+    document = _latest_paper(project_id, session)
     if document is None:
         raise HTTPException(status_code=404, detail="Paper has not been uploaded or parsed")
     try:

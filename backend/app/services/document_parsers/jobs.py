@@ -222,12 +222,26 @@ class PaperParsingService:
         normalized_path = self.cache_root / f"{cache_key}.normalized.json"
         raw_json_path = self.cache_root / f"{cache_key}.raw.json"
         self._atomic_json_write(normalized_path, outcome.document.to_dict())
-        self._atomic_json_write(raw_json_path, outcome.raw_payload)
+        self._atomic_json_write(raw_json_path, self._raw_for_disk(outcome.raw_payload))
         if outcome.raw_archive is not None:
             raw_archive_path = self.cache_root / f"{cache_key}.raw.zip"
             temporary = raw_archive_path.with_suffix(".zip.tmp")
             temporary.write_bytes(outcome.raw_archive)
             temporary.replace(raw_archive_path)
+
+    @staticmethod
+    def _raw_for_disk(payload: Any) -> Any:
+        """Drop ``middle.json`` from the debug copy of the raw payload.
+
+        Span-level geometry is tens of megabytes on a long paper, everything the parser
+        needed from it is already folded into the normalized document, and the original
+        file is still available inside the sibling ``.raw.zip``. Writing it again here —
+        pretty-printed — cost far more than it was worth.
+        """
+
+        if isinstance(payload, dict) and "middle_json" in payload:
+            return {key: value for key, value in payload.items() if key != "middle_json"}
+        return payload
 
     def _save_job(self, job: PaperParseJob) -> None:
         with self._lock:

@@ -56,10 +56,18 @@ export interface WorkspacePaperDocument {
   markdown: string
   sections: WorkspacePaperSection[]
   asset_base_url: string
+  /** Original PDF endpoint, or null when the stored file is gone (markdown view only). */
+  pdf_url: string | null
   parser: string
   parser_version: string
   source: 'mineru-markdown' | 'normalized-fallback'
   blocks: WorkspacePaperBlock[]
+}
+
+/** One text line of a block, with its box in the same normalized page space as `bbox`. */
+export interface PaperBlockLine {
+  text: string
+  bbox: number[]
 }
 
 export interface WorkspacePaperBlock {
@@ -68,7 +76,23 @@ export interface WorkspacePaperBlock {
   text: string
   page: number
   page_number?: number
+  /**
+   * Block box as `[x0, y0, x1, y1]`, each a 0-1 fraction of the page with a top-left
+   * origin — multiply by a rendered page's width/height to get pixels.
+   */
   bbox: number[] | null
+  /**
+   * Per-line boxes, present only for papers parsed with MinerU geometry capture.
+   * Empty for older documents, which fall back to whole-block highlighting.
+   */
+  lines?: PaperBlockLine[]
+  /**
+   * Page size in PDF points that the boxes above were measured against, as
+   * `[width, height]`. Lets the reader detect a page whose rendered shape disagrees
+   * (rotation, or a MinerU/renderer mismatch) and suppress highlights rather than
+   * draw them in the wrong place.
+   */
+  page_size?: number[] | null
   section_path: string[]
   render_anchor: string
   anchor_resolved: boolean

@@ -16,14 +16,45 @@
     <el-empty v-else-if="!hasPaper" description="请先上传论文 PDF" />
     <template v-else>
       <div class="markdown-toolbar">
-        <span>{{ source === 'mineru-markdown' ? 'MinerU 结构化 Markdown' : '结构化文本兼容模式' }}</span>
+        <div class="view-switch" role="group" aria-label="切换论文视图">
+          <button
+            type="button"
+            :class="{ active: viewMode === 'markdown' }"
+            @click="viewMode = 'markdown'"
+          >
+            Markdown
+          </button>
+          <button
+            type="button"
+            :class="{ active: viewMode === 'pdf' }"
+            :disabled="!pdfUrl"
+            :title="pdfUrl ? '在原始 PDF 上查看高亮' : '原始 PDF 不可用，请重新上传论文'"
+            @click="viewMode = 'pdf'"
+          >
+            PDF 原件
+          </button>
+        </div>
+        <span class="toolbar-hint">{{ toolbarHint }}</span>
         <div class="zoom-controls">
           <button aria-label="缩小论文" @click="zoom = Math.max(75, zoom - 10)">−</button>
           <button aria-label="重置论文缩放" @click="zoom = 100">{{ zoom }}%</button>
           <button aria-label="放大论文" @click="zoom = Math.min(150, zoom + 10)">＋</button>
         </div>
       </div>
-      <div ref="scrollRef" class="paper-scroll">
+      <PdfReader
+        v-if="viewMode === 'pdf' && pdfUrl"
+        ref="pdfReaderRef"
+        :pdf-url="pdfUrl"
+        :blocks="blocks"
+        :trace-targets="traceTargets"
+        :active-target-ids="activeTargetIds"
+        :hover-target-ids="hoverTargetIds"
+        :zoom="zoom"
+        @trace-hover="(id: string) => emit('traceHover', id)"
+        @trace-leave="emit('traceLeave')"
+        @trace-pin="(id: string) => emit('tracePin', id)"
+      />
+      <div v-show="viewMode === 'markdown'" ref="scrollRef" class="paper-scroll">
         <article
           ref="markdownRef"
           class="markdown-body"
@@ -45,6 +76,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
 import { getPaperAssetBlob, resolvePaperAssetUrl } from '@/api/paper-api'
 import { renderPaperMarkdown } from './markdown-renderer'
+import PdfReader from './PdfReader.vue'
 import {
   decoratePaperTargets,
   resolveEventTargetId,
@@ -57,6 +89,7 @@ import type { WorkspacePaperBlock } from '@/types/papers'
 const props = defineProps<{
   markdown: string
   assetBaseUrl: string
+  pdfUrl?: string | null
   activeSectionId: string
   hasPaper: boolean
   loading: boolean
@@ -80,7 +113,28 @@ const emit = defineEmits<{
 
 const scrollRef = ref<HTMLElement | null>(null)
 const markdownRef = ref<HTMLElement | null>(null)
+const pdfReaderRef = ref<InstanceType<typeof PdfReader> | null>(null)
 const zoom = ref(100)
+type ViewMode = 'markdown' | 'pdf'
+const viewMode = ref<ViewMode>('markdown')
+
+/**
+ * True once any block carries line boxes.
+ *
+ * Highlights land on the PDF either way — every block has a box — but papers parsed
+ * before geometry capture only reach block precision, which is worth saying rather than
+ * leaving the user to wonder why a whole paragraph lit up.
+ */
+const hasLineGeometry = computed(() =>
+  (props.blocks ?? []).some((block) => (block.lines?.length ?? 0) > 0),
+)
+
+const toolbarHint = computed(() => {
+  if (viewMode.value === 'pdf') {
+    return hasLineGeometry.value ? 'PDF 原件 · 行级高亮' : 'PDF 原件 · 块级高亮（重新解析可提升到行级）'
+  }
+  return props.source === 'mineru-markdown' ? 'MinerU 结构化 Markdown' : '结构化文本兼容模式'
+})
 const desktopRuntime = '__TAURI_INTERNALS__' in window
 const imageObjectUrls = new Set<string>()
 // While a programmatic block/target jump is animating we must fully own the scroll: the section
@@ -214,6 +268,17 @@ function centerInPane(el: HTMLElement): void {
 }
 
 function scrollToBlock(blockId: string, quote = '', paperTargetId: string | null = null): boolean {
+  // In PDF mode the markdown DOM is hidden, so anchor/quote lookups are meaningless —
+  // reveal the target by its recorded page geometry instead.
+  if (viewMode.value === 'pdf') {
+    const reader = pdfReaderRef.value
+    if (!reader) return false
+    if (paperTargetId && reader.scrollToTarget(paperTargetId)) return true
+    const block = props.blocks.find((item) => item.id === blockId)
+    const page = block?.page_number ?? block?.page
+    return page ? reader.scrollToPage(page) : false
+  }
+
   const root = scrollRef.value
   if (!root) return false
 
@@ -261,13 +326,22 @@ function scrollToBlock(blockId: string, quote = '', paperTargetId: string | null
 
 // Targets the backend never anchored and quote-search couldn't place either. Exposed so the fixed
 // box can show "论文锚点不可用" instead of a silent blank.
-const unresolvedTargetIds = ref<Set<string>>(new Set())
+const markdownUnresolvedTargetIds = ref<Set<string>>(new Set())
+
+// The two views fail independently: markdown resolution depends on DOM anchors, PDF
+// resolution on recorded geometry. Report whichever view the user is actually looking at,
+// so the message matches what they can see.
+const unresolvedTargetIds = computed<Set<string>>(() =>
+  viewMode.value === 'pdf'
+    ? (pdfReaderRef.value?.unresolvedTargetIds ?? new Set<string>())
+    : markdownUnresolvedTargetIds.value,
+)
 
 function applyTraceDecorations(): void {
   const root = markdownRef.value
   if (!root) return
   const { unresolved } = decoratePaperTargets(root, props.traceTargets ?? [])
-  unresolvedTargetIds.value = unresolved
+  markdownUnresolvedTargetIds.value = unresolved
   setActivePaperTargets(root, props.activeTargetIds ?? new Set(), props.hoverTargetIds ?? new Set())
 }
 
@@ -350,6 +424,15 @@ function teardownSectionObserver(): void {
   sectionObserver?.disconnect()
   sectionObserver = null
 }
+
+// A paper without a retained PDF (older upload, file removed) must not strand the user in
+// an empty PDF pane.
+watch(
+  () => props.pdfUrl,
+  (url) => {
+    if (!url && viewMode.value === 'pdf') viewMode.value = 'markdown'
+  },
+)
 
 watch(
   () => props.activeSectionId,
@@ -486,8 +569,44 @@ defineExpose({ scrollToSection, scrollToBlock, unresolvedTargetIds })
   font-size: 10px;
 }
 
+.view-switch {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.view-switch button {
+  height: 23px;
+  padding: 0 9px;
+  border: 1px solid #d8dee6;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #586675;
+  cursor: pointer;
+  font: inherit;
+}
+
+.view-switch button.active {
+  border-color: #5885ff;
+  background: #eef3ff;
+  color: #2a52c4;
+}
+
+.view-switch button:disabled {
+  color: #b3bcc6;
+  cursor: not-allowed;
+}
+
+.toolbar-hint {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .zoom-controls {
   display: flex;
+  flex: none;
   gap: 2px;
 }
 

@@ -40,6 +40,9 @@ class WorkspacePaperDocument(BaseModel):
     markdown: str
     sections: list[WorkspacePaperSection]
     asset_base_url: str
+    #: Path to the original PDF, or ``None`` when the stored file is missing. The reader
+    #: enables its PDF view only when this is present.
+    pdf_url: str | None = None
     parser: str
     parser_version: str
     source: str

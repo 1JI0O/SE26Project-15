@@ -66,9 +66,26 @@ export TRACELAB_MINERU_API_TOKEN='<从 MinerU 控制台获取>'
 `render_anchor`/`anchor_resolved` 的稳定 `blocks`。阅读器使用 `p{page}-b{order}` 精确
 滚动并高亮追溯证据；原始 Markdown 无法精确对齐时显式回退到 quote/section，不静默
 跳到错误位置。
+
+响应还包含 `pdf_url`：指向原始 PDF 的接口地址，仅在磁盘上仍存在原件时返回，否则为 `null`。阅读器据此启用/禁用 PDF 视图开关——原件缺失时保持沉默而非报错。
+
+`blocks` 中每个块除文本与 `render_anchor` 外，还携带用于在原始 PDF 上作画的几何信息：
+
+| 字段 | 说明 |
+|---|---|
+| `bbox` | 块级包围盒，`[x0, y0, x1, y1]`，归一化到页面 `0..1`，左上原点。来自 MinerU `content_list` 的 0-1000 空间重缩放。 |
+| `lines` | 行级盒子数组 `{text, bbox}`，同一 `0..1` 空间。来自 `middle.json`，用于句子级高亮；旧文档或无法与行对齐时为空，阅读器回退到整块 `bbox`。 |
+| `page_size` | 该块所在页的尺寸 `[width, height]`（PDF 点）。阅读器据此校验实际渲染页面的尺寸/朝向；不一致（旋转页、渲染器分歧）时抑制高亮而非画错位置。 |
+
 Markdown 中的图片通过 `GET /api/v1/projects/{project_id}/paper/assets/{asset_path}`
 按需读取；表格、行内/块级公式由前端 Markdown 阅读器渲染。旧的分页接口继续保留给
 追溯兼容逻辑，但不再作为论文阅读器的数据源。
+
+阅读器在原始 PDF 上叠加高亮而非在渲染后的 Markdown 上，因此需要原件字节：
+
+`GET /api/v1/projects/{project_id}/paper/file`
+
+以 `application/pdf` 内联返回最近一次上传的原始 PDF（`Content-Disposition: inline`，私有缓存 1 小时）。`storage_path` 在返回前会重新解析并限定在上传根目录内，拒绝数据库恢复或旧安装遗留的越界绝对路径。原件缺失时返回 `404`，与 `pdf_url` 为 `null` 一致。前端 PDF 视图用 pdf.js 渲染页面，其 cmaps/标准字体在构建期由 `frontend/scripts/copy-pdfjs-assets.mjs` 打包进 `public/pdfjs/`，以同源路径加载，桌面壳无需联网。
 
 ## 缓存与降级
 

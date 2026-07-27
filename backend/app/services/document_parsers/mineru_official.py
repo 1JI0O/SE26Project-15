@@ -140,6 +140,9 @@ class OfficialMinerUClient(MinerUClientProtocol):
                 str(self.settings.ocr).lower(),
                 str(self.settings.formula_enable).lower(),
                 str(self.settings.table_enable).lower(),
+                # See MinerUClient.cache_namespace: bumped when the normalized payload
+                # gains fields, so a re-upload re-parses instead of restoring stale cache.
+                "geometry-v1",
             )
         )
         self._result_urls: dict[str, str] = {}
