@@ -387,87 +387,122 @@
             </div>
           </header>
 
-          <div class="bottom-panel-content">
+          <div
+            :class="[
+              'bottom-panel-content',
+              { 'trace-panel-content': activeBottomPanel === 'trace' },
+            ]"
+          >
             <div
               v-if="activeBottomPanel === 'trace'"
+              ref="tracePanelRef"
               class="trace-panel-layout"
               :style="{ '--trace-summary-width': `${traceSummaryWidth}px` }"
             >
-              <TraceMatrix
-                :rows="trace.traceRows.value"
-                :loading="trace.loading.value"
-                :error="trace.error.value"
-                :mode="trace.mode.value"
-                :degraded="trace.degraded.value"
-                :analyzing="trace.generating.value"
-                :published-count="trace.publishedLinkCount.value"
-                :selected-id="traceIndex.selectedLinkId.value"
-                @review="trace.reviewTrace"
-                @review-batch="trace.reviewBatch"
-                @select-row="onTraceRowSelect"
-                @hover-row="hoverTraceRow"
-                @leave-row="traceIndex.clearHover"
-              />
+              <div class="trace-matrix-pane">
+                <TraceMatrix
+                  :rows="trace.traceRows.value"
+                  :loading="trace.loading.value"
+                  :error="trace.error.value"
+                  :mode="trace.mode.value"
+                  :degraded="trace.degraded.value"
+                  :analyzing="trace.generating.value"
+                  :published-count="trace.publishedLinkCount.value"
+                  :selected-id="traceIndex.selectedLinkId.value"
+                  @review="trace.reviewTrace"
+                  @review-batch="trace.reviewBatch"
+                  @select-row="onTraceRowSelect"
+                  @hover-row="hoverTraceRow"
+                  @leave-row="traceIndex.clearHover"
+                />
+              </div>
               <div
                 class="trace-summary-resize-handle"
                 role="separator"
-                aria-label="调整 Agent 摘要列宽度"
+                aria-label="调整追溯矩阵与分析栏宽度"
                 aria-orientation="vertical"
                 @pointerdown="startResize('traceSummary', $event)"
               />
-              <aside class="trace-summary">
-                <strong>Agent 分析</strong>
-                <span v-if="trace.mode.value">{{ trace.mode.value }}</span>
-                <span v-else>Agent 自主读取论文与代码证据</span>
+              <div
+                ref="traceDetailRef"
+                class="trace-detail-column"
+                :style="{
+                  '--trace-agent-share': `${traceAgentRatio}fr`,
+                  '--trace-preview-share': `${100 - traceAgentRatio}fr`,
+                }"
+              >
+                <aside class="trace-summary">
+                  <strong>Agent 分析</strong>
+                  <span v-if="trace.mode.value">{{ trace.mode.value }}</span>
+                  <span v-else>Agent 自主读取论文与代码证据</span>
 
-                <template v-if="trace.generating.value">
-                  <div class="agent-activity">
-                    <el-icon class="spin"><Loading /></el-icon>
-                    <span class="agent-activity-text">{{ trace.analysisActivity.value || '启动中…' }}</span>
+                  <template v-if="trace.generating.value">
+                    <div class="agent-activity">
+                      <el-icon class="spin"><Loading /></el-icon>
+                      <span class="agent-activity-text">{{ trace.analysisActivity.value || '启动中…' }}</span>
+                    </div>
+                    <!-- Steps are discrete with no reliable denominator (soft target + hard cap),
+                         so show the current step only and an indeterminate running bar, not N/100. -->
+                    <div v-if="trace.analysisStep.value" class="agent-step">
+                      <span>第 {{ trace.analysisStep.value }} 步</span>
+                      <span class="agent-step-bar"><i /></span>
+                    </div>
+                    <ul v-if="trace.analysisLog.value.length" class="agent-log">
+                      <li v-for="(entry, i) in trace.analysisLog.value.slice().reverse()" :key="i">
+                        {{ entry }}
+                      </li>
+                    </ul>
+                  </template>
+                  <p v-else-if="trace.analysisProgress.value">{{ trace.analysisProgress.value }}</p>
+                  <p v-if="trace.degradedReason.value" class="agent-degraded">
+                    {{ trace.degradedReason.value }}
+                  </p>
+                  <div class="trace-summary-actions">
+                    <el-button
+                      size="small"
+                      type="primary"
+                      :loading="trace.generating.value"
+                      @click="generateAgentAnalysis(hasGeneratedTrace)"
+                    >
+                      {{
+                        trace.generating.value
+                          ? 'Agent 追溯中…'
+                          : hasGeneratedTrace
+                            ? '重新生成'
+                            : '生成追溯'
+                      }}
+                    </el-button>
+                    <el-button
+                      v-if="trace.generating.value"
+                      size="small"
+                      type="warning"
+                      plain
+                      :loading="trace.cancelling.value"
+                      @click="trace.cancelAnalysis"
+                    >
+                      {{ trace.cancelling.value ? '正在中止…' : '中止' }}
+                    </el-button>
                   </div>
-                  <!-- Steps are discrete with no reliable denominator (soft target + hard cap),
-                       so show the current step only and an indeterminate running bar, not N/100. -->
-                  <div v-if="trace.analysisStep.value" class="agent-step">
-                    <span>第 {{ trace.analysisStep.value }} 步</span>
-                    <span class="agent-step-bar"><i /></span>
-                  </div>
-                  <ul v-if="trace.analysisLog.value.length" class="agent-log">
-                    <li v-for="(entry, i) in trace.analysisLog.value.slice().reverse()" :key="i">
-                      {{ entry }}
-                    </li>
-                  </ul>
-                </template>
-                <p v-else-if="trace.analysisProgress.value">{{ trace.analysisProgress.value }}</p>
-                <p v-if="trace.degradedReason.value" class="agent-degraded">
-                  {{ trace.degradedReason.value }}
-                </p>
-                <div class="trace-summary-actions">
-                  <el-button
-                    size="small"
-                    type="primary"
-                    :loading="trace.generating.value"
-                    @click="generateAgentAnalysis(hasGeneratedTrace)"
-                  >
-                    {{
-                      trace.generating.value
-                        ? 'Agent 追溯中…'
-                        : hasGeneratedTrace
-                          ? '重新生成'
-                          : '生成追溯'
-                    }}
-                  </el-button>
-                  <el-button
-                    v-if="trace.generating.value"
-                    size="small"
-                    type="warning"
-                    plain
-                    :loading="trace.cancelling.value"
-                    @click="trace.cancelAnalysis"
-                  >
-                    {{ trace.cancelling.value ? '正在中止…' : '中止' }}
-                  </el-button>
+                </aside>
+
+                <div
+                  class="trace-preview-resize-handle"
+                  role="separator"
+                  aria-label="调整 Agent 分析与关系预览高度"
+                  aria-orientation="horizontal"
+                  @pointerdown="startResize('tracePreview', $event)"
+                />
+
+                <div class="trace-preview-pane">
+                  <TraceRelationPreview
+                    :hovered-summary="traceIndex.hoveredSummary.value"
+                    :selected-summary="traceIndex.selectedSummary.value"
+                    :paper-markdown="paper.paperDocument.value?.markdown || ''"
+                    :selected-paper-unresolved="selectedPaperUnresolved"
+                    @unselect="traceIndex.unselect"
+                  />
                 </div>
-              </aside>
+              </div>
             </div>
 
             <div v-else-if="activeBottomPanel === 'flow'" class="tensor-flow-layout">
@@ -573,96 +608,6 @@
       @open-code="jumpToTraceCode"
     />
 
-    <!-- Fixed box (selected relation, both sides) + optional hover preview stacked above it. -->
-    <div
-      v-if="traceIndex.selectedSummary.value || traceIndex.hoveredSummary.value"
-      class="trace-box-stack"
-      :style="{ bottom: `${traceBoxBottom}px` }"
-    >
-      <div v-if="traceIndex.hoveredSummary.value" class="trace-box trace-box-hover">
-        <header class="trace-box-head">
-          <span>悬浮预览</span>
-          <span class="trace-box-badge">{{ traceIndex.hoveredSummary.value.relationType }}</span>
-        </header>
-        <div class="trace-box-body">
-          <section class="trace-box-side">
-            <span class="trace-box-side-label">论文</span>
-            <div
-              class="trace-box-quote"
-              v-html="
-                renderPaperEvidenceHtml(
-                  paper.paperDocument.value?.markdown || '',
-                  traceIndex.hoveredSummary.value.paper.blockId,
-                  traceIndex.hoveredSummary.value.paper.quote,
-                  traceIndex.hoveredSummary.value.paper.occurrence,
-                )
-              "
-            />
-            <div class="trace-box-meta">{{ traceIndex.hoveredSummary.value.paper.blockId }}<template v-if="traceIndex.hoveredSummary.value.paper.targetType"> · {{ traceIndex.hoveredSummary.value.paper.targetType }}</template></div>
-          </section>
-          <section class="trace-box-side">
-            <span class="trace-box-side-label">代码</span>
-            <div class="trace-box-quote">{{ traceIndex.hoveredSummary.value.code.symbol }}</div>
-            <div class="trace-box-meta">{{ traceIndex.hoveredSummary.value.code.path }}<template v-if="traceIndex.hoveredSummary.value.code.line"> :{{ traceIndex.hoveredSummary.value.code.line }}</template></div>
-          </section>
-          <div class="trace-box-scores">
-            <span>相关度 {{ traceIndex.hoveredSummary.value.relevance }}%</span>
-            <span>置信 {{ traceIndex.hoveredSummary.value.confidence }}%</span>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="traceIndex.selectedSummary.value" class="trace-box trace-box-fixed">
-        <header class="trace-box-head">
-          <span>已选中关系</span>
-          <span class="trace-box-actions">
-            <span class="trace-box-badge">{{ traceIndex.selectedSummary.value.relationType }}</span>
-            <button class="trace-box-unpin" title="取消固定 (Esc)" @click="traceIndex.unselect()">
-              取消固定
-            </button>
-          </span>
-        </header>
-        <div class="trace-box-body">
-          <section class="trace-box-side">
-            <span class="trace-box-side-label">论文</span>
-            <div v-if="selectedPaperUnresolved" class="trace-box-unresolved">
-              论文锚点不可用（后端未解析该块）
-            </div>
-            <template v-else>
-              <div
-                class="trace-box-quote"
-                v-html="
-                  renderPaperEvidenceHtml(
-                    paper.paperDocument.value?.markdown || '',
-                    traceIndex.selectedSummary.value.paper.blockId,
-                    traceIndex.selectedSummary.value.paper.quote,
-                    traceIndex.selectedSummary.value.paper.occurrence,
-                  )
-                "
-              />
-              <div class="trace-box-meta">{{ traceIndex.selectedSummary.value.paper.blockId }}<template v-if="traceIndex.selectedSummary.value.paper.targetType"> · {{ traceIndex.selectedSummary.value.paper.targetType }}</template></div>
-            </template>
-          </section>
-          <section class="trace-box-side">
-            <span class="trace-box-side-label">代码</span>
-            <div class="trace-box-quote">{{ traceIndex.selectedSummary.value.code.symbol }}</div>
-            <div class="trace-box-meta">{{ traceIndex.selectedSummary.value.code.path }}<template v-if="traceIndex.selectedSummary.value.code.line"> :{{ traceIndex.selectedSummary.value.code.line }}</template></div>
-          </section>
-          <div class="trace-box-scores">
-            <span>相关度 {{ traceIndex.selectedSummary.value.relevance }}%</span>
-            <span>置信 {{ traceIndex.selectedSummary.value.confidence }}%</span>
-          </div>
-          <p v-if="traceIndex.selectedSummary.value.otherLinkCount" class="trace-box-more">
-            另有 {{ traceIndex.selectedSummary.value.otherLinkCount }} 条更低相关度关系
-          </p>
-          <p
-            v-if="traceIndex.selectedSummary.value.rationale"
-            class="trace-box-rationale"
-            v-html="renderTraceRichText(traceIndex.selectedSummary.value.rationale)"
-          />
-        </div>
-      </div>
-    </div>
     <DebugPanel />
     <el-dialog v-model="artifactVersionsVisible" title="本机保留的云端文件版本" width="760px">
       <el-table :data="artifactVersions">
@@ -716,7 +661,6 @@ import { useTrace } from '@/composables/useTrace'
 import { useTraceIndex } from '@/composables/useTraceIndex'
 import { useWorkspace } from '@/composables/useWorkspace'
 import type { PaperMark } from '@/features/papers/trace-decorations'
-import { renderPaperEvidenceHtml, renderTraceRichText } from '@/features/papers/markdown-renderer'
 import AgentPanel from '@/features/agent/AgentPanel.vue'
 import DebugPanel from '@/components/DebugPanel.vue'
 import PaperOutlineTree from '@/features/papers/PaperOutlineTree.vue'
@@ -730,6 +674,7 @@ import ConflictPanel from '@/features/tracing/ConflictPanel.vue'
 import DesktopTerminal from '@/features/terminal/DesktopTerminal.vue'
 import EvidenceDrawer from '@/features/tracing/EvidenceDrawer.vue'
 import TraceMatrix from '@/features/tracing/TraceMatrix.vue'
+import TraceRelationPreview from '@/features/tracing/TraceRelationPreview.vue'
 import type { TensorFlowNode } from '@/composables/useTensorFlow'
 import type { TraceRowView } from '@/composables/useTrace'
 import type { AgentUiAction } from '@/types/agent'
@@ -737,7 +682,13 @@ import 'katex/dist/katex.min.css'
 
 type BottomPanelKey = 'trace' | 'flow' | 'conflict' | 'terminal'
 type PaneKey = 'paper' | 'code'
-type ResizeMode = 'explorer' | 'editor' | 'bottom' | 'agent' | 'traceSummary'
+type ResizeMode =
+  | 'explorer'
+  | 'editor'
+  | 'bottom'
+  | 'agent'
+  | 'traceSummary'
+  | 'tracePreview'
 interface LocalArtifactVersionRow {
   local_version_id: number
   entity_type: 'paper_document' | 'code_repository'
@@ -790,7 +741,7 @@ const paperMarks = computed<PaperMark[]>(() =>
 )
 const codeTargetList = computed(() => [...traceIndex.codeTargets.value.values()])
 // True when the selected relation's paper side could not be anchored in the DOM (backend never
-// resolved the block anchor and quote fallback missed too) — the fixed box says so explicitly
+// resolved the block anchor and quote fallback missed too) — the preview pane says so explicitly
 // instead of showing a paper quote that has no visible highlight.
 const selectedPaperUnresolved = computed(() => {
   const paperTargetId = traceIndex.selectedSummary.value?.paper.targetId
@@ -835,15 +786,6 @@ const draggedPane = ref<PaneKey | null>(null)
 const explorerWidth = ref(260)
 const editorLeftPercent = ref(50)
 const bottomPanelHeight = ref(290)
-// The floating trace boxes dock right above the bottom panel so they never cover the matrix
-// review actions; when the panel is closed or maximized there is no "above" to dock to and
-// they fall back to sitting on the status bar.
-const viewportHeight = ref(window.innerHeight)
-const traceBoxBottom = computed(() => {
-  const base = 46 // status bar (23px) + margin
-  if (!bottomPanelOpen.value || bottomPanelMaximized.value) return base
-  return Math.min(23 + 12 + bottomPanelHeight.value, Math.round(viewportHeight.value * 0.55))
-})
 const storedAgentWidth = Number(window.localStorage.getItem('tracelab.agent.width'))
 const agentWidth = ref(
   Number.isFinite(storedAgentWidth) && storedAgentWidth >= 260
@@ -853,14 +795,29 @@ const agentWidth = ref(
 const resizeMode = ref<ResizeMode | null>(null)
 // Layout box captured at trace-summary drag start (measures from a stable right edge).
 let traceLayoutRect: DOMRect | null = null
+// Right-column box captured at the vertical drag start so ratio math stays stable.
+let traceDetailRect: DOMRect | null = null
 
-const TRACE_SUMMARY_MIN = 180
-const TRACE_SUMMARY_MAX = 480
+const TRACE_SUMMARY_MIN = 300
+const TRACE_SUMMARY_MAX = 520
+const TRACE_SUMMARY_DEFAULT = 360
+const TRACE_MATRIX_MIN = 280
+const TRACE_SUMMARY_NARROW_MIN = 220
+const TRACE_SECTION_MIN_HEIGHT = 72
+const TRACE_SPLITTER_SIZE = 5
 const storedTraceSummaryWidth = Number(window.localStorage.getItem('tracelab.traceSummary.width'))
 const traceSummaryWidth = ref(
-  Number.isFinite(storedTraceSummaryWidth) && storedTraceSummaryWidth >= TRACE_SUMMARY_MIN
-    ? Math.min(storedTraceSummaryWidth, TRACE_SUMMARY_MAX)
-    : 220,
+  Number.isFinite(storedTraceSummaryWidth) && storedTraceSummaryWidth >= 180
+    ? Math.min(Math.max(storedTraceSummaryWidth, TRACE_SUMMARY_MIN), TRACE_SUMMARY_MAX)
+    : TRACE_SUMMARY_DEFAULT,
+)
+const storedTraceAgentRatio = Number(
+  window.localStorage.getItem('tracelab.tracePreview.agentRatio'),
+)
+const traceAgentRatio = ref(
+  Number.isFinite(storedTraceAgentRatio) && storedTraceAgentRatio >= 20
+    ? Math.min(Math.max(storedTraceAgentRatio, 20), 80)
+    : 50,
 )
 
 const bottomTabs = computed<Array<{ key: BottomPanelKey; label: string }>>(() => {
@@ -884,6 +841,8 @@ const codeInputRef = ref<HTMLInputElement | null>(null)
 const ideBodyRef = ref<HTMLElement | null>(null)
 const editorGridRef = ref<HTMLElement | null>(null)
 const workAreaRef = ref<HTMLElement | null>(null)
+const tracePanelRef = ref<HTMLElement | null>(null)
+const traceDetailRef = ref<HTMLElement | null>(null)
 const artifactVersionsVisible = ref(false)
 const artifactVersions = ref<LocalArtifactVersionRow[]>([])
 
@@ -919,8 +878,10 @@ function onGlobalKeydown(event: KeyboardEvent): void {
 }
 
 function onWindowResize(): void {
-  viewportHeight.value = window.innerHeight
-  clampAgentWidth()
+  void nextTick(() => {
+    clampAgentWidth()
+    clampTraceSummaryWidth()
+  })
 }
 
 onMounted(async () => {
@@ -928,6 +889,7 @@ onMounted(async () => {
   window.addEventListener('keydown', onGlobalKeydown)
   await nextTick()
   clampAgentWidth()
+  clampTraceSummaryWidth()
   if (!workspace.projectId.value || Number.isNaN(workspace.projectId.value)) return
   workspace.loadingWorkspace.value = true
   try {
@@ -954,9 +916,15 @@ onUnmounted(() => {
   paper.cancelPolling() // stop any in-flight parse poll so it can't hit /projects/NaN/... (422)
 })
 
-watch([explorerOpen, explorerWidth], async () => {
+watch([explorerOpen, explorerWidth, agentOpen, agentWidth], async () => {
   await nextTick()
   clampAgentWidth()
+  clampTraceSummaryWidth()
+})
+
+watch([bottomPanelOpen, activeBottomPanel], async () => {
+  await nextTick()
+  clampTraceSummaryWidth()
 })
 
 function startPaneDrag(pane: PaneKey, event: DragEvent): void {
@@ -980,10 +948,13 @@ function startResize(mode: ResizeMode, event: PointerEvent): void {
   if (mode === 'bottom') bottomPanelMaximized.value = false
   if (mode === 'traceSummary') {
     // Capture the layout box once so per-move math measures from a stable right edge.
-    const handle = event.currentTarget as HTMLElement | null
-    traceLayoutRect = handle?.parentElement?.getBoundingClientRect() ?? null
+    traceLayoutRect = tracePanelRef.value?.getBoundingClientRect() ?? null
   }
-  document.body.style.cursor = mode === 'bottom' ? 'row-resize' : 'col-resize'
+  if (mode === 'tracePreview') {
+    traceDetailRect = traceDetailRef.value?.getBoundingClientRect() ?? null
+  }
+  document.body.style.cursor =
+    mode === 'bottom' || mode === 'tracePreview' ? 'row-resize' : 'col-resize'
   document.body.style.userSelect = 'none'
   window.addEventListener('pointermove', handleResize)
   window.addEventListener('pointerup', stopResize, { once: true })
@@ -1015,9 +986,21 @@ function handleResize(event: PointerEvent): void {
   if (resizeMode.value === 'traceSummary') {
     const layout = traceLayoutRect
     if (!layout) return
+    const { min, max } = traceSummaryWidthBounds(layout.width)
     traceSummaryWidth.value = Math.round(
-      Math.min(Math.max(layout.right - event.clientX, TRACE_SUMMARY_MIN), TRACE_SUMMARY_MAX),
+      Math.min(Math.max(layout.right - event.clientX, min), max),
     )
+    return
+  }
+  if (resizeMode.value === 'tracePreview') {
+    const detail = traceDetailRect
+    if (!detail) return
+    const usableHeight = Math.max(detail.height - TRACE_SPLITTER_SIZE, 1)
+    const minimumRatio = Math.min(50, (TRACE_SECTION_MIN_HEIGHT / usableHeight) * 100)
+    const nextRatio = ((event.clientY - detail.top) / usableHeight) * 100
+    traceAgentRatio.value = Math.round(
+      Math.min(Math.max(nextRatio, minimumRatio), 100 - minimumRatio) * 10,
+    ) / 10
     return
   }
   if (resizeMode.value === 'bottom') {
@@ -1046,14 +1029,39 @@ function clampAgentWidth(): void {
   agentWidth.value = Math.round(Math.min(Math.max(agentWidth.value, min), max))
 }
 
+function traceSummaryWidthBounds(layoutWidth: number): { min: number; max: number } {
+  const available = Math.max(
+    TRACE_SUMMARY_NARROW_MIN,
+    layoutWidth - TRACE_MATRIX_MIN - TRACE_SPLITTER_SIZE,
+  )
+  const max = Math.min(TRACE_SUMMARY_MAX, available)
+  return { min: Math.min(TRACE_SUMMARY_MIN, max), max }
+}
+
+function clampTraceSummaryWidth(): void {
+  const layout = tracePanelRef.value?.getBoundingClientRect()
+  if (!layout) return
+  const { min, max } = traceSummaryWidthBounds(layout.width)
+  traceSummaryWidth.value = Math.round(
+    Math.min(Math.max(traceSummaryWidth.value, min), max),
+  )
+}
+
 function stopResize(): void {
   if (resizeMode.value === 'agent') {
     window.localStorage.setItem('tracelab.agent.width', String(agentWidth.value))
   }
   if (resizeMode.value === 'traceSummary') {
     window.localStorage.setItem('tracelab.traceSummary.width', String(traceSummaryWidth.value))
-    traceLayoutRect = null
   }
+  if (resizeMode.value === 'tracePreview') {
+    window.localStorage.setItem(
+      'tracelab.tracePreview.agentRatio',
+      String(traceAgentRatio.value),
+    )
+  }
+  traceLayoutRect = null
+  traceDetailRect = null
   resizeMode.value = null
   window.removeEventListener('pointermove', handleResize)
   window.removeEventListener('pointerup', stopResize)
@@ -1961,10 +1969,25 @@ watch(activeBottomPanel, (tab) => {
   overflow: auto;
 }
 
+.bottom-panel-content.trace-panel-content {
+  overflow: hidden;
+}
+
 .trace-panel-layout {
   display: grid;
-  min-height: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   grid-template-columns: minmax(0, 1fr) 5px var(--trace-summary-width, 220px);
+  overflow: hidden;
+}
+
+.trace-matrix-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .trace-summary-resize-handle {
@@ -1977,7 +2000,39 @@ watch(activeBottomPanel, (tab) => {
   background: #b7c2ce;
 }
 
+.trace-detail-column {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows:
+    minmax(72px, var(--trace-agent-share, 1fr))
+    5px
+    minmax(72px, var(--trace-preview-share, 1fr));
+  overflow: hidden;
+  border-left: 1px solid var(--ide-border);
+  background: #ffffff;
+}
+
+.trace-preview-resize-handle {
+  z-index: 2;
+  cursor: row-resize;
+  background: #e3e8ee;
+  transition: background 120ms ease;
+}
+
+.trace-preview-resize-handle:hover {
+  background: #b7c2ce;
+}
+
+.trace-preview-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .trace-panel-layout :deep(.trace-matrix) {
+  min-width: 760px;
+  min-height: 100%;
   padding: 9px 12px;
   border: 0;
   border-radius: 0;
@@ -2004,10 +2059,14 @@ watch(activeBottomPanel, (tab) => {
 
 .trace-summary {
   display: grid;
+  min-width: 0;
+  min-height: 0;
   align-content: start;
   gap: 8px;
   padding: 12px;
-  border-left: 1px solid var(--ide-border);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   background: #f8fafb;
   color: #667382;
   font-size: 11px;
@@ -2053,8 +2112,6 @@ watch(activeBottomPanel, (tab) => {
 .agent-log {
   margin: 0;
   padding: 6px 8px;
-  max-height: 148px;
-  overflow-y: auto;
   list-style: none;
   border: 1px solid #e6ebf0;
   border-radius: 6px;
@@ -2262,174 +2319,6 @@ watch(activeBottomPanel, (tab) => {
   .status-bar span:nth-of-type(3) {
     display: none;
   }
-}
-
-.trace-box-stack {
-  position: fixed;
-  right: 18px;
-  /* bottom is bound inline (traceBoxBottom): docked above the bottom panel when it is open. */
-  z-index: 2200;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 340px;
-  max-width: calc(100vw - 36px);
-  pointer-events: none;
-}
-
-.trace-box {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid #cdd6df;
-  border-radius: 10px;
-  background: #ffffff;
-  box-shadow: 0 12px 34px rgba(19, 35, 47, 0.18);
-  pointer-events: none;
-}
-
-/* The transient preview sits above the fixed box and reads lighter. */
-.trace-box-hover {
-  border-color: #e0d0a6;
-  box-shadow: 0 8px 22px rgba(19, 35, 47, 0.14);
-  opacity: 0.97;
-}
-
-.trace-box-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 9px 12px;
-  border-bottom: 1px solid #e6ebf0;
-  background: #f7f9fb;
-  font-size: 12px;
-  font-weight: 600;
-  color: #26323d;
-}
-
-.trace-box-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.trace-box-badge {
-  padding: 0 7px;
-  border-radius: 999px;
-  background: #e6efff;
-  color: #3061c2;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.trace-box-unpin {
-  border: 1px solid #d8dee6;
-  border-radius: 4px;
-  background: #fff;
-  padding: 1px 7px;
-  cursor: pointer;
-  color: #586675;
-  font: inherit;
-  font-size: 11px;
-  pointer-events: auto;
-}
-
-.trace-box-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  max-height: 30vh;
-  overflow-y: auto;
-  pointer-events: auto;
-}
-
-.trace-box-side {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.trace-box-side-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: #8a97a4;
-  text-transform: uppercase;
-}
-
-.trace-box-quote {
-  font-size: 12px;
-  font-weight: 600;
-  color: #1c2b38;
-  word-break: break-word;
-  max-height: 4.8em;
-  overflow: auto;
-  line-height: 1.45;
-}
-
-.trace-box-quote :deep(p),
-.trace-box-quote :deep(.math-display),
-.trace-box-rationale :deep(p),
-.trace-box-rationale :deep(.math-display) {
-  margin: 0;
-}
-
-.trace-box-quote :deep(p + p),
-.trace-box-rationale :deep(p + p) {
-  margin-top: 0.35em;
-}
-
-.trace-box-quote :deep(.math-display),
-.trace-box-rationale :deep(.math-display) {
-  margin: 0.25em 0;
-  overflow-x: auto;
-}
-
-.trace-box-quote :deep(.katex),
-.trace-box-rationale :deep(.katex) {
-  font-size: 1.05em;
-  font-weight: 400;
-}
-
-.trace-box-meta {
-  font-size: 11px;
-  color: #7a8794;
-  word-break: break-all;
-}
-
-.trace-box-scores {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 11px;
-  color: #55636f;
-}
-
-.trace-box-rationale {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #6b7785;
-  max-height: 4.8em;
-  overflow: auto;
-  font-weight: 400;
-}
-
-.trace-box-unresolved {
-  padding: 4px 6px;
-  border-radius: 3px;
-  background: rgba(182, 74, 60, 0.1);
-  color: #b64a3c;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.trace-box-more {
-  margin: 0;
-  font-size: 10px;
-  color: #8a95a1;
 }
 
 /* Discrete agent step + indeterminate running bar (no misleading N/100 denominator). */
