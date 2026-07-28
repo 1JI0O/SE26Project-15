@@ -46,7 +46,6 @@
           type="primary"
           native-type="submit"
           :loading="store.creating"
-          :disabled="!form.name.trim()"
         >
           创建
         </el-button>
