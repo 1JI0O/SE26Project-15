@@ -25,12 +25,29 @@ class WorkspaceFlowNode(BaseModel):
 
 
 class WorkspaceConflictItem(BaseModel):
+    id: str = ""
+    category: str = "behavior_regression"
+    severity: str = "low"
+    confidence: float = 0
     level: str
     type: str
     title: str
     description: str
     affected_files: list[str]
     status: str
+
+
+class WorkspaceChangeSummary(BaseModel):
+    repository_revision: int
+    analysis_status: str
+    analysis_current: bool
+    has_changes: bool
+    changed_file_count: int
+    changed_line_count: int
+    latest_conflict_job_id: str | None = None
+    latest_conflict_artifact_id: str | None = None
+    analyzed_revision: int | None = None
+    report_stale: bool = False
 
 
 class WorkspaceReportCard(BaseModel):

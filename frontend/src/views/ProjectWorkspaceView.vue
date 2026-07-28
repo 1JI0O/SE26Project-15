@@ -539,6 +539,21 @@
             <ConflictPanel
               v-else-if="activeBottomPanel === 'conflict'"
               :items="insights.conflictItems.value"
+              :summary="insights.changeSummary.value"
+              :report="insights.report.value"
+              :loading="insights.loading.value"
+              :generating="insights.generating.value"
+              :cancelling="insights.cancelling.value"
+              :progress="insights.progress.value"
+              :activity="insights.analysisActivity.value"
+              :analysis-step="insights.analysisStep.value"
+              :analysis-steps="insights.analysisSteps.value"
+              :error="insights.error.value"
+              @analyze="onStartConflictAnalysis"
+              @cancel="onCancelConflictAnalysis"
+              @open-code="jumpToCode"
+              @open-paper="onConflictOpenPaper"
+              @open-trace="onConflictOpenTrace"
             />
 
             <DesktopTerminal
@@ -1342,6 +1357,35 @@ async function onGitHubImport(): Promise<void> {
 async function onSaveCode(): Promise<void> {
   await code.saveEditorBuffer()
   await reloadDerivedViews()
+}
+
+async function onStartConflictAnalysis(): Promise<void> {
+  if (code.isEditorDirty.value) {
+    const saved = await code.saveEditorBuffer()
+    if (!saved) return
+  }
+  const succeeded = await insights.runAnalysis()
+  if (succeeded) ElMessage.success('修改冲突分析完成')
+  else if (insights.error.value) ElMessage.error(insights.error.value)
+}
+
+async function onCancelConflictAnalysis(): Promise<void> {
+  const requested = await insights.cancelAnalysis()
+  if (requested) ElMessage.info('正在中止修改冲突分析')
+  else if (insights.error.value) ElMessage.error(insights.error.value)
+}
+
+async function onConflictOpenPaper(blockId: string, quote: string): Promise<void> {
+  await nextTick()
+  const found = paperReaderRef.value?.scrollToBlock(blockId, quote, null)
+  if (!found) ElMessage.warning('论文证据位置不可用')
+}
+
+function onConflictOpenTrace(traceId: string): void {
+  openBottomPanel('trace')
+  const exists = trace.traceLinks.value.some((item) => item.id === traceId)
+  if (exists) traceIndex.select(traceId, 'paper')
+  else ElMessage.warning('该追溯关系当前不可用')
 }
 
 async function reloadDerivedViews(): Promise<void> {

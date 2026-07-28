@@ -89,6 +89,18 @@ def test_workspace_minimal_closed_loop() -> None:
         assert saved_file.status_code == 200
         assert "pass" in saved_file.json()["content"]
 
+        change_summary = client.get(
+            f"/api/v1/projects/{project_id}/workspace/change-summary",
+        )
+        assert change_summary.status_code == 200
+        assert change_summary.json()["repository_revision"] == 2
+        assert change_summary.json()["has_changes"] is True
+        assert change_summary.json()["changed_file_count"] == 1
+
+        conflicts = client.get(f"/api/v1/projects/{project_id}/workspace/conflicts")
+        assert conflicts.status_code == 200
+        assert conflicts.json() == []
+
         trace_matrix = client.get(f"/api/v1/projects/{project_id}/workspace/trace-matrix")
         assert trace_matrix.status_code == 200
 

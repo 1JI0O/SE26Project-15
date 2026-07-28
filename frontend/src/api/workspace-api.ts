@@ -1,5 +1,9 @@
 import { http } from '@/api/http'
-import type { WorkspaceConflictItem, WorkspaceReportCard } from '@/types/workspace'
+import type {
+  WorkspaceChangeSummary,
+  WorkspaceConflictItem,
+  WorkspaceReportCard,
+} from '@/types/workspace'
 
 export interface AnalysisRequest {
   mode: string
@@ -29,6 +33,15 @@ export async function getWorkspaceConflicts(
 ): Promise<WorkspaceConflictItem[]> {
   const { data } = await http.get<WorkspaceConflictItem[]>(
     `/projects/${projectId}/workspace/conflicts`,
+  )
+  return data
+}
+
+export async function getWorkspaceChangeSummary(
+  projectId: number | string,
+): Promise<WorkspaceChangeSummary> {
+  const { data } = await http.get<WorkspaceChangeSummary>(
+    `/projects/${projectId}/workspace/change-summary`,
   )
   return data
 }
