@@ -1,0 +1,12 @@
+.vscode/**
+.vscode-test/**
+src/**
+tsconfig.json
+**/*.map
+node_modules/**
+.gitignore
+*.vsix
+bundled/.venv/**
+bundled/**/__pycache__/**
+bundled/**/*.pyc
+bundled/**/*.egg-info/**

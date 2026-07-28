@@ -25,6 +25,11 @@ frontend/src-tauri/resources/backend-runtime/
 frontend/public/pdfjs/
 dist/
 node_modules/
+vscode-extension/out/
+vscode-extension/*.vsix
+vscode-extension/bundled/.venv/
+.tracelab/
+examples/tracelab-demo/.tracelab/
 coverage/
 .idea/
 .vscode/
