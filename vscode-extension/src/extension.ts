@@ -1,10 +1,11 @@
 import * as vscode from 'vscode'
-import { CliResult, CoreRunner } from './coreRunner'
+import { CliResult, CoreRunner, ProgressEvent } from './coreRunner'
 import { SecretStore } from './secrets'
 import { SidebarWebviewProvider } from './sidebarWebview'
 import { MatrixPanelProvider } from './webviews/matrixPanel'
 import { PdfPanelProvider } from './webviews/pdfPanel'
 import { TensorPanelProvider } from './webviews/tensorPanel'
+import { readWorkspaceStatus } from './workspaceStatus'
 import { zh } from './zh'
 
 let sidebar: SidebarWebviewProvider
@@ -12,6 +13,7 @@ let matrix: MatrixPanelProvider
 let tensor: TensorPanelProvider
 let pdf: PdfPanelProvider
 let runner: CoreRunner
+let refreshTimer: NodeJS.Timeout | undefined
 
 const TASK_LABELS: Record<string, string> = {
   init: zh.init,
@@ -33,16 +35,7 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.commands.executeCommand(command)
   })
 
-  runner.onProgress = (event) => {
-    const suffix =
-      event.total != null && event.current != null
-        ? ` (${event.current}/${event.total})`
-        : ''
-    sidebar.setTaskMessage(`${event.message}${suffix}`)
-    if (event.event_kind === 'analysis.published' || event.phase === 'publish') {
-      matrix?.refresh()
-    }
-  }
+  runner.onProgress = reportProgress
 
   context.subscriptions.push(
     output,
@@ -65,10 +58,24 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand('workbench.view.extension.tracelab'),
     ),
     vscode.commands.registerCommand('tracelab.showOutput', () => output.show(true)),
+    vscode.commands.registerCommand('tracelab.openPanel', () =>
+      vscode.commands.executeCommand('workbench.view.extension.tracelab-panel'),
+    ),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       void loadWorkspaceArtifacts(context)
     }),
   )
+
+  // Artifacts can also change outside the extension (CLI run, git checkout).
+  const watcher = vscode.workspace.createFileSystemWatcher('**/.tracelab/**')
+  const onArtifactChange = () => {
+    sidebar?.refresh()
+    scheduleRefresh()
+  }
+  watcher.onDidChange(onArtifactChange)
+  watcher.onDidCreate(onArtifactChange)
+  watcher.onDidDelete(onArtifactChange)
+  context.subscriptions.push(watcher)
 
   void loadWorkspaceArtifacts(context)
 }
@@ -81,11 +88,7 @@ async function loadWorkspaceArtifacts(_context: vscode.ExtensionContext): Promis
     sidebar?.setTaskMessage(zh.openFolderFirst)
     return
   }
-  const status = await runner.status(folder)
-  if (!status.ok) {
-    sidebar?.setTaskMessage(`工作区状态：${String(status.error ?? '不可用')}`)
-    return
-  }
+  const status = readWorkspaceStatus(folder)
   const parts: string[] = []
   if (status.has_pdf) {
     parts.push('PDF')
@@ -106,10 +109,44 @@ async function loadWorkspaceArtifacts(_context: vscode.ExtensionContext): Promis
   sidebar?.setTaskMessage(`已从 .tracelab 加载：${parts.join(' · ')}`)
 }
 
+/**
+ * Progress → sidebar task line + matrix Agent log (desktop-aligned copy).
+ *
+ * Only `analysis.published` batches refresh the matrix, and the refresh is
+ * coalesced: a long Agent run emits progress continuously, and refreshing every
+ * view on each event used to keep the extension host busy — which also delays the
+ * webview resource requests that load the PDF.
+ */
+function reportProgress(event: ProgressEvent, progress?: vscode.Progress<{ message?: string }>): void {
+  const suffix =
+    event.total != null && event.current != null ? ` (${event.current}/${event.total})` : ''
+  const message = `${event.message}${suffix}`
+  const step = typeof event.step === 'number' ? event.step : undefined
+  progress?.report({ message })
+  sidebar?.setTaskMessage(message, { step })
+  matrix?.setAgentState({ running: true, activity: message })
+  if (event.event_kind === 'analysis.tool.started' || event.event_kind === 'analysis.published') {
+    matrix?.appendAgentLog(message, step)
+  }
+  if (event.event_kind === 'analysis.published' || event.phase === 'publish') {
+    scheduleRefresh()
+  }
+}
+
+/** Coalesce bursty refreshes (progressive publish) into one pass. */
+function scheduleRefresh(): void {
+  if (refreshTimer) return
+  refreshTimer = setTimeout(() => {
+    refreshTimer = undefined
+    matrix?.refresh()
+    pdf?.refresh()
+  }, 400)
+}
+
 function refreshAll(): void {
   sidebar?.refresh()
   matrix?.refresh()
-  tensor?.refresh()
+  tensor?.invalidate()
   pdf?.refresh()
 }
 
@@ -132,8 +169,13 @@ async function runTask(command: 'init' | 'parse' | 'analyze' | 'trace'): Promise
   const label = TASK_LABELS[command] ?? command
   if (command === 'trace') {
     sidebar.clearAnalysisLog()
+    matrix.clearAgentLog()
   }
+  sidebar.setBusy(true)
   sidebar.setTaskMessage(`正在${label}…`)
+  if (command === 'trace') {
+    matrix.setAgentState({ running: true, activity: '启动中…' })
+  }
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
@@ -141,18 +183,7 @@ async function runTask(command: 'init' | 'parse' | 'analyze' | 'trace'): Promise
       cancellable: false,
     },
     async (progress) => {
-      runner.onProgress = (event) => {
-        const suffix =
-          event.total != null && event.current != null
-            ? ` (${event.current}/${event.total})`
-            : ''
-        const message = `${event.message}${suffix}`
-        progress.report({ message })
-        sidebar.setTaskMessage(message)
-        if (event.event_kind === 'analysis.published' || event.phase === 'publish') {
-          matrix?.refresh()
-        }
-      }
+      runner.onProgress = (event) => reportProgress(event, progress)
       if (command === 'init') {
         result = await runner.init(folder)
       } else if (command === 'parse') {
@@ -165,6 +196,9 @@ async function runTask(command: 'init' | 'parse' | 'analyze' | 'trace'): Promise
     },
   )
 
+  runner.onProgress = reportProgress
+  sidebar.setBusy(false)
+  matrix.setAgentState({ running: false, activity: '' })
   refreshAll()
 
   if (!result.ok) {

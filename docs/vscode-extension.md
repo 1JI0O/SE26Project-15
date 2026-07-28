@@ -35,7 +35,7 @@ Self-contained paper–code workbench. The VSIX bundles a Python runtime under
 ```bash
 make extension-build
 cd vscode-extension && npx @vscode/vsce package --allow-missing-repository
-code --install-extension tracelab-vscode-0.4.2.vsix --force
+code --install-extension tracelab-vscode-0.5.0.vsix --force
 ```
 
 Reload Window.

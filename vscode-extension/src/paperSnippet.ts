@@ -36,29 +36,83 @@ function buildMatchIndex(source: string): { key: string; offsets: number[] } {
   return { key: chars.join(''), offsets }
 }
 
+/** Offsets of unescaped single `$` (positions inside `$$` are reported once, as pairs). */
+interface MathSpan {
+  open: number
+  close: number
+  display: boolean
+}
+
+function mathSpans(source: string): MathSpan[] {
+  const spans: MathSpan[] = []
+  let index = 0
+  while (index < source.length) {
+    if (source[index] !== '$' || (index > 0 && source[index - 1] === '\\')) {
+      index += 1
+      continue
+    }
+    const display = source[index + 1] === '$'
+    const delimiter = display ? '$$' : '$'
+    let search = index + delimiter.length
+    let close = -1
+    while (search < source.length) {
+      const at = source.indexOf(delimiter, search)
+      if (at < 0) break
+      if (source[at - 1] === '\\') {
+        search = at + 1
+        continue
+      }
+      // A bare `$` never spans a blank line — that is prose, not math.
+      if (!display && /\n\s*\n/.test(source.slice(index, at))) break
+      close = at
+      break
+    }
+    if (close < 0) {
+      index += delimiter.length
+      continue
+    }
+    spans.push({ open: index, close: close + delimiter.length, display })
+    index = close + delimiter.length
+  }
+  return spans
+}
+
+/**
+ * Grow `[start, end)` to whole math delimiters.
+ *
+ * Block quotes usually drop the `$` markers, so a match can start *inside* an
+ * inline or display formula. Snapping to the enclosing span keeps the snippet
+ * renderable — an unbalanced `$` used to leak raw TeX into the matrix preview.
+ */
 function expandToMathDelimiters(source: string, start: number, end: number): [number, number] {
   let from = start
   let to = end
-  const before = source.slice(0, start)
-  const displayOpen = before.lastIndexOf('$$')
-  if (displayOpen >= 0) {
-    const displayClose = source.indexOf('$$', end)
-    const between = source.slice(displayOpen + 2, start)
-    if (displayClose >= end && !between.includes('$$')) {
-      return [displayOpen, displayClose + 2]
+  for (const span of mathSpans(source)) {
+    if (span.open < to && span.close > from) {
+      from = Math.min(from, span.open)
+      to = Math.max(to, span.close)
     }
   }
-  let left = from - 1
-  while (left >= 0 && /\s/.test(source[left]!)) left -= 1
-  if (left >= 0 && source[left] === '$') {
-    from = left >= 1 && source[left - 1] === '$' ? left - 1 : left
-  }
-  let right = to
-  while (right < source.length && /\s/.test(source[right]!)) right += 1
-  if (right < source.length && source[right] === '$') {
-    to = right + 1 < source.length && source[right + 1] === '$' ? right + 2 : right + 1
-  }
   return [from, to]
+}
+
+/** Last resort: drop a stray `$` the slice could not pair up. */
+function balanceMathDelimiters(snippet: string): string {
+  let out = snippet
+  for (let guard = 0; guard < 4; guard += 1) {
+    const markers = out.match(/(?<!\\)\$\$?/g) ?? []
+    if (markers.length % 2 === 0) return out
+    if (/(?<!\\)\$\$?\s*$/.test(out)) {
+      out = out.replace(/(?<!\\)\$\$?\s*$/, '').trimEnd()
+      continue
+    }
+    if (/^\s*\$\$?/.test(out)) {
+      out = out.replace(/^\s*\$\$?/, '').trimStart()
+      continue
+    }
+    return out
+  }
+  return out
 }
 
 function findQuoteSpan(
@@ -109,17 +163,17 @@ export function extractPaperMarkdownSnippet(
       const span = findQuoteSpan(region, quote, occurrence)
       if (span) {
         const [from, to] = span
-        return region.slice(from, to).trim()
+        return balanceMathDelimiters(region.slice(from, to).trim())
       }
     }
     if (region.length <= MAX_SNIPPET_CHARS) return region
-    return `${region.slice(0, MAX_SNIPPET_CHARS).trimEnd()}…`
+    return balanceMathDelimiters(`${region.slice(0, MAX_SNIPPET_CHARS).trimEnd()}`) + '…'
   }
   if (quote.trim() && markdown) {
     const span = findQuoteSpan(markdown, quote, occurrence)
     if (span) {
       const [from, to] = span
-      return markdown.slice(from, to).trim()
+      return balanceMathDelimiters(markdown.slice(from, to).trim())
     }
   }
   return quote.trim()
