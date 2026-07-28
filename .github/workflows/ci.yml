@@ -16,8 +16,28 @@ jobs:
         working-directory: backend
         run: |
           uv sync --frozen --extra dev
-          uv run ruff check app tests
+          uv run ruff check app tests "../FinalRelease/单元测试代码"
           uv run pytest -q
+          uv run pytest -q \
+            tests/test_code_analyzer.py \
+            tests/repositories/test_analysis.py \
+            tests/repositories/test_file_access.py \
+            "../FinalRelease/单元测试代码" \
+            --cov=app.services.code_analysis \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov \
+            --junitxml=junit.xml \
+            --cov-fail-under=90.01
+      - name: Upload local backend test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-backend-test-reports
+          path: |
+            backend/coverage.xml
+            backend/htmlcov/
+            backend/junit.xml
 
   sync-server:
     runs-on: ubuntu-latest

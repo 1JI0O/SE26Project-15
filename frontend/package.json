@@ -12,6 +12,7 @@
     "build:desktop": "pnpm build:sidecar && pnpm assets:pdfjs && vue-tsc --noEmit && vite build --mode desktop",
     "desktop:dev": "pnpm build:sidecar && tauri dev",
     "desktop:build": "tauri build --bundles app,dmg",
+    "test:system": "playwright test --config=playwright.config.ts",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "vue-tsc --noEmit"
   },
@@ -53,6 +54,7 @@
     "vue-router": "^4.4.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@tauri-apps/cli": "^2.11.4",
     "@types/katex": "^0.16.8",
     "@types/markdown-it": "^14.1.2",
