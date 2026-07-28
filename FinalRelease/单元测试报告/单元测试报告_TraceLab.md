@@ -2,28 +2,33 @@
 
 ## 1. 验收结论
 
-本轮选择后端“仓库静态分析子系统”作为课程要求的正式覆盖率范围。使用 pytest（xUnit 风格）执行 52 条定向测试，全部通过；语句覆盖率为 **100.00%（389/389）**，严格超过 90% 的要求，也达到内部 100% 目标。
+本轮采用两个边界明确的后端子系统作为课程覆盖率验收范围，均使用 pytest（xUnit 风格）并设置严格 `fail_under = 90.01`：
 
-完整 backend 回归另行执行，结果为 **223 passed，0 failed**。覆盖率数字仅代表下述明确子系统，不代表整个后端。
+| 被测子系统 | 测试结果 | 语句覆盖率 | 结论 |
+|---|---:|---:|---|
+| 本地后端仓库静态分析 `backend/app/services/code_analysis` | 52 passed | 389/389 = 100.00% | 通过 |
+| VS Code 无头核心 `workspace/review/probe` | 46 passed | 275/275 = 100.00% | 通过 |
 
-## 2. 测试快照与环境
+两个子系统合计 **664/664 条语句，100.00%**。完整 backend 回归为 **231 passed**；VS Code 扩展纯函数测试为 **3 passed**，TypeScript 编译通过。覆盖率只代表表中明确范围，不代表整个 backend 或整个 `tracelab_core`。
+
+## 2. 测试快照
 
 | 项目 | 值 |
 |---|---|
 | 执行日期 | 2026-07-28 |
-| Git 基线 | cfc1bc222773d08fc53b4b6ed12c5c825e69e68a |
-| 工作树 | 含本轮测试、CI、前端缺陷修复和报告改动，尚未形成冻结 RC |
-| 操作系统 | Microsoft Windows 10.0.26200，x64（Windows 11 内核版本） |
-| Python | 3.14.5 |
-| pytest | 9.1.1 |
+| Git 基线 | c21588a（当前 HEAD） |
+| 工作树 | 含本轮新增测试、缺陷修复、CI 与报告更新，尚未冻结 |
+| 操作系统 | Microsoft Windows 10.0.26200，x64 |
+| Python / pytest | 3.14.5 / 9.1.1 |
 | Coverage.py / pytest-cov | 7.15.2 / 7.1.0 |
-| 框架类型 | pytest，xUnit 风格；JUnit XML 输出 |
+| Node | 22.16.0 |
+| 测试框架 | pytest xUnit + JUnit XML；Node `node:test` |
 
-仓库仍在实现新功能，因此本报告是当前执行快照。RC 冻结后必须在冻结提交上重跑并更新 Git 提交号。
+仓库仍在实现功能。本报告是当前执行快照；最终 RC 冻结后必须在同一提交上重新生成全部报告。
 
-## 3. 覆盖率统计口径
+## 3. 覆盖率口径
 
-纳入分母的生产文件：
+### 3.1 仓库静态分析子系统
 
 | 文件 | 语句 | 未覆盖 | 覆盖率 |
 |---|---:|---:|---:|
@@ -38,52 +43,57 @@
 | tree.py | 27 | 0 | 100.00% |
 | **合计** | **389** | **0** | **100.00%** |
 
-definition_resolve.py 属于代码导航解析，lsp_bridge.py 属于桌面 LSP 兼容能力，不进入“仓库静态分析子系统”的正式分母；其新增测试仍随完整回归执行。排除规则按职责固定在 backend/pyproject.toml，不按覆盖结果动态排除。
+`definition_resolve.py` 属于代码导航解析，`lsp_bridge.py` 属于桌面 LSP 兼容能力，不进入该子系统分母；相关测试仍参与 backend 回归。
 
-覆盖率硬门禁配置为 fail_under = 90.01，确保 90.00% 不会误判达标；本次正式命令额外使用 --cov-fail-under=100 验证内部目标。
+### 3.2 VS Code 无头核心子系统
 
-## 4. 测试内容
+| 文件 | 语句 | 未覆盖 | 覆盖率 |
+|---|---:|---:|---:|
+| workspace.py | 91 | 0 | 100.00% |
+| review.py | 93 | 0 | 100.00% |
+| probe.py | 91 | 0 | 100.00% |
+| **合计** | **275** | **0** | **100.00%** |
 
-- ZIP 根目录识别、重复路径、路径穿越、绝对路径、符号链接、条目数和解压大小限制。
-- 默认忽略规则、.gitignore、.git/info/exclude、超大忽略文件和 macOS 元数据。
-- 可编辑文件判定、无效 UTF-8、二进制、源码/编辑内容超限、编辑覆盖层和符号链接逃逸。
-- Python AST 的类、函数、异步函数、调用、PyTorch 候选和语法错误降级。
-- 语言分类、层级文件树、快速扫描、分析汇总，以及编辑覆盖层失败后的归档源回退。
-- 定义解析歧义与 LSP 消息/进程边界（参与回归，不进入正式覆盖率分母）。
+该范围覆盖工作区布局与 JSON/PDF 元数据、追溯候选转换和评审状态、LLM/MinerU 配置探测及网络异常。尚未纳入 `agent_trace.py`、`analyze.py`、`paper_export.py`、`parse.py`、`cli.py` 等模块，因此不得将 100% 表述为整个 `tracelab_core` 的覆盖率。
 
-新增测试代码位于 FinalRelease/单元测试代码；已有测试作为复用资产保留在 backend/tests。
+## 4. 执行结果
 
-## 5. 执行结果
+| 检查 | 结果 | 结论 |
+|---|---:|---|
+| 静态分析定向测试 | 52 passed | 通过 |
+| 静态分析语句覆盖率 | 389/389，100.00% | 通过 |
+| VS Code core 定向测试 | 46 passed | 通过 |
+| VS Code core 语句覆盖率 | 275/275，100.00% | 通过 |
+| 完整 backend 回归 | 231 passed | 通过 |
+| VS Code 扩展工具函数 | 3 passed | 通过 |
+| VS Code 扩展 TypeScript 编译 | 通过 | 通过 |
+| backend / core Ruff | 0 项问题 | 通过 |
+| 前端 typecheck / build | 通过 / 1885 modules transformed | 通过 |
 
-| 检查 | 通过 | 失败 | 跳过 | 耗时 | 结论 |
-|---|---:|---:|---:|---:|---|
-| 静态分析子系统定向测试 | 52 | 0 | 0 | 0.67 秒 | 通过 |
-| 语句覆盖率 | 389 | 0 | - | - | 100.00%，通过 |
-| 完整后端回归 | 223 | 0 | 0 | 17.81 秒 | 通过 |
-| Ruff（应用、既有测试、新增测试） | - | 0 项问题 | - | - | 通过 |
+## 5. 本轮发现并修复的缺陷
 
-正式覆盖率命令：
+- `BUG-20260728-003`：冲突分析把 Windows CRLF 与 ZIP 内 LF 的差异误判为代码修改，产生 `changed_lines = 0` 的伪冲突，并破坏“无代码变化”前置检查。现统一换行符后再比较、哈希和生成 diff；8 条冲突分析测试及完整 backend 回归通过。
+- `BUG-20260728-004`：VS Code 扩展 `jsonForScript` 缺少参数分隔符，TypeScript 无法编译。现拆出纯函数并增加 HTML、脚本闭合标签、U+2028/U+2029 回归测试。
+- `BUG-20260728-005`：`pkg/model.py::Model` 被追溯评审解析为完整 symbol ref 文件路径。现正确解析为 `pkg/model.py`，相关测试覆盖。
+
+## 6. 复现命令
 
 ~~~powershell
 Set-Location backend
-$env:COVERAGE_FILE = '../FinalRelease/单元测试报告/.coverage'
 uv run pytest -q --disable-warnings tests/test_code_analyzer.py tests/repositories/test_analysis.py tests/repositories/test_file_access.py "../FinalRelease/单元测试代码" --cov=app.services.code_analysis --cov-report=term-missing --cov-report="html:../FinalRelease/单元测试报告/htmlcov" --cov-report="xml:../FinalRelease/单元测试报告/coverage.xml" --junitxml="../FinalRelease/单元测试报告/junit.xml" --cov-fail-under=100
+
+Set-Location ../packages/tracelab_core
+uv run --extra dev pytest -q --junitxml="../../FinalRelease/单元测试报告/tracelab-core-junit.xml" --cov-report=xml:"../../FinalRelease/单元测试报告/tracelab-core-coverage.xml" --cov-report=html:"../../FinalRelease/单元测试报告/tracelab-core-htmlcov"
+
+Set-Location ../../vscode-extension
+npm test
 ~~~
 
-完整回归命令：
+## 7. 报告与证据
 
-~~~powershell
-Set-Location backend
-uv run pytest -q --disable-warnings --junitxml="../FinalRelease/单元测试报告/backend-regression-junit.xml"
-~~~
+- `junit.xml`、`coverage.xml`、`htmlcov/index.html`：静态分析子系统。
+- `tracelab-core-junit.xml`、`tracelab-core-coverage.xml`、`tracelab-core-htmlcov/index.html`：VS Code core 子系统。
+- `backend-regression-junit.xml`：完整 backend 回归。
+- `pytest-terminal.txt`、`tracelab-core-terminal.txt`、`backend-regression-terminal.txt`、`vscode-extension-terminal.txt`：终端摘要。
 
-## 6. 报告与证据
-
-- pytest-terminal.txt：定向测试和逐文件覆盖率终端结果。
-- junit.xml：52 条定向测试的 JUnit XML。
-- coverage.xml：机器可读覆盖率报告。
-- htmlcov/index.html：可浏览的逐行 HTML 覆盖率报告。
-- backend-regression-terminal.txt：完整后端回归日志。
-- backend-regression-junit.xml：完整后端回归 JUnit XML。
-
-CI 已新增相同的全量回归和覆盖率门禁，并归档 JUnit、XML 与 HTML 报告。当前本机 Python 为 3.14.5，CI 固定 Python 3.12；冻结 RC 应以 CI 结果再次确认跨版本稳定性。
+CI 已增加两套 Python 覆盖率门禁、完整 backend 回归、VS Code 扩展编译和单元测试，并归档机器可读报告。

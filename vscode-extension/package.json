@@ -181,6 +181,7 @@
   "scripts": {
     "compile": "tsc -p .",
     "watch": "tsc -watch -p .",
+    "test": "npm run compile && node --test ../FinalRelease/单元测试代码/vscode-extension/*.test.cjs",
     "package": "vsce package"
   },
   "devDependencies": {

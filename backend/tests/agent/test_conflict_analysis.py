@@ -122,7 +122,9 @@ def _artifacts(
         "def transform(x):\n    return x * 2\n",
         encoding="utf-8",
     )
-    (edits / "unchanged.py").write_text("VALUE = 1\n", encoding="utf-8")
+    # Force the Windows-style line ending on every platform so CI locks the
+    # newline-only false-positive regression.
+    (edits / "unchanged.py").write_bytes(b"VALUE = 1\r\n")
     return project, paper, code
 
 
