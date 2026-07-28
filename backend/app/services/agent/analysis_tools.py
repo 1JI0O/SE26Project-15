@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.models.entities import AgentAnalysisArtifact, CodeRepository, PaperDocument
 from app.services.analysis_jobs import repository_edits_root
+from app.services.change_analysis import (
+    build_conflict_context,
+    collect_repository_changes,
+    get_change_impact,
+    get_file_change,
+    list_affected_traces,
+)
 from app.services.code_analysis.editor import FileAccessError, read_repository_file
 from app.services.tracing.anchoring import AnchorError, locate_approximate_span, resolve_anchor
 
@@ -56,7 +65,7 @@ class PaperBlockArguments(StrictModel):
 
 
 class ArtifactArguments(StrictModel):
-    kind: Literal["architecture", "trace"]
+    kind: Literal["architecture", "trace", "conflict"]
 
 
 class CodeEvidence(StrictModel):
@@ -110,6 +119,136 @@ class ArchitecturePayload(StrictModel):
 
 class PublishArchitectureArguments(StrictModel):
     payload: ArchitecturePayload
+
+
+class ChangedFilesArguments(PageArguments):
+    pass
+
+
+class ConflictContextArguments(StrictModel):
+    pass
+
+
+class ChangedPathArguments(StrictModel):
+    path: str = Field(min_length=1, max_length=1000)
+
+
+class AffectedTracesArguments(StrictModel):
+    path: str | None = Field(default=None, max_length=1000)
+
+
+class TolerantConflictModel(BaseModel):
+    """Ignore model-added presentation fields while validating every trusted evidence field."""
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ConflictCodeEvidence(TolerantConflictModel):
+    side: Literal["before", "after"]
+    path: str = Field(min_length=1, max_length=1000)
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    quote: str = Field(min_length=1, max_length=6000)
+
+    @field_validator("side", mode="before")
+    @classmethod
+    def _coerce_side(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return {
+            "修改前": "before",
+            "变更前": "before",
+            "修改后": "after",
+            "变更后": "after",
+        }.get(text, text)
+
+
+class ConflictPaperEvidence(TolerantConflictModel):
+    block_id: str = Field(min_length=1, max_length=255)
+    quote: str = Field(min_length=1, max_length=3000)
+    page: int | None = Field(default=None, ge=1)
+    association: Literal["trace", "inferred"] = "trace"
+
+    @field_validator("association", mode="before")
+    @classmethod
+    def _coerce_association(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return {
+            "追溯": "trace",
+            "已有追溯": "trace",
+            "推测": "inferred",
+            "推测关联": "inferred",
+        }.get(text, text)
+
+
+class ConflictTraceReference(TolerantConflictModel):
+    trace_id: str = Field(min_length=1, max_length=64)
+
+
+class ConflictItem(TolerantConflictModel):
+    category: Literal[
+        "paper_consistency",
+        "behavior_regression",
+        "trace_invalidation",
+        "trace_coverage",
+        "configuration_risk",
+    ]
+    severity: Literal["high", "medium", "low"]
+    confidence: float = Field(ge=0, le=1)
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(min_length=1, max_length=5000)
+    change_evidence: list[ConflictCodeEvidence] = Field(min_length=1, max_length=12)
+    affected_symbols: list[str] = Field(default_factory=list, max_length=100)
+    callers: list[str] = Field(default_factory=list, max_length=100)
+    graph_node_ids: list[str] = Field(default_factory=list, max_length=100)
+    trace_refs: list[ConflictTraceReference] = Field(default_factory=list, max_length=30)
+    paper_evidence: list[ConflictPaperEvidence] = Field(default_factory=list, max_length=20)
+    recommendations: list[str] = Field(default_factory=list, max_length=20)
+    verification_steps: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _coerce_severity(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return {
+            "高": "high",
+            "高风险": "high",
+            "中": "medium",
+            "中风险": "medium",
+            "低": "low",
+            "低风险": "low",
+        }.get(text, text)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _coerce_confidence(cls, value: object) -> object:
+        if isinstance(value, str):
+            text = value.strip()
+            try:
+                number = float(text.removesuffix("%"))
+            except ValueError:
+                return value
+            return number / 100 if text.endswith("%") or 1 < number <= 100 else number
+        if isinstance(value, (int, float)) and 1 < value <= 100:
+            return value / 100
+        return value
+
+
+class ConflictPayload(TolerantConflictModel):
+    schema_version: Literal["conflict-agent-v1"] = "conflict-agent-v1"
+    language: Literal["zh-CN"] = "zh-CN"
+    repository_revision: int = Field(ge=1)
+    overall_risk: Literal["high", "medium", "low"] = "low"
+    items: list[ConflictItem] = Field(default_factory=list, max_length=100)
+    unresolved: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("overall_risk", mode="before")
+    @classmethod
+    def _coerce_overall_risk(cls, value: object) -> str:
+        return ConflictItem._coerce_severity(value)
+
+
+class PublishConflictArguments(TolerantConflictModel):
+    payload: ConflictPayload
 
 
 class TolerantModel(BaseModel):
@@ -253,6 +392,12 @@ TOOL_MODELS: dict[str, type[StrictModel]] = {
     "publish_trace_candidates": PublishTraceArguments,
     "finish_analysis": FinishAnalysisArguments,
     "dispatch_trace_subagents": DispatchSubagentsArguments,
+    "get_conflict_context": ConflictContextArguments,
+    "list_changed_files": ChangedFilesArguments,
+    "get_change_diff": ChangedPathArguments,
+    "get_change_impact": ChangedPathArguments,
+    "list_affected_traces": AffectedTracesArguments,
+    "publish_conflict_report": PublishConflictArguments,
 }
 
 TOOL_DESCRIPTIONS = {
@@ -310,6 +455,39 @@ TOOL_DESCRIPTIONS = {
         "verify coverage against. Hints are navigation aids, not conclusions. At most 2 dispatch "
         "calls per analysis."
     ),
+    "get_conflict_context": (
+        "Read the revision-fixed conflict-context-v1 evidence package prepared from saved "
+        "changes. It combines exact diffs and hunks, affected symbols/callers/graph nodes, "
+        "affected traces, and trace-linked paper blocks. Inspect coverage before using granular "
+        "tools; only fetch sections explicitly marked truncated or evidence that is genuinely "
+        "missing."
+    ),
+    "list_changed_files": (
+        "List saved files that differ from the immutable imported repository, with hashes, "
+        "changed-line counts, and hunk locations."
+    ),
+    "get_change_diff": (
+        "Read the exact imported-vs-current unified diff and before/after hunk quotes for one "
+        "changed file."
+    ),
+    "get_change_impact": (
+        "Read symbols overlapping one changed file's hunks, their callers, and affected graph "
+        "nodes from the current static analysis."
+    ),
+    "list_affected_traces": (
+        "List existing paper-code traces affected by changed paths or precise CodeTarget ranges. "
+        "Includes stale links and whether they were accepted before the edit."
+    ),
+    "publish_conflict_report": (
+        "Publish the final conflict-agent-v1 report exactly once. Every item must cite exact "
+        "before/after code copied from get_change_diff. Paper claims need exact block quotes; "
+        "For a pure insertion or deletion, cite only the non-empty side of the hunk; never send "
+        "a change_evidence entry whose quote is empty. "
+        "use association=inferred when no existing trace supports the paper association. Set "
+        "language=zh-CN and write every user-visible title, description, recommendation, "
+        "verification step, and unresolved item in Simplified Chinese. Keep paths, identifiers, "
+        "symbols, and verbatim code/paper quotes in their original form."
+    ),
 }
 
 
@@ -338,6 +516,23 @@ def tool_definitions(kind: str, *, role: str = "parent") -> list[dict[str, Any]]
             "publish_trace_candidates",
             "finish_analysis",
             "dispatch_trace_subagents",
+        },
+        "conflict": {
+            "get_conflict_context",
+            "list_changed_files",
+            "get_change_diff",
+            "get_change_impact",
+            "list_affected_traces",
+            "list_repository_files",
+            "search_repository_text",
+            "list_code_symbols",
+            "get_symbol_source",
+            "get_symbol_calls",
+            "read_source_lines",
+            "list_paper_blocks",
+            "get_paper_block",
+            "get_analysis_artifact",
+            "publish_conflict_report",
         },
     }[kind]
     if role == "subagent":
@@ -624,6 +819,137 @@ def _validate_traces(
     return kept, anchors, dropped
 
 
+def _validate_conflict_code_evidence(
+    repository: CodeRepository,
+    evidence: ConflictCodeEvidence,
+) -> None:
+    change = get_file_change(repository, evidence.path)
+    if evidence.side == "before":
+        content = read_repository_file(repository.storage_path, evidence.path)
+        range_keys = ("before_start", "before_end")
+    else:
+        content = _read_file(repository, evidence.path)
+        range_keys = ("after_start", "after_end")
+    lines = content.splitlines()
+    if (
+        evidence.line_end < evidence.line_start
+        or evidence.line_start > len(lines)
+        or evidence.line_end > len(lines)
+    ):
+        raise ValueError("conflict_code_evidence_line_invalid")
+    selected = "\n".join(lines[evidence.line_start - 1 : evidence.line_end])
+    if _normalize(evidence.quote) not in _normalize(selected):
+        raise ValueError("conflict_code_evidence_quote_invalid")
+    if not any(
+        evidence.line_start <= int(hunk[range_keys[1]])
+        and int(hunk[range_keys[0]]) <= evidence.line_end
+        for hunk in change["hunks"]
+    ):
+        raise ValueError("conflict_code_evidence_not_in_change")
+
+
+def _execute_publish_conflict(
+    session: Session,
+    project_id: int,
+    repository_id: int,
+    paper_id: int | None,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    validated = PublishConflictArguments.model_validate(arguments)
+    repository = _repository(session, project_id, repository_id)
+    payload = validated.payload
+    if payload.repository_revision != repository.revision:
+        raise ValueError("repository_revision_changed")
+    chinese_fields = [
+        *(value for item in payload.items for value in (item.title, item.description)),
+        *(value for item in payload.items for value in item.recommendations),
+        *(value for item in payload.items for value in item.verification_steps),
+        *payload.unresolved,
+    ]
+    if any(
+        value.strip() and re.search(r"[\u3400-\u9fff]", value) is None
+        for value in chinese_fields
+    ):
+        raise ValueError("conflict_output_must_be_chinese")
+    changes = collect_repository_changes(repository)
+    if not changes["has_changes"]:
+        raise ValueError("no_code_changes")
+
+    paper = session.get(PaperDocument, paper_id) if paper_id is not None else None
+    blocks = {
+        str(item.get("id")): item
+        for item in (_paper_blocks(paper) if paper is not None else [])
+    }
+    affected_trace_map = {
+        item["trace_id"]: item
+        for item in list_affected_traces(session, repository)
+    }
+    output_items: list[dict[str, Any]] = []
+    for item in payload.items:
+        for evidence in item.change_evidence:
+            _validate_conflict_code_evidence(repository, evidence)
+        for evidence in item.paper_evidence:
+            block = blocks.get(evidence.block_id)
+            if block is None:
+                raise ValueError("conflict_paper_evidence_ref_invalid")
+            if _normalize(evidence.quote) not in _normalize(str(block.get("text", ""))):
+                raise ValueError("conflict_paper_evidence_quote_invalid")
+            if evidence.association == "trace" and not any(
+                affected_trace_map.get(reference.trace_id, {}).get("paper_block_id")
+                == evidence.block_id
+                for reference in item.trace_refs
+            ):
+                raise ValueError("conflict_paper_trace_association_invalid")
+        for reference in item.trace_refs:
+            if reference.trace_id not in affected_trace_map:
+                raise ValueError("conflict_trace_reference_invalid")
+
+        item_dump = item.model_dump()
+        evidence_identity = [
+            [
+                evidence.path,
+                evidence.side,
+                evidence.line_start,
+                evidence.line_end,
+                hashlib.sha256(evidence.quote.encode()).hexdigest(),
+            ]
+            for evidence in item.change_evidence
+        ]
+        raw_id = repr(
+            [
+                project_id,
+                repository_id,
+                repository.revision,
+                item.category,
+                item.title,
+                evidence_identity,
+                [reference.trace_id for reference in item.trace_refs],
+            ]
+        )
+        item_dump["id"] = f"conflict-{hashlib.sha256(raw_id.encode()).hexdigest()[:20]}"
+        item_dump["affected_files"] = list(
+            dict.fromkeys(evidence.path for evidence in item.change_evidence)
+        )
+        output_items.append(item_dump)
+
+    counts = {
+        severity: sum(item["severity"] == severity for item in output_items)
+        for severity in ("high", "medium", "low")
+    }
+    payload_dump = payload.model_dump()
+    payload_dump["items"] = output_items
+    payload_dump["overall_risk"] = (
+        "high" if counts["high"] else "medium" if counts["medium"] else "low"
+    )
+    payload_dump["summary"] = {
+        **counts,
+        "total": len(output_items),
+        "changed_files": changes["changed_file_count"],
+        "changed_lines": changes["changed_line_count"],
+    }
+    return {"published": True, "payload": payload_dump}
+
+
 def _normalize_publish_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Wrap flattened publish arguments into the expected ``{"payload": {...}}`` shape.
 
@@ -634,18 +960,55 @@ def _normalize_publish_arguments(tool_name: str, arguments: dict[str, Any]) -> d
     nesting right.
     """
 
-    if tool_name not in {"publish_trace_candidates", "publish_architecture_graph"}:
+    if tool_name not in {
+        "publish_trace_candidates",
+        "publish_architecture_graph",
+        "publish_conflict_report",
+    }:
         return arguments
     if not isinstance(arguments, dict):
         return arguments
     payload = arguments.get("payload")
     if isinstance(payload, dict):
-        return arguments
-    # No usable payload wrapper: treat the top-level dict as the payload itself.
-    flattened = {key: value for key, value in arguments.items() if key != "payload"}
-    if flattened:
-        return {"payload": flattened}
-    return arguments
+        normalized = arguments
+    else:
+        # No usable payload wrapper: treat the top-level dict as the payload itself.
+        flattened = {key: value for key, value in arguments.items() if key != "payload"}
+        if not flattened:
+            return arguments
+        normalized = {"payload": flattened}
+    if tool_name != "publish_conflict_report":
+        return normalized
+
+    # Pure insertions/deletions have one intentionally-empty hunk side. Models commonly copy
+    # both sides into change_evidence, including quote="". That empty entry carries no evidence
+    # and used to reject the entire otherwise-valid report at schema validation. Drop only those
+    # empty entries; every remaining entry still goes through exact path/range/quote validation,
+    # and an item with no non-empty evidence still fails ConflictItem.min_length.
+    conflict_payload = normalized.get("payload")
+    if not isinstance(conflict_payload, dict):
+        return normalized
+    items = conflict_payload.get("items")
+    if not isinstance(items, list):
+        return normalized
+    normalized_items: list[Any] = []
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            normalized_items.append(raw_item)
+            continue
+        item = dict(raw_item)
+        evidence = item.get("change_evidence")
+        if isinstance(evidence, list):
+            item["change_evidence"] = [
+                entry
+                for entry in evidence
+                if not isinstance(entry, dict)
+                or bool(str(entry.get("quote") or "").strip())
+            ]
+        normalized_items.append(item)
+    normalized_payload = dict(conflict_payload)
+    normalized_payload["items"] = normalized_items
+    return {**normalized, "payload": normalized_payload}
 
 
 def _execute_publish_trace(
@@ -735,6 +1098,14 @@ def execute_tool(
     arguments = _normalize_publish_arguments(tool_name, arguments)
     if tool_name == "publish_trace_candidates":
         return _execute_publish_trace(session, project_id, repository_id, paper_id, arguments)
+    if tool_name == "publish_conflict_report":
+        return _execute_publish_conflict(
+            session,
+            project_id,
+            repository_id,
+            paper_id,
+            arguments,
+        )
     if tool_name == "finish_analysis":
         summary = ""
         if isinstance(arguments, dict):
@@ -757,6 +1128,57 @@ def execute_tool(
             if validated.cursor + len(page) < len(items)
             else None,
             "total": len(items),
+        }
+    if isinstance(validated, ChangedFilesArguments):
+        changes = collect_repository_changes(repository)
+        items = [
+            {
+                **{
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"diff", "hunks"}
+                },
+                "hunks": [
+                    {
+                        key: value
+                        for key, value in hunk.items()
+                        if key not in {"before_quote", "after_quote"}
+                    }
+                    for hunk in item["hunks"]
+                ],
+            }
+            for item in changes["files"]
+        ]
+        page = items[validated.cursor : validated.cursor + validated.limit]
+        return {
+            "baseline": changes["baseline"],
+            "repository_revision": changes["repository_revision"],
+            "items": page,
+            "next_cursor": (
+                validated.cursor + len(page)
+                if validated.cursor + len(page) < len(items)
+                else None
+            ),
+            "total": len(items),
+            "changed_line_count": changes["changed_line_count"],
+        }
+    if isinstance(validated, ConflictContextArguments):
+        paper = session.get(PaperDocument, paper_id) if paper_id is not None else None
+        if paper is not None and paper.project_id != project_id:
+            raise ValueError("paper_document_not_found")
+        return build_conflict_context(
+            session,
+            repository,
+            paper,
+            settings.tracelab_llm_max_context_chars,
+        )
+    if isinstance(validated, ChangedPathArguments):
+        if tool_name == "get_change_diff":
+            return get_file_change(repository, validated.path)
+        return get_change_impact(repository, validated.path)
+    if isinstance(validated, AffectedTracesArguments):
+        return {
+            "items": list_affected_traces(session, repository, validated.path),
         }
     if isinstance(validated, RepositorySearchArguments):
         query = validated.query.casefold()

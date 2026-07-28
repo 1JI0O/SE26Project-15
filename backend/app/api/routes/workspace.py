@@ -9,12 +9,18 @@ from app.db.session import get_session
 from app.schemas.workspace import (
     WorkspaceAnalyzeJob,
     WorkspaceAnalyzeRequest,
+    WorkspaceChangeSummary,
     WorkspaceConflictItem,
     WorkspaceFlowNode,
     WorkspaceRead,
     WorkspaceReportCard,
 )
 from app.services import workspace_service
+from app.services.change_analysis import (
+    build_change_summary,
+    conflict_items_from_artifact,
+    latest_conflict_artifact,
+)
 from app.services.workspace_placeholder import workspace_payload
 
 router = APIRouter(prefix="/projects/{project_id}/workspace", tags=["workspace"])
@@ -37,9 +43,43 @@ def read_flow_graph(project_id: str) -> list[WorkspaceFlowNode]:
 
 
 @router.get("/conflicts", response_model=list[WorkspaceConflictItem])
-def read_conflicts(project_id: str) -> list[WorkspaceConflictItem]:
-    payload = workspace_payload(project_id)
-    return [WorkspaceConflictItem(**item) for item in payload["conflict_items"]]
+def read_conflicts(
+    project_id: str,
+    session: Session = Depends(get_session),
+) -> list[WorkspaceConflictItem]:
+    numeric_id = parse_workspace_project_id(project_id)
+    if numeric_id is None:
+        payload = workspace_payload(project_id)
+        return [WorkspaceConflictItem(**item) for item in payload["conflict_items"]]
+    get_project_or_404(numeric_id, session)
+    artifact = latest_conflict_artifact(session, numeric_id)
+    return [
+        WorkspaceConflictItem(**item)
+        for item in conflict_items_from_artifact(artifact)
+    ]
+
+
+@router.get("/change-summary", response_model=WorkspaceChangeSummary)
+def read_change_summary(
+    project_id: str,
+    session: Session = Depends(get_session),
+) -> WorkspaceChangeSummary:
+    numeric_id = parse_workspace_project_id(project_id)
+    if numeric_id is None:
+        payload = workspace_payload(project_id)
+        changed_lines = sum(
+            len(item.get("affected_files", [])) for item in payload["conflict_items"]
+        )
+        return WorkspaceChangeSummary(
+            repository_revision=1,
+            analysis_status="ready",
+            analysis_current=True,
+            has_changes=True,
+            changed_file_count=max(changed_lines, 1),
+            changed_line_count=max(changed_lines, 1),
+        )
+    get_project_or_404(numeric_id, session)
+    return WorkspaceChangeSummary(**build_change_summary(session, numeric_id))
 
 
 @router.get("/report-summary", response_model=list[WorkspaceReportCard])

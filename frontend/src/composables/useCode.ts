@@ -315,8 +315,8 @@ export function useCode(projectId: () => number) {
     if (!isEditorDirty.value) isEditorDirty.value = true
   }
 
-  async function saveEditorBuffer(): Promise<void> {
-    if (!selectedFile.value) return
+  async function saveEditorBuffer(): Promise<boolean> {
+    if (!selectedFile.value) return false
     saving.value = true
     try {
       const result = await saveWorkspaceCodeFile(projectId(), selectedFile.value.path, editorContentBuffer)
@@ -329,9 +329,11 @@ export function useCode(projectId: () => number) {
         selectedFile.value.statusType = 'success'
       }
       ElMessage.success('代码编辑已保存')
+      return true
     } catch (e) {
       ElMessage.error('保存失败')
       console.error(e)
+      return false
     } finally {
       saving.value = false
     }

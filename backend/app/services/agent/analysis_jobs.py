@@ -47,6 +47,8 @@ from app.services.agent.subagents import (
     backoff_seconds,
     run_trace_subagents,
 )
+from app.services.analysis_jobs import analysis_is_current
+from app.services.change_analysis import collect_repository_changes
 from app.services.tracing.service import trace_fingerprint
 
 logger = logging.getLogger("tracelab.agent.analysis")
@@ -122,14 +124,21 @@ def create_analysis_job(
     if repository is None or repository.project_id != project_id:
         raise ValueError("code_repository_not_found")
     paper: PaperDocument | None = None
-    if payload.kind == "trace":
+    if payload.kind in {"trace", "conflict"}:
         paper = (
             session.get(PaperDocument, payload.paper_document_id)
             if payload.paper_document_id is not None
             else _latest_paper(session, project_id)
         )
-        if paper is None or paper.project_id != project_id:
+        if payload.kind == "trace" and (paper is None or paper.project_id != project_id):
             raise ValueError("paper_document_not_found")
+        if paper is not None and paper.project_id != project_id:
+            raise ValueError("paper_document_not_found")
+    if payload.kind == "conflict":
+        if not collect_repository_changes(repository)["has_changes"]:
+            raise ValueError("no_code_changes")
+        if not analysis_is_current(repository):
+            raise ValueError("repository_analysis_pending")
     base = _base_fingerprint(
         project_id,
         payload.kind,
@@ -208,14 +217,22 @@ def cancel_analysis_job(
         job.status = "succeeded"
         job.error_code = None
         job.progress_json = {
-            "message": "追溯已中止（未发现可靠关系）",
+            "message": (
+                "追溯已中止（未发现可靠关系）"
+                if job.kind == "trace"
+                else "分析已中止"
+            ),
             "code": "analysis_cancelled",
         }
         job.completed_at = now
     else:
         job.status = "cancelling"
         job.progress_json = {
-            "message": "正在中止追溯（保留已发现的关系）",
+            "message": (
+                "正在中止追溯（保留已发现的关系）"
+                if job.kind == "trace"
+                else "正在中止分析"
+            ),
             "code": "analysis_cancelling",
         }
     job.updated_at = now
@@ -241,7 +258,7 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
             "claims. "
             "Call publish_architecture_graph exactly once with the complete graph."
         )
-    else:
+    elif job.kind == "trace":
         request = (
             f"Trace paper document {job.paper_document_id} against repository revision "
             f"{job.code_revision}. Work in four stages inside this single run, publishing "
@@ -293,6 +310,45 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
             "unresolved, call finish_analysis exactly once to end. If nothing at all is "
             "defensible, call finish_analysis directly."
         )
+    else:
+        request = (
+            f"Analyze saved modifications in repository revision {job.code_revision} against "
+            "the immutable imported baseline. Produce a read-only conflict report.\n\n"
+            "PREFETCHED EVIDENCE. Initial tool_results contain a prefetched "
+            "get_conflict_context entry. Inspect it before calling any tool. If ok=false, use "
+            "the granular change, impact, trace, and paper tools. If ok=true, its result contains "
+            "exact changes, code impact, affected traces, and trace-linked paper blocks. When "
+            "coverage.complete=true, do not repeat list_changed_files, get_change_diff, "
+            "get_change_impact, list_affected_traces, or get_paper_block for evidence already "
+            "present. Read extra source only for a concrete ambiguity, then publish. When "
+            "coverage.complete=false, use granular tools only for paths or sections named in "
+            "coverage.truncated_sections, truncated_paths, or omitted references. A stale trace "
+            "with previously_accepted=true was accepted before the edit and deserves extra "
+            "scrutiny. If no trace covers an important change and a paper is available, "
+            "search/read the paper and mark that paper evidence as association=inferred. If no "
+            "paper is available, perform code-only analysis and do not invent paper evidence.\n\n"
+            "REPORT. Use only these categories: paper_consistency, "
+            "behavior_regression, trace_invalidation, trace_coverage, configuration_risk. Every "
+            "item must cite a verbatim non-empty before or after quote from get_change_diff with "
+            "its real line range. For a pure insertion or deletion, include only the non-empty "
+            "side in change_evidence; never submit quote=\"\". Paper claims require verbatim "
+            "get_paper_block quotes. Separate "
+            "severity from confidence and give concrete recommendations and verification steps. "
+            "OUTPUT LANGUAGE IS MANDATORY: set language=zh-CN and write every user-visible title, "
+            "description, recommendation, verification step, and unresolved item in Simplified "
+            "Chinese. Keep file paths, identifiers, symbol names, and verbatim code/paper quotes "
+            "in their original language. A report with English-only user-visible fields will be "
+            "rejected and must be rewritten. Submit payload with repository_revision, items, and "
+            "unresolved. Each item uses category, severity, confidence, title, description, "
+            "change_evidence, affected_symbols, callers, graph_node_ids, trace_refs, "
+            "paper_evidence, recommendations, and verification_steps. Code evidence uses side, "
+            "path, line_start, line_end, quote; trace refs use trace_id; paper evidence uses "
+            "block_id, quote, page, association. Do NOT submit id, affected_files, summary, or "
+            "risk counts because the server derives them. "
+            "Uncertain observations go in unresolved, not as invented conflicts. Finally call "
+            "publish_conflict_report exactly once, including repository_revision and all items; "
+            "an empty items list is allowed when the evidence shows no conflict."
+        )
     return common, request
 
 
@@ -338,6 +394,19 @@ def _activity(tool_name: str, arguments: dict[str, Any]) -> str:
             return f"并行取证：派发 {count} 个区域子代理"
         case "publish_architecture_graph":
             return "发布架构图"
+        case "get_conflict_context":
+            return "准备冲突分析上下文"
+        case "list_changed_files":
+            return "收集已保存的代码修改"
+        case "get_change_diff":
+            return f"核对修改 {args.get('path', '')}".strip()
+        case "get_change_impact":
+            return f"分析影响范围 {args.get('path', '')}".strip()
+        case "list_affected_traces":
+            return "查找受影响的追溯关系"
+        case "publish_conflict_report":
+            count = len(payload.get("items", []) or [])
+            return f"发布 {count} 条冲突分析结果"
         case "finish_analysis":
             return "整理并结束追溯"
     return "分析中"
@@ -351,6 +420,18 @@ def _safe_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
         safe["content"] = safe["content"][:40_000]
     if isinstance(safe.get("items"), list):
         safe["items"] = safe["items"][:100]
+    if isinstance(safe.get("diff"), str):
+        safe["diff"] = safe["diff"][:30_000]
+    if isinstance(safe.get("hunks"), list):
+        safe["hunks"] = [
+            {
+                **hunk,
+                "before_quote": str(hunk.get("before_quote", ""))[:4000],
+                "after_quote": str(hunk.get("after_quote", ""))[:4000],
+            }
+            for hunk in safe["hunks"][:30]
+            if isinstance(hunk, dict)
+        ]
     return safe
 
 
@@ -696,11 +777,12 @@ def _finalize_trace_run(
     if artifact is not None:
         job.artifact_id = artifact.artifact_id
     if cancelled:
+        noun = "追溯" if job.kind == "trace" else "分析"
         job.progress_json = {
             "message": (
-                f"追溯已中止，保留 {published_count} 条已发现关系"
+                f"{noun}已中止，保留 {published_count} 条已发现结果"
                 if published_count
-                else "追溯已中止（未发现可靠关系）"
+                else f"{noun}已中止"
             ),
             "code": "analysis_cancelled",
         }
@@ -850,6 +932,7 @@ def _execute_job(job_id: str) -> None:
                 "environment": {
                     "repository_file_count": len(repository.file_tree_json),
                     "indexed_symbol_count": len(repository.symbols_json),
+                    "paper_available": job.paper_document_id is not None,
                 },
                 "memories": [],
                 "skills": [{"name": f"{job.kind}-analysis", "instructions": system_prompt}],
@@ -859,13 +942,105 @@ def _execute_job(job_id: str) -> None:
             # Accumulate trace entries in memory; write to DB exactly once at finalization to
             # avoid hundreds of large JSON blob commits that cause SQLite write-lock contention.
             trace_entries: list[dict[str, Any]] = []
+            prefetched_conflict_context: dict[str, Any] | None = None
+            if job.kind == "conflict":
+                try:
+                    prefetched_conflict_context = execute_tool(
+                        session,
+                        job.project_id,
+                        job.code_repository_id,
+                        job.paper_document_id,
+                        job.requested_depth,
+                        "get_conflict_context",
+                        {},
+                    )
+                except (ValidationError, ValueError) as exc:
+                    feedback = {
+                        "tool": "get_conflict_context",
+                        "ok": False,
+                        "error": str(exc)[:240] or "conflict_context_prefetch_failed",
+                        "instruction": (
+                            "The aggregate prefetch failed. Use the granular change, impact, "
+                            "trace, and paper tools before publishing."
+                        ),
+                    }
+                    tool_results.append(feedback)
+                    _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
+                    emitter.emit(
+                        "analysis.tool.failed",
+                        {
+                            "tool_name": "get_conflict_context",
+                            "code": "conflict_context_prefetch_failed",
+                            "step": 0,
+                        },
+                    )
+                else:
+                    feedback = {
+                        "tool": "get_conflict_context",
+                        "ok": True,
+                        "prefetched": True,
+                        "result": prefetched_conflict_context,
+                        "instruction": (
+                            "Use this evidence package first. Only fetch granular evidence named "
+                            "as truncated or genuinely missing."
+                        ),
+                    }
+                    tool_results.append(feedback)
+                    summary = prefetched_conflict_context.get("summary", {})
+                    coverage = prefetched_conflict_context.get("coverage", {})
+                    context["environment"].update(
+                        {
+                            "changed_file_count": summary.get("changed_file_count", 0),
+                            "changed_line_count": summary.get("changed_line_count", 0),
+                        }
+                    )
+                    _trace_step(
+                        run,
+                        {
+                            "type": "tool_result",
+                            "tool": "get_conflict_context",
+                            "ok": True,
+                            "prefetched": True,
+                            "summary": summary,
+                            "coverage": coverage,
+                        },
+                        trace_entries,
+                    )
+                    emitter.emit(
+                        "analysis.tool.completed",
+                        {
+                            "tool_name": "get_conflict_context",
+                            "activity": (
+                                f"已准备 {summary.get('changed_file_count', 0)} 个修改文件、"
+                                f"{summary.get('affected_trace_count', 0)} 条追溯、"
+                                f"{summary.get('paper_block_count', 0)} 个论文块"
+                            ),
+                            "step": 0,
+                            "prefetched": True,
+                            "coverage_complete": bool(coverage.get("complete")),
+                        },
+                    )
             # Transient provider hiccups (malformed/truncated JSON on a big publish payload,
             # empty responses, rate limits) should not kill an otherwise-successful run. Retry
             # them a bounded number of times before giving up.
             provider_failures = 0
             # Hard safety cap on tool steps only. Normal termination is the model calling
             # finish_analysis (trace) or publishing once (architecture); soft_target just nudges.
-            budget = 48 if job.kind == "architecture" else 100
+            conflict_context_complete = bool(
+                prefetched_conflict_context
+                and prefetched_conflict_context.get("coverage", {}).get("complete")
+            )
+            budget = (
+                48
+                if job.kind == "architecture"
+                else 32
+                if job.kind == "conflict" and conflict_context_complete
+                else 64
+                if job.kind == "conflict"
+                else 100
+            )
+            if job.kind == "conflict":
+                soft_target = 12 if conflict_context_complete else 40
             # Cache identical read results so the model does not burn steps/tokens re-reading the
             # same block or code window, and nudge it toward publishing once it has the evidence.
             seen_calls: dict[str, dict[str, Any]] = {}
@@ -879,14 +1054,25 @@ def _execute_job(job_id: str) -> None:
                 "list_paper_blocks",
                 "get_paper_block",
                 "get_analysis_artifact",
+                "get_conflict_context",
+                "list_changed_files",
+                "get_change_diff",
+                "get_change_impact",
+                "list_affected_traces",
             }
+            if prefetched_conflict_context is not None:
+                seen_calls["get_conflict_context|{}"] = prefetched_conflict_context
             converge_nudged = False
             dispatch_calls = 0
             dispatched_regions = 0
             publish_name = (
                 "publish_architecture_graph"
                 if job.kind == "architecture"
-                else "publish_trace_candidates"
+                else (
+                    "publish_conflict_report"
+                    if job.kind == "conflict"
+                    else "publish_trace_candidates"
+                )
             )
             for step_number in range(1, budget + 1):
                 # Check for an external stop signal at every step start. The cancel endpoint
@@ -905,7 +1091,14 @@ def _execute_job(job_id: str) -> None:
                         sink.close()
                     emitter.emit(
                         "analysis.progress",
-                        {"message": "正在中止追溯（保留已发现的关系）", "step": step_number},
+                        {
+                            "message": (
+                                "正在中止追溯（保留已发现的关系）"
+                                if job.kind == "trace"
+                                else "正在中止分析"
+                            ),
+                            "step": step_number,
+                        },
                     )
                     _finalize_trace_run(
                         session, job, run, emitter, _current_artifact(), _published(),
@@ -1122,8 +1315,7 @@ def _execute_job(job_id: str) -> None:
                         "instruction": (
                             "You already retrieved this exact content — do not read it again. "
                             "Read anything still missing, then when ready call "
-                            f"{publish_name} ONCE with all candidates filled in. Never call it "
-                            "with an empty payload."
+                            f"{publish_name} ONCE with the complete structured payload."
                         ),
                     }
                     tool_results.append(feedback)
@@ -1148,6 +1340,12 @@ def _execute_job(job_id: str) -> None:
                     finish_hint = (
                         ", then call finish_analysis to end" if job.kind == "trace" else ""
                     )
+                    publish_hint = (
+                        "Publish the complete conflict report now; an empty items list is valid "
+                        "when no conflict is supported"
+                        if job.kind == "conflict"
+                        else "Publish any remaining defensible candidates now (never empty)"
+                    )
                     tool_results.append(
                         {
                             "tool": "runtime",
@@ -1155,7 +1353,7 @@ def _execute_job(job_id: str) -> None:
                             "error": "soft_target_reached",
                             "instruction": (
                                 f"You have reached the soft step target (~{soft_target}). "
-                                f"Publish any remaining defensible candidates now (never empty)"
+                                f"{publish_hint}"
                                 f"{finish_hint}; put anything unconfirmed in unresolved instead "
                                 "of reading more."
                             ),
@@ -1187,6 +1385,16 @@ def _execute_job(job_id: str) -> None:
                         f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
                         for item in exc.errors()[:8]
                     )
+                    required_hint = (
+                        "Conflict items require category, severity, confidence, title, "
+                        "description, and change_evidence{side,path,line_start,line_end,quote}."
+                        if job.kind == "conflict"
+                        else (
+                            "Required fields per candidate are paper_block_id, code_symbol_id, "
+                            "rationale, paper_evidence{block_id,quote}, and "
+                            "code_evidence{path,line_start,line_end,quote}."
+                        )
+                    )
                     feedback = {
                         "tool": tool_name,
                         "ok": False,
@@ -1194,9 +1402,7 @@ def _execute_job(job_id: str) -> None:
                         "details": details[:600],
                         "instruction": (
                             "Fix only the fields named in details and retry. Do not add fields "
-                            "outside the schema; required fields per candidate are paper_block_id, "
-                            "code_symbol_id, rationale, paper_evidence{block_id,quote}, "
-                            "code_evidence{path,line_start,line_end,quote}."
+                            f"outside the schema. {required_hint}"
                         ),
                     }
                     tool_results.append(feedback)
@@ -1206,6 +1412,7 @@ def _execute_job(job_id: str) -> None:
                         {
                             "tool_name": tool_name,
                             "code": error,
+                            "details": details[:600],
                             "step": step_number,
                             "budget": budget,
                         },
@@ -1213,13 +1420,19 @@ def _execute_job(job_id: str) -> None:
                     continue
                 except ValueError as exc:
                     error = str(exc)[:240] or "analysis_evidence_invalid"
+                    correction = (
+                        "Rewrite every user-visible title, description, recommendation, "
+                        "verification step, and unresolved item in Simplified Chinese, then "
+                        "publish the complete report again. Keep paths, symbols, and verbatim "
+                        "quotes unchanged."
+                        if error == "conflict_output_must_be_chinese"
+                        else "Correct the evidence or arguments and retry without guessing."
+                    )
                     feedback = {
                         "tool": tool_name,
                         "ok": False,
                         "error": error,
-                        "instruction": (
-                            "Correct the evidence or arguments and retry without guessing."
-                        ),
+                        "instruction": correction,
                     }
                     tool_results.append(feedback)
                     _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
@@ -1259,8 +1472,8 @@ def _execute_job(job_id: str) -> None:
                     )
                     return
                 if tool_name == publish_name and result.get("published"):
-                    if job.kind == "architecture":
-                        # Architecture publishes exactly once and terminates.
+                    if job.kind in {"architecture", "conflict"}:
+                        # Architecture and conflict reports publish exactly once and terminate.
                         job.status = "validating"
                         job.progress_json = {"message": "正在校验并保存 Agent 结果"}
                         job.updated_at = utc_now()

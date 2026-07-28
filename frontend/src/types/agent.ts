@@ -8,13 +8,13 @@ export interface AgentContext {
   graph_root_symbol?: string
 }
 
-export type AgentAnalysisKind = 'architecture' | 'trace'
+export type AgentAnalysisKind = 'architecture' | 'trace' | 'conflict'
 
 export interface AgentAnalysisJob {
   job_id: string
   project_id: number
   kind: AgentAnalysisKind
-  status: 'queued' | 'running' | 'validating' | 'succeeded' | 'failed' | 'stale'
+  status: 'queued' | 'running' | 'validating' | 'cancelling' | 'succeeded' | 'failed' | 'stale'
   paper_document_id: number | null
   code_repository_id: number
   code_revision: number
@@ -49,6 +49,22 @@ export interface AgentAnalysisDiagnostics {
   created_at: string
   updated_at: string
   completed_at: string | null
+}
+
+export interface AgentAnalysisArtifact {
+  artifact_id: string
+  job_id: string
+  project_id: number
+  kind: AgentAnalysisKind
+  schema_version: string
+  payload: Record<string, unknown>
+  paper_document_id: number | null
+  code_repository_id: number
+  code_revision: number
+  run_id: string
+  model: Record<string, unknown>
+  is_current: boolean
+  created_at: string
 }
 
 export interface AgentCitation {

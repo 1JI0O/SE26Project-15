@@ -142,7 +142,7 @@ class AgentRunEventRead(BaseModel):
 
 
 class AgentAnalysisJobCreate(BaseModel):
-    kind: str = Field(pattern="^(architecture|trace)$")
+    kind: str = Field(pattern="^(architecture|trace|conflict)$")
     paper_document_id: int | None = None
     code_repository_id: int | None = None
     root_symbol: str | None = Field(default=None, max_length=500)

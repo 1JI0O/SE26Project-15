@@ -2,6 +2,7 @@ import { apiBaseUrl, http } from '@/api/http'
 import type {
   AgentCapability,
   AgentAnalysisDiagnostics,
+  AgentAnalysisArtifact,
   AgentAnalysisJob,
   AgentAnalysisKind,
   AgentConfirmation,
@@ -56,6 +57,16 @@ export async function getAgentAnalysisJob(
 ): Promise<AgentAnalysisJob> {
   const { data } = await http.get<AgentAnalysisJob>(
     `/projects/${projectId}/agent/analysis-jobs/${jobId}`,
+  )
+  return data
+}
+
+export async function getAgentAnalysisArtifact(
+  projectId: number,
+  jobId: string,
+): Promise<AgentAnalysisArtifact> {
+  const { data } = await http.get<AgentAnalysisArtifact>(
+    `/projects/${projectId}/agent/analysis-jobs/${encodeURIComponent(jobId)}/artifact`,
   )
   return data
 }
