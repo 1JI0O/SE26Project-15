@@ -16,6 +16,8 @@ TraceLab 是面向论文复现与代码审阅的本地工作台。当前技术�
 ```text
 backend/                 FastAPI、数据库、解析/分析/追溯/Agent 服务
 frontend/                Vue Web UI 与 Tauri 2 壳
+vscode-extension/        VS Code 扩展（工作区 `.tracelab/` 存储，见 docs/vscode-extension.md）
+packages/tracelab_core/  扩展用无头分析 CLI（parse / analyze / trace）
 server/                  独立账号、同步、Blob、管理员与部署服务
 docs/contracts/          按领域拆分的接口契约
 docs/collaboration/      四人协作边界与任务派发
