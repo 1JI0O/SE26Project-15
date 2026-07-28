@@ -7,9 +7,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.models.entities import AgentAnalysisArtifact, CodeRepository, PaperDocument
 from app.services.analysis_jobs import repository_edits_root
 from app.services.change_analysis import (
+    build_conflict_context,
     collect_repository_changes,
     get_change_impact,
     get_file_change,
@@ -120,6 +122,10 @@ class PublishArchitectureArguments(StrictModel):
 
 
 class ChangedFilesArguments(PageArguments):
+    pass
+
+
+class ConflictContextArguments(StrictModel):
     pass
 
 
@@ -386,6 +392,7 @@ TOOL_MODELS: dict[str, type[StrictModel]] = {
     "publish_trace_candidates": PublishTraceArguments,
     "finish_analysis": FinishAnalysisArguments,
     "dispatch_trace_subagents": DispatchSubagentsArguments,
+    "get_conflict_context": ConflictContextArguments,
     "list_changed_files": ChangedFilesArguments,
     "get_change_diff": ChangedPathArguments,
     "get_change_impact": ChangedPathArguments,
@@ -448,6 +455,13 @@ TOOL_DESCRIPTIONS = {
         "verify coverage against. Hints are navigation aids, not conclusions. At most 2 dispatch "
         "calls per analysis."
     ),
+    "get_conflict_context": (
+        "Read the revision-fixed conflict-context-v1 evidence package prepared from saved "
+        "changes. It combines exact diffs and hunks, affected symbols/callers/graph nodes, "
+        "affected traces, and trace-linked paper blocks. Inspect coverage before using granular "
+        "tools; only fetch sections explicitly marked truncated or evidence that is genuinely "
+        "missing."
+    ),
     "list_changed_files": (
         "List saved files that differ from the immutable imported repository, with hashes, "
         "changed-line counts, and hunk locations."
@@ -467,6 +481,8 @@ TOOL_DESCRIPTIONS = {
     "publish_conflict_report": (
         "Publish the final conflict-agent-v1 report exactly once. Every item must cite exact "
         "before/after code copied from get_change_diff. Paper claims need exact block quotes; "
+        "For a pure insertion or deletion, cite only the non-empty side of the hunk; never send "
+        "a change_evidence entry whose quote is empty. "
         "use association=inferred when no existing trace supports the paper association. Set "
         "language=zh-CN and write every user-visible title, description, recommendation, "
         "verification step, and unresolved item in Simplified Chinese. Keep paths, identifiers, "
@@ -502,6 +518,7 @@ def tool_definitions(kind: str, *, role: str = "parent") -> list[dict[str, Any]]
             "dispatch_trace_subagents",
         },
         "conflict": {
+            "get_conflict_context",
             "list_changed_files",
             "get_change_diff",
             "get_change_impact",
@@ -953,12 +970,45 @@ def _normalize_publish_arguments(tool_name: str, arguments: dict[str, Any]) -> d
         return arguments
     payload = arguments.get("payload")
     if isinstance(payload, dict):
-        return arguments
-    # No usable payload wrapper: treat the top-level dict as the payload itself.
-    flattened = {key: value for key, value in arguments.items() if key != "payload"}
-    if flattened:
-        return {"payload": flattened}
-    return arguments
+        normalized = arguments
+    else:
+        # No usable payload wrapper: treat the top-level dict as the payload itself.
+        flattened = {key: value for key, value in arguments.items() if key != "payload"}
+        if not flattened:
+            return arguments
+        normalized = {"payload": flattened}
+    if tool_name != "publish_conflict_report":
+        return normalized
+
+    # Pure insertions/deletions have one intentionally-empty hunk side. Models commonly copy
+    # both sides into change_evidence, including quote="". That empty entry carries no evidence
+    # and used to reject the entire otherwise-valid report at schema validation. Drop only those
+    # empty entries; every remaining entry still goes through exact path/range/quote validation,
+    # and an item with no non-empty evidence still fails ConflictItem.min_length.
+    conflict_payload = normalized.get("payload")
+    if not isinstance(conflict_payload, dict):
+        return normalized
+    items = conflict_payload.get("items")
+    if not isinstance(items, list):
+        return normalized
+    normalized_items: list[Any] = []
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            normalized_items.append(raw_item)
+            continue
+        item = dict(raw_item)
+        evidence = item.get("change_evidence")
+        if isinstance(evidence, list):
+            item["change_evidence"] = [
+                entry
+                for entry in evidence
+                if not isinstance(entry, dict)
+                or bool(str(entry.get("quote") or "").strip())
+            ]
+        normalized_items.append(item)
+    normalized_payload = dict(conflict_payload)
+    normalized_payload["items"] = normalized_items
+    return {**normalized, "payload": normalized_payload}
 
 
 def _execute_publish_trace(
@@ -1112,6 +1162,16 @@ def execute_tool(
             "total": len(items),
             "changed_line_count": changes["changed_line_count"],
         }
+    if isinstance(validated, ConflictContextArguments):
+        paper = session.get(PaperDocument, paper_id) if paper_id is not None else None
+        if paper is not None and paper.project_id != project_id:
+            raise ValueError("paper_document_not_found")
+        return build_conflict_context(
+            session,
+            repository,
+            paper,
+            settings.tracelab_llm_max_context_chars,
+        )
     if isinstance(validated, ChangedPathArguments):
         if tool_name == "get_change_diff":
             return get_file_change(repository, validated.path)

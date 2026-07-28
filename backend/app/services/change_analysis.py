@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import difflib
 import hashlib
+import json
 from typing import Any
 
 from sqlmodel import Session, select
@@ -11,6 +13,7 @@ from app.models.entities import (
     AgentAnalysisJob,
     CodeRepository,
     CodeTarget,
+    PaperDocument,
     TraceLink,
 )
 from app.services.analysis_jobs import analysis_is_current, repository_edits_root
@@ -108,16 +111,24 @@ def collect_repository_changes(repository: CodeRepository) -> dict[str, Any]:
     }
 
 
-def get_file_change(repository: CodeRepository, path: str) -> dict[str, Any]:
-    changes = collect_repository_changes(repository)
+def get_file_change(
+    repository: CodeRepository,
+    path: str,
+    changes: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    changes = changes or collect_repository_changes(repository)
     item = next((item for item in changes["files"] if item["path"] == path), None)
     if item is None:
         raise ValueError("changed_file_not_found")
     return item
 
 
-def get_change_impact(repository: CodeRepository, path: str) -> dict[str, Any]:
-    change = get_file_change(repository, path)
+def get_change_impact(
+    repository: CodeRepository,
+    path: str,
+    changes: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    change = get_file_change(repository, path, changes)
     after_ranges = [
         (int(hunk["after_start"]), int(hunk["after_end"])) for hunk in change["hunks"]
     ]
@@ -171,8 +182,9 @@ def list_affected_traces(
     session: Session,
     repository: CodeRepository,
     path: str | None = None,
+    changes: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    changes = collect_repository_changes(repository)
+    changes = changes or collect_repository_changes(repository)
     changed_by_path = {
         str(item["path"]): item
         for item in changes["files"]
@@ -255,6 +267,327 @@ def list_affected_traces(
             }
         )
     return affected
+
+
+def _paper_blocks(paper: PaperDocument | None) -> list[dict[str, Any]]:
+    if paper is None:
+        return []
+    blocks = [
+        block
+        for page in paper.pages_json
+        for block in page.get("blocks", [])
+        if isinstance(block, dict) and block.get("id")
+    ]
+    return blocks or [
+        dict(block)
+        for block in paper.paragraphs_json
+        if isinstance(block, dict) and block.get("id")
+    ]
+
+
+def _serialized_chars(payload: dict[str, Any]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
+
+
+def _minimal_file_context(
+    change: dict[str, Any],
+    impact: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "path": change["path"],
+        "before_sha256": change["before_sha256"],
+        "after_sha256": change["after_sha256"],
+        "changed_lines": change["changed_lines"],
+        "hunks": [
+            {
+                key: value
+                for key, value in hunk.items()
+                if key not in {"before_quote", "after_quote"}
+            }
+            for hunk in change["hunks"]
+        ],
+        "impact_summary": {
+            "affected_symbol_count": len(impact["affected_symbols"]),
+            "caller_count": len(impact["callers"]),
+            "graph_node_count": len(impact["graph_nodes"]),
+        },
+    }
+
+
+def _minimal_trace_context(trace: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: trace.get(key)
+        for key in (
+            "trace_id",
+            "paper_block_id",
+            "code_ref",
+            "status",
+            "previously_accepted",
+            "confidence",
+            "matched_path",
+            "matched_by",
+        )
+    }
+
+
+def _minimal_paper_context(block: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: block.get(key)
+        for key in ("id", "page_number", "section_path", "kind", "trace_ids")
+    }
+
+
+def build_conflict_context(
+    session: Session,
+    repository: CodeRepository,
+    paper: PaperDocument | None,
+    max_chars: int,
+) -> dict[str, Any]:
+    """Build one revision-fixed, size-bounded evidence package for conflict analysis."""
+
+    changes = collect_repository_changes(repository)
+    impacts = {
+        str(change["path"]): get_change_impact(
+            repository,
+            str(change["path"]),
+            changes,
+        )
+        for change in changes["files"]
+    }
+    traces = list_affected_traces(session, repository, changes=changes)
+    traces_by_path: dict[str, list[dict[str, Any]]] = {}
+    for trace in traces:
+        traces_by_path.setdefault(str(trace.get("matched_path") or ""), []).append(trace)
+
+    def file_priority(change: dict[str, Any]) -> tuple[int, int, int, int, str]:
+        path = str(change["path"])
+        related = traces_by_path.get(path, [])
+        impact = impacts[path]
+        return (
+            -int(any(bool(item.get("previously_accepted")) for item in related)),
+            -int(bool(related)),
+            -int(bool(impact["affected_symbols"] or impact["graph_nodes"])),
+            -int(change["changed_lines"]),
+            path,
+        )
+
+    ordered_changes = sorted(changes["files"], key=file_priority)
+    ordered_paths = [str(change["path"]) for change in ordered_changes]
+    path_rank = {path: index for index, path in enumerate(ordered_paths)}
+    ordered_traces = sorted(
+        traces,
+        key=lambda item: (
+            -int(bool(item.get("previously_accepted"))),
+            path_rank.get(str(item.get("matched_path") or ""), len(path_rank)),
+            -float(item.get("confidence") or 0),
+            str(item.get("trace_id") or ""),
+        ),
+    )
+
+    block_map = {str(block["id"]): block for block in _paper_blocks(paper)}
+    trace_ids_by_block: dict[str, list[str]] = {}
+    for trace in ordered_traces:
+        block_id = str(trace.get("paper_block_id") or "")
+        if block_id in block_map:
+            trace_ids_by_block.setdefault(block_id, []).append(str(trace["trace_id"]))
+    paper_blocks = [
+        {
+            **copy.deepcopy(block_map[block_id]),
+            "trace_ids": list(dict.fromkeys(trace_ids)),
+        }
+        for block_id, trace_ids in trace_ids_by_block.items()
+    ]
+    full_files = [
+        {
+            **copy.deepcopy(change),
+            "impact": copy.deepcopy(impacts[str(change["path"])]),
+        }
+        for change in ordered_changes
+    ]
+    summary = {
+        "changed_file_count": changes["changed_file_count"],
+        "changed_line_count": changes["changed_line_count"],
+        "affected_trace_count": len(ordered_traces),
+        "paper_block_count": len(paper_blocks),
+    }
+    full_context = {
+        "schema_version": "conflict-context-v1",
+        "repository_revision": repository.revision,
+        "baseline": changes["baseline"],
+        "summary": summary,
+        "files": full_files,
+        "affected_traces": copy.deepcopy(ordered_traces),
+        "paper_blocks": paper_blocks,
+        "coverage": {
+            "complete": True,
+            "included_file_count": len(full_files),
+            "complete_file_count": len(full_files),
+            "total_file_count": len(full_files),
+            "included_trace_count": len(ordered_traces),
+            "complete_trace_count": len(ordered_traces),
+            "total_trace_count": len(ordered_traces),
+            "included_paper_block_count": len(paper_blocks),
+            "complete_paper_block_count": len(paper_blocks),
+            "total_paper_block_count": len(paper_blocks),
+            "truncated_sections": [],
+            "truncated_paths": [],
+            "omitted_paths": [],
+            "omitted_trace_ids": [],
+            "omitted_paper_block_ids": [],
+        },
+    }
+    max_chars = max(1000, max_chars)
+    if _serialized_chars(full_context) <= max_chars:
+        return full_context
+
+    bounded: dict[str, Any] = {
+        "schema_version": "conflict-context-v1",
+        "repository_revision": repository.revision,
+        "baseline": changes["baseline"],
+        "summary": summary,
+        "files": [],
+        "affected_traces": [],
+        "paper_blocks": [],
+        "coverage": {
+            "complete": False,
+            "included_file_count": 0,
+            "complete_file_count": 0,
+            "total_file_count": len(full_files),
+            "included_trace_count": 0,
+            "complete_trace_count": 0,
+            "total_trace_count": len(ordered_traces),
+            "included_paper_block_count": 0,
+            "complete_paper_block_count": 0,
+            "total_paper_block_count": len(paper_blocks),
+            "truncated_sections": [],
+            "truncated_paths": [],
+            "omitted_paths": [],
+            "omitted_trace_ids": [],
+            "omitted_paper_block_ids": [],
+        },
+    }
+
+    def append_if_fits(section: str, value: dict[str, Any]) -> bool:
+        items = bounded[section]
+        items.append(value)
+        if _serialized_chars(bounded) <= max_chars:
+            return True
+        items.pop()
+        return False
+
+    complete_paths: set[str] = set()
+    truncated_paths: list[str] = []
+    omitted_paths: list[str] = []
+    for change, full in zip(ordered_changes, full_files, strict=True):
+        path = str(change["path"])
+        if append_if_fits("files", full):
+            complete_paths.add(path)
+        elif append_if_fits("files", _minimal_file_context(change, impacts[path])):
+            truncated_paths.append(path)
+        else:
+            omitted_paths.append(path)
+
+    complete_trace_ids: set[str] = set()
+    omitted_trace_ids: list[str] = []
+    for trace in ordered_traces:
+        trace_id = str(trace["trace_id"])
+        if append_if_fits("affected_traces", copy.deepcopy(trace)):
+            complete_trace_ids.add(trace_id)
+        elif append_if_fits("affected_traces", _minimal_trace_context(trace)):
+            pass
+        else:
+            omitted_trace_ids.append(trace_id)
+
+    complete_block_ids: set[str] = set()
+    omitted_block_ids: list[str] = []
+    for block in paper_blocks:
+        block_id = str(block["id"])
+        if append_if_fits("paper_blocks", copy.deepcopy(block)):
+            complete_block_ids.add(block_id)
+        elif append_if_fits("paper_blocks", _minimal_paper_context(block)):
+            pass
+        else:
+            omitted_block_ids.append(block_id)
+
+    coverage = bounded["coverage"]
+    coverage.update(
+        {
+            "included_file_count": len(bounded["files"]),
+            "complete_file_count": len(complete_paths),
+            "included_trace_count": len(bounded["affected_traces"]),
+            "complete_trace_count": len(complete_trace_ids),
+            "included_paper_block_count": len(bounded["paper_blocks"]),
+            "complete_paper_block_count": len(complete_block_ids),
+            "truncated_sections": [
+                section
+                for section, truncated in (
+                    ("files.diff", len(complete_paths) < len(full_files)),
+                    ("files.hunks", len(complete_paths) < len(full_files)),
+                    ("files.impact", len(complete_paths) < len(full_files)),
+                    (
+                        "affected_traces",
+                        len(complete_trace_ids) < len(ordered_traces),
+                    ),
+                    ("paper_blocks", len(complete_block_ids) < len(paper_blocks)),
+                )
+                if truncated
+            ],
+            "truncated_paths": truncated_paths[:100],
+            "omitted_paths": omitted_paths[:100],
+            "omitted_trace_ids": omitted_trace_ids[:100],
+            "omitted_paper_block_ids": omitted_block_ids[:100],
+        }
+    )
+    while _serialized_chars(bounded) > max_chars:
+        if bounded["paper_blocks"]:
+            removed = bounded["paper_blocks"].pop()
+            block_id = str(removed.get("id") or "")
+            complete_block_ids.discard(block_id)
+            if block_id and block_id not in coverage["omitted_paper_block_ids"]:
+                coverage["omitted_paper_block_ids"].append(block_id)
+        elif bounded["affected_traces"]:
+            removed = bounded["affected_traces"].pop()
+            trace_id = str(removed.get("trace_id") or "")
+            complete_trace_ids.discard(trace_id)
+            if trace_id and trace_id not in coverage["omitted_trace_ids"]:
+                coverage["omitted_trace_ids"].append(trace_id)
+        elif bounded["files"]:
+            removed = bounded["files"].pop()
+            path = str(removed.get("path") or "")
+            complete_paths.discard(path)
+            if path in truncated_paths:
+                truncated_paths.remove(path)
+            if path and path not in coverage["omitted_paths"]:
+                coverage["omitted_paths"].append(path)
+        else:
+            shrinkable = next(
+                (
+                    coverage[key]
+                    for key in (
+                        "omitted_paths",
+                        "omitted_trace_ids",
+                        "omitted_paper_block_ids",
+                        "truncated_paths",
+                    )
+                    if coverage[key]
+                ),
+                None,
+            )
+            if shrinkable is None:
+                break
+            shrinkable.pop()
+    coverage.update(
+        {
+            "included_file_count": len(bounded["files"]),
+            "complete_file_count": len(complete_paths),
+            "included_trace_count": len(bounded["affected_traces"]),
+            "complete_trace_count": len(complete_trace_ids),
+            "included_paper_block_count": len(bounded["paper_blocks"]),
+            "complete_paper_block_count": len(complete_block_ids),
+            "truncated_paths": truncated_paths[:100],
+        }
+    )
+    return bounded
 
 
 def latest_conflict_artifact(

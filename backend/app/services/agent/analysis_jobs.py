@@ -314,22 +314,25 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
         request = (
             f"Analyze saved modifications in repository revision {job.code_revision} against "
             "the immutable imported baseline. Produce a read-only conflict report.\n\n"
-            "STAGE 1 — CHANGE FACTS. Call list_changed_files, then get_change_diff for every "
-            "changed file. Treat these exact before/after hunks as the only modification facts.\n\n"
-            "STAGE 2 — CODE IMPACT. Call get_change_impact for each changed file. Inspect affected "
-            "symbols, callers, graph nodes, and relevant current source. Evaluate behavioral "
-            "regressions, tensor/API/control-flow changes, and configuration risks.\n\n"
-            "STAGE 3 — TRACE AND PAPER. Call list_affected_traces. For each affected trace, read "
-            "its paper block with get_paper_block and decide whether the implementation still "
-            "matches the paper claim. A stale trace with previously_accepted=true was accepted "
-            "before the edit and deserves extra scrutiny. If no trace covers an important change "
-            "and a paper is available, search/read the paper and mark that paper evidence as "
-            "association=inferred. If no paper is available, perform code-only analysis and do "
-            "not invent paper evidence.\n\n"
-            "STAGE 4 — REPORT. Use only these categories: paper_consistency, "
+            "PREFETCHED EVIDENCE. Initial tool_results contain a prefetched "
+            "get_conflict_context entry. Inspect it before calling any tool. If ok=false, use "
+            "the granular change, impact, trace, and paper tools. If ok=true, its result contains "
+            "exact changes, code impact, affected traces, and trace-linked paper blocks. When "
+            "coverage.complete=true, do not repeat list_changed_files, get_change_diff, "
+            "get_change_impact, list_affected_traces, or get_paper_block for evidence already "
+            "present. Read extra source only for a concrete ambiguity, then publish. When "
+            "coverage.complete=false, use granular tools only for paths or sections named in "
+            "coverage.truncated_sections, truncated_paths, or omitted references. A stale trace "
+            "with previously_accepted=true was accepted before the edit and deserves extra "
+            "scrutiny. If no trace covers an important change and a paper is available, "
+            "search/read the paper and mark that paper evidence as association=inferred. If no "
+            "paper is available, perform code-only analysis and do not invent paper evidence.\n\n"
+            "REPORT. Use only these categories: paper_consistency, "
             "behavior_regression, trace_invalidation, trace_coverage, configuration_risk. Every "
             "item must cite a verbatim non-empty before or after quote from get_change_diff with "
-            "its real line range. Paper claims require verbatim get_paper_block quotes. Separate "
+            "its real line range. For a pure insertion or deletion, include only the non-empty "
+            "side in change_evidence; never submit quote=\"\". Paper claims require verbatim "
+            "get_paper_block quotes. Separate "
             "severity from confidence and give concrete recommendations and verification steps. "
             "OUTPUT LANGUAGE IS MANDATORY: set language=zh-CN and write every user-visible title, "
             "description, recommendation, verification step, and unresolved item in Simplified "
@@ -391,6 +394,8 @@ def _activity(tool_name: str, arguments: dict[str, Any]) -> str:
             return f"并行取证：派发 {count} 个区域子代理"
         case "publish_architecture_graph":
             return "发布架构图"
+        case "get_conflict_context":
+            return "准备冲突分析上下文"
         case "list_changed_files":
             return "收集已保存的代码修改"
         case "get_change_diff":
@@ -912,9 +917,6 @@ def _execute_job(job_id: str) -> None:
             emitter.emit("analysis.started", {"job_id": job.job_id, "kind": job.kind})
             soft_target = _trace_soft_target(session, job) if job.kind == "trace" else 40
             system_prompt, request = _system_prompt(job, soft_target)
-            change_snapshot = (
-                collect_repository_changes(repository) if job.kind == "conflict" else {}
-            )
             context = {
                 "system_prompt": system_prompt,
                 "history": [],
@@ -931,14 +933,6 @@ def _execute_job(job_id: str) -> None:
                     "repository_file_count": len(repository.file_tree_json),
                     "indexed_symbol_count": len(repository.symbols_json),
                     "paper_available": job.paper_document_id is not None,
-                    **(
-                        {
-                            "changed_file_count": change_snapshot["changed_file_count"],
-                            "changed_line_count": change_snapshot["changed_line_count"],
-                        }
-                        if job.kind == "conflict"
-                        else {}
-                    ),
                 },
                 "memories": [],
                 "skills": [{"name": f"{job.kind}-analysis", "instructions": system_prompt}],
@@ -948,13 +942,105 @@ def _execute_job(job_id: str) -> None:
             # Accumulate trace entries in memory; write to DB exactly once at finalization to
             # avoid hundreds of large JSON blob commits that cause SQLite write-lock contention.
             trace_entries: list[dict[str, Any]] = []
+            prefetched_conflict_context: dict[str, Any] | None = None
+            if job.kind == "conflict":
+                try:
+                    prefetched_conflict_context = execute_tool(
+                        session,
+                        job.project_id,
+                        job.code_repository_id,
+                        job.paper_document_id,
+                        job.requested_depth,
+                        "get_conflict_context",
+                        {},
+                    )
+                except (ValidationError, ValueError) as exc:
+                    feedback = {
+                        "tool": "get_conflict_context",
+                        "ok": False,
+                        "error": str(exc)[:240] or "conflict_context_prefetch_failed",
+                        "instruction": (
+                            "The aggregate prefetch failed. Use the granular change, impact, "
+                            "trace, and paper tools before publishing."
+                        ),
+                    }
+                    tool_results.append(feedback)
+                    _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
+                    emitter.emit(
+                        "analysis.tool.failed",
+                        {
+                            "tool_name": "get_conflict_context",
+                            "code": "conflict_context_prefetch_failed",
+                            "step": 0,
+                        },
+                    )
+                else:
+                    feedback = {
+                        "tool": "get_conflict_context",
+                        "ok": True,
+                        "prefetched": True,
+                        "result": prefetched_conflict_context,
+                        "instruction": (
+                            "Use this evidence package first. Only fetch granular evidence named "
+                            "as truncated or genuinely missing."
+                        ),
+                    }
+                    tool_results.append(feedback)
+                    summary = prefetched_conflict_context.get("summary", {})
+                    coverage = prefetched_conflict_context.get("coverage", {})
+                    context["environment"].update(
+                        {
+                            "changed_file_count": summary.get("changed_file_count", 0),
+                            "changed_line_count": summary.get("changed_line_count", 0),
+                        }
+                    )
+                    _trace_step(
+                        run,
+                        {
+                            "type": "tool_result",
+                            "tool": "get_conflict_context",
+                            "ok": True,
+                            "prefetched": True,
+                            "summary": summary,
+                            "coverage": coverage,
+                        },
+                        trace_entries,
+                    )
+                    emitter.emit(
+                        "analysis.tool.completed",
+                        {
+                            "tool_name": "get_conflict_context",
+                            "activity": (
+                                f"已准备 {summary.get('changed_file_count', 0)} 个修改文件、"
+                                f"{summary.get('affected_trace_count', 0)} 条追溯、"
+                                f"{summary.get('paper_block_count', 0)} 个论文块"
+                            ),
+                            "step": 0,
+                            "prefetched": True,
+                            "coverage_complete": bool(coverage.get("complete")),
+                        },
+                    )
             # Transient provider hiccups (malformed/truncated JSON on a big publish payload,
             # empty responses, rate limits) should not kill an otherwise-successful run. Retry
             # them a bounded number of times before giving up.
             provider_failures = 0
             # Hard safety cap on tool steps only. Normal termination is the model calling
             # finish_analysis (trace) or publishing once (architecture); soft_target just nudges.
-            budget = 48 if job.kind == "architecture" else 64 if job.kind == "conflict" else 100
+            conflict_context_complete = bool(
+                prefetched_conflict_context
+                and prefetched_conflict_context.get("coverage", {}).get("complete")
+            )
+            budget = (
+                48
+                if job.kind == "architecture"
+                else 32
+                if job.kind == "conflict" and conflict_context_complete
+                else 64
+                if job.kind == "conflict"
+                else 100
+            )
+            if job.kind == "conflict":
+                soft_target = 12 if conflict_context_complete else 40
             # Cache identical read results so the model does not burn steps/tokens re-reading the
             # same block or code window, and nudge it toward publishing once it has the evidence.
             seen_calls: dict[str, dict[str, Any]] = {}
@@ -968,11 +1054,14 @@ def _execute_job(job_id: str) -> None:
                 "list_paper_blocks",
                 "get_paper_block",
                 "get_analysis_artifact",
+                "get_conflict_context",
                 "list_changed_files",
                 "get_change_diff",
                 "get_change_impact",
                 "list_affected_traces",
             }
+            if prefetched_conflict_context is not None:
+                seen_calls["get_conflict_context|{}"] = prefetched_conflict_context
             converge_nudged = False
             dispatch_calls = 0
             dispatched_regions = 0

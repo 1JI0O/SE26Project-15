@@ -75,7 +75,7 @@
             <strong>{{ item.title }}</strong>
             <small>{{ item.summary }}</small>
           </div>
-          <span class="tool-step">第 {{ item.step }} 步</span>
+          <span class="tool-step">{{ item.step === 0 ? '预取' : `第 ${item.step} 步` }}</span>
         </article>
       </div>
       <p v-else class="process-waiting">正在准备代码、论文与追溯上下文…</p>

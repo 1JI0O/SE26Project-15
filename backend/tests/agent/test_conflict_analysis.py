@@ -1,7 +1,9 @@
+import json
 import zipfile
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, select
@@ -10,6 +12,7 @@ from app.core.config import settings
 from app.models.entities import (
     AgentAnalysisArtifact,
     AgentAnalysisJob,
+    AgentRunEvent,
     CodeRepository,
     CodeTarget,
     PaperDocument,
@@ -25,6 +28,7 @@ from app.services.agent.provider import AgentProviderStep
 from app.services.analysis_jobs import ANALYZER_VERSION, repository_edits_root
 from app.services.change_analysis import (
     build_change_summary,
+    build_conflict_context,
     collect_repository_changes,
     get_change_impact,
     list_affected_traces,
@@ -178,12 +182,80 @@ def test_affected_traces_prefers_precise_target_and_preserves_review_signal(
             decided_at=utc_now(),
         )
         session.add(link)
+        session.add(
+            TraceLink(
+                project_id=project.id or 0,
+                paper_document_id=paper.id,
+                paper_ref="paper-method",
+                code_repository_id=code.id,
+                code_revision=1,
+                code_ref="model.py::transform-secondary",
+                code_target_id=target.target_id,
+                relation_type="mentions",
+                confidence=0.7,
+            )
+        )
         session.commit()
         affected = list_affected_traces(session, code)
+        context = build_conflict_context(session, code, paper, 12_000)
 
     assert affected[0]["trace_id"] == link.trace_id
     assert affected[0]["matched_by"] == "code_target"
     assert affected[0]["previously_accepted"] is True
+    assert context["schema_version"] == "conflict-context-v1"
+    assert context["coverage"]["complete"] is True
+    assert context["files"][0]["impact"]["affected_symbols"][0]["id"] == "model.py::transform"
+    assert len(context["affected_traces"]) == 2
+    assert len(context["paper_blocks"]) == 1
+    assert context["paper_blocks"][0]["id"] == "paper-method"
+    assert len(context["paper_blocks"][0]["trace_ids"]) == 2
+
+
+def test_conflict_context_is_bounded_and_reports_truncation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _session() as session:
+        _project, paper, code = _artifacts(session, tmp_path, monkeypatch)
+        context = build_conflict_context(session, code, paper, 1000)
+
+    assert context["coverage"]["complete"] is False
+    assert "files.diff" in context["coverage"]["truncated_sections"]
+    assert context["coverage"]["total_file_count"] == 1
+    assert context["summary"]["changed_file_count"] == 1
+    assert len(json.dumps(context, ensure_ascii=False, separators=(",", ":"))) <= 1000
+
+
+def test_get_conflict_context_tool_uses_single_change_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import change_analysis
+
+    with _session() as session:
+        project, paper, code = _artifacts(session, tmp_path, monkeypatch)
+        original = change_analysis.collect_repository_changes
+        calls = 0
+
+        def counted(repository):  # noqa: ANN001, ANN202
+            nonlocal calls
+            calls += 1
+            return original(repository)
+
+        monkeypatch.setattr(change_analysis, "collect_repository_changes", counted)
+        context = execute_tool(
+            session,
+            project.id or 0,
+            code.id or 0,
+            paper.id,
+            2,
+            "get_conflict_context",
+            {},
+        )
+
+    assert calls == 1
+    assert context["repository_revision"] == 1
+    assert context["files"][0]["path"] == "model.py"
 
 
 def test_publish_conflict_report_validates_and_assigns_stable_id(
@@ -223,7 +295,14 @@ def test_publish_conflict_report_validates_and_assigns_stable_id(
                             "line_start": 2,
                             "line_end": 2,
                             "quote": "return x * 2",
-                        }
+                        },
+                        {
+                            "side": "before",
+                            "path": "model.py",
+                            "line_start": 2,
+                            "line_end": 2,
+                            "quote": "",
+                        },
                     ],
                     "affected_symbols": ["model.py::transform"],
                     "affected_files": ["invented.py"],
@@ -272,11 +351,31 @@ def test_publish_conflict_report_validates_and_assigns_stable_id(
                 "publish_conflict_report",
                 {"payload": payload},
             )
+        payload["items"][0]["change_evidence"] = [
+            {
+                "side": "after",
+                "path": "model.py",
+                "line_start": 2,
+                "line_end": 2,
+                "quote": "",
+            }
+        ]
+        with pytest.raises(ValidationError):
+            execute_tool(
+                session,
+                project.id or 0,
+                code.id or 0,
+                paper.id,
+                2,
+                "publish_conflict_report",
+                {"payload": payload},
+            )
 
     assert result["payload"]["schema_version"] == "conflict-agent-v1"
     assert result["payload"]["language"] == "zh-CN"
     assert result["payload"]["items"][0]["confidence"] == 0.95
     assert result["payload"]["items"][0]["severity"] == "high"
+    assert len(result["payload"]["items"][0]["change_evidence"]) == 1
     assert result["payload"]["items"][0]["id"].startswith("conflict-")
     assert result["payload"]["items"][0]["id"] != "model-generated-id"
     assert result["payload"]["items"][0]["affected_files"] == ["model.py"]
@@ -332,7 +431,14 @@ class _ConflictProvider:
     provider_name = "stub"
     model_name = "stub"
 
+    def __init__(self) -> None:
+        self.calls = 0
+        self.first_tool_results = None
+
     def next_step(self, message, context, tool_results):  # noqa: ANN001, ANN201
+        self.calls += 1
+        if self.first_tool_results is None:
+            self.first_tool_results = tool_results
         revision = context["active_context"]["repository_revision"]
         return AgentProviderStep(
             action="tool",
@@ -373,6 +479,67 @@ class _ConflictProvider:
         )
 
 
+class _RepeatContextProvider(_ConflictProvider):
+    def next_step(self, message, context, tool_results):  # noqa: ANN001, ANN201
+        if self.calls == 0:
+            self.calls = 1
+            self.first_tool_results = tool_results
+            return AgentProviderStep(
+                action="tool",
+                tool_name="get_conflict_context",
+                arguments={},
+            )
+        return super().next_step(message, context, tool_results)
+
+
+def test_conflict_worker_reuses_prefetched_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'conflict-cache.db'}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        project, _paper, _code = _artifacts(session, tmp_path, monkeypatch)
+        project_id = project.id or 0
+        monkeypatch.setattr(analysis_jobs, "_submit", lambda _job_id: None)
+        job = create_analysis_job(
+            session,
+            project_id,
+            AgentAnalysisJobCreate(kind="conflict"),
+        )
+        job_id = job.job_id
+
+    provider = _RepeatContextProvider()
+    original_execute = analysis_jobs.execute_tool
+    context_calls = 0
+
+    def counted_execute(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        nonlocal context_calls
+        tool_name = args[5] if len(args) > 5 else kwargs.get("tool_name")
+        if tool_name == "get_conflict_context":
+            context_calls += 1
+        return original_execute(*args, **kwargs)
+
+    monkeypatch.setattr(analysis_jobs, "engine", engine)
+    monkeypatch.setattr(analysis_jobs, "execute_tool", counted_execute)
+    monkeypatch.setattr(
+        analysis_jobs,
+        "_provider_from_settings",
+        lambda _session, for_analysis=False: (provider, None),
+    )
+    analysis_jobs._execute_job(job_id)
+
+    with Session(engine) as session:
+        completed = session.get(AgentAnalysisJob, job_id)
+
+    assert completed is not None and completed.status == "succeeded"
+    assert provider.calls == 2
+    assert context_calls == 1
+
+
 def test_conflict_worker_publishes_terminal_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -394,10 +561,11 @@ def test_conflict_worker_publishes_terminal_artifact(
         job_id = job.job_id
 
     monkeypatch.setattr(analysis_jobs, "engine", engine)
+    provider = _ConflictProvider()
     monkeypatch.setattr(
         analysis_jobs,
         "_provider_from_settings",
-        lambda _session, for_analysis=False: (_ConflictProvider(), None),
+        lambda _session, for_analysis=False: (provider, None),
     )
     analysis_jobs._execute_job(job_id)
 
@@ -406,8 +574,28 @@ def test_conflict_worker_publishes_terminal_artifact(
         artifact = session.exec(
             select(AgentAnalysisArtifact).where(AgentAnalysisArtifact.job_id == job_id)
         ).one()
+        prefetch_event = session.exec(
+            select(AgentRunEvent).where(
+                AgentRunEvent.run_id == completed.agent_run_id,
+                AgentRunEvent.event_type == "analysis.tool.completed",
+            )
+        ).first()
+        publish_event = session.exec(
+            select(AgentRunEvent).where(
+                AgentRunEvent.run_id == completed.agent_run_id,
+                AgentRunEvent.event_type == "analysis.tool.started",
+            )
+        ).first()
 
     assert completed is not None and completed.status == "succeeded"
+    assert provider.calls == 1
+    assert provider.first_tool_results[0]["tool"] == "get_conflict_context"
+    assert provider.first_tool_results[0]["prefetched"] is True
+    assert prefetch_event is not None
+    assert prefetch_event.payload_json["step"] == 0
+    assert prefetch_event.payload_json["coverage_complete"] is True
+    assert publish_event is not None
+    assert publish_event.payload_json["budget"] == 32
     assert artifact.kind == "conflict"
     assert artifact.schema_version == "conflict-agent-v1"
     assert artifact.payload_json["summary"]["high"] == 1

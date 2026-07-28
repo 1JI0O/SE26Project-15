@@ -57,6 +57,7 @@ function analysisErrorMessage(code: string): string {
 
 function toolTitle(toolName: string): string {
   const labels: Record<string, string> = {
+    get_conflict_context: '准备冲突分析上下文',
     list_changed_files: '收集代码修改',
     get_change_diff: '核对文件差异',
     get_change_impact: '分析代码影响范围',
@@ -76,7 +77,14 @@ function toolTitle(toolName: string): string {
   return labels[toolName] ?? '执行分析工具'
 }
 
-function toolFailureSummary(code: string): string {
+function toolFailureSummary(code: string, details = ''): string {
+  if (
+    code === 'invalid_tool_arguments'
+    && details.includes('change_evidence')
+    && details.includes('quote')
+  ) {
+    return '代码证据引文为空，Agent 将移除无内容的一侧后重试'
+  }
   const labels: Record<string, string> = {
     invalid_tool_arguments: '参数未通过校验，Agent 将修正后重试',
     conflict_output_must_be_chinese: '报告语言未通过校验，Agent 将改写后重试',
@@ -229,16 +237,21 @@ export function useInsights(projectId: () => number) {
               step,
               tool_name: toolName,
               title: toolTitle(toolName),
-              summary: payload.reused ? '已复用前一步取得的证据' : '已完成',
+              summary: payload.reused
+                ? '已复用前一步取得的证据'
+                : payload.prefetched && typeof message === 'string'
+                  ? message
+                  : '已完成',
               status: 'completed',
             })
           } else if (event.event_type === 'analysis.tool.failed' && toolName) {
             const code = String(payload.code ?? 'analysis_step_failed')
+            const details = String(payload.details ?? '')
             upsertAnalysisStep({
               step,
               tool_name: toolName,
               title: toolTitle(toolName),
-              summary: toolFailureSummary(code),
+              summary: toolFailureSummary(code, details),
               status: 'failed',
             })
           }
