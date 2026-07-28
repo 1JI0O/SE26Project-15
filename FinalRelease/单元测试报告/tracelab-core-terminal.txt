@@ -1,0 +1,15 @@
+TraceLab VS Code headless core selected subsystem
+Executed: 2026-07-28
+Baseline: c21588a plus current test/fix worktree
+
+46 passed in 0.58s
+
+Name                         Stmts   Miss  Cover
+--------------------------------------------------
+tracelab_core/probe.py          91      0   100%
+tracelab_core/review.py         93      0   100%
+tracelab_core/workspace.py      91      0   100%
+--------------------------------------------------
+TOTAL                          275      0   100%
+
+Required test coverage of 90.01% reached. Total coverage: 100.00%

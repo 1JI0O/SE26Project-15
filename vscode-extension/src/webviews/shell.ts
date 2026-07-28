@@ -1,8 +1,10 @@
 import * as vscode from 'vscode'
 
+export { escapeHtml, jsonForScript } from './webviewUtils'
+
 /** Shared webview scaffolding: CSP, nonce, asset URIs and HTML escaping. */
 export interface ShellAssets {
-  /** `media/…` relative path → webview URI. */
+  /** `media/...` relative path to webview URI. */
   media: (rel: string) => string
   nonce: string
   csp: string
@@ -41,23 +43,4 @@ function createNonce(): string {
     out += chars.charAt(Math.floor(Math.random() * chars.length))
   }
   return out
-}
-
-export function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-}
-
-/** Inline JSON payload for a `<script>` tag without breaking out of it. */
-export function jsonForScript(value: unknown): string {
-  return JSON.stringify(value ?? null)
-    .replaceAll('<', '\\u003c')
-    .replaceAll('>', '\\u003e')
-    .replaceAll('&', '\\u0026')
-    .replaceAll(' ', '\\u2028')
-    .replaceAll(' ', '\\u2029')
 }

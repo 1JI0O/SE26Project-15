@@ -38,7 +38,12 @@ def probe_llm(config: dict[str, Any]) -> dict[str, Any]:
     model = str(config.get("model", "")).strip()
     timeout = float(config.get("timeout_seconds", 30))
     if not base_url:
-        return {"ok": False, "target": "llm", "code": "missing_base_url", "detail": "未填写 API 地址"}
+        return {
+            "ok": False,
+            "target": "llm",
+            "code": "missing_base_url",
+            "detail": "未填写 API 地址",
+        }
     if not model:
         return {"ok": False, "target": "llm", "code": "missing_model", "detail": "未填写模型名称"}
     if not api_key:
