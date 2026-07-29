@@ -110,6 +110,7 @@ export function createTraceLabLspClient(
 ): LSPClient {
   return new LSPClient({
     rootUri: checkoutDirUri(checkoutRoot),
+    timeout: 15_000,
     extensions: languageServerExtensions(),
     workspace: (client) => new TraceLabWorkspace(client, checkoutRoot, openRelativePath),
   })
