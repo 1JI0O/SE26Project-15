@@ -1,6 +1,6 @@
 TraceLab VS Code extension compile and unit tests
 Executed: 2026-07-28
-Baseline: c21588a plus current test/fix worktree
+Baseline: b79ae8e plus current test/fix worktree
 
 TypeScript compile: passed
 Node test runner: 3 passed, 0 failed, 0 skipped

@@ -8,7 +8,13 @@ from sqlmodel import Session, SQLModel, select
 
 from app.api.routes.traces import router
 from app.db.session import get_session
-from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
+from app.models.entities import (
+    CodeRepository,
+    PaperDocument,
+    Project,
+    RagIndexState,
+    TraceLink,
+)
 
 
 def test_trace_api_generation_and_review_contract() -> None:
@@ -396,12 +402,31 @@ def test_clear_agent_scope_spares_manual_relations() -> None:
 
 def test_clear_all_scope_empties_the_project() -> None:
     engine, project_id = _clear_fixture_engine()
+    with Session(engine) as session:
+        session.add(
+            RagIndexState(
+                project_id=project_id,
+                scope="trace",
+                status="ready",
+                source_key="reviewed-generation",
+                chunk_count=2,
+            )
+        )
+        session.commit()
     with _clear_client(engine) as client:
         cleared = client.delete(
             f"/api/v1/projects/{project_id}/trace-links", params={"scope": "all"}
         )
         assert cleared.json() == {"scope": "all", "deleted_count": 4, "kept_count": 0}
         assert client.get(f"/api/v1/projects/{project_id}/trace-links").json() == []
+    with Session(engine) as session:
+        state = session.exec(
+            select(RagIndexState).where(
+                RagIndexState.project_id == project_id,
+                RagIndexState.scope == "trace",
+            )
+        ).one()
+        assert state.status == "pending"
 
 
 def test_clear_rejects_unknown_scope() -> None:

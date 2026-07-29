@@ -86,12 +86,13 @@ class PaperParsingService:
 
     def get(self, job_id: str) -> PaperParseJob | None:
         path = self.jobs_root / f"{job_id}.json"
-        if not path.exists():
-            return None
-        try:
-            return PaperParseJob(**json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            return None
+        with self._lock:
+            if not path.exists():
+                return None
+            try:
+                return PaperParseJob(**json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                return None
 
     def result(self, job_id: str) -> dict[str, Any] | None:
         job = self.get(job_id)

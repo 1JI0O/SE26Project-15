@@ -1,8 +1,6 @@
-TraceLab complete backend regression
-Executed: 2026-07-28
-Baseline: c21588a plus current test/fix worktree
-
-231 passed, 1 warning in 50.65s
-
-The 231 tests include backend/tests and FinalRelease/单元测试代码 as configured by
-backend/pyproject.toml. The warning is non-failing and did not skip any test.
+........................................................................ [ 23%]
+........................................................................ [ 47%]
+........................................................................ [ 70%]
+........................................................................ [ 94%]
+..................                                                       [100%]
+306 passed, 1 warning in 50.88s
