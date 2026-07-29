@@ -1,6 +1,6 @@
-TraceLab browser compatibility automated subflow
-Executed: 2026-07-28
-Baseline: c21588a plus current test/fix worktree
+Command: pnpm test:system
+Executed: 2026-07-29
+Baseline: b79ae8e plus current test/fix worktree
 
 Projects:
 - chrome-1366x768
@@ -10,8 +10,10 @@ Projects:
 - firefox-1366x768
 - firefox-1920x1080
 
-Result: 6 passed in 29.4s
+Initial run: 5 passed, 1 failed.
+Initial failure: the first Chrome cold-start run entered the correct project URL but the workspace remained loading beyond the global 8-second assertion timeout.
+Adjustment: project-data visibility now has a local 20-second timeout; HTTP, console, layout, and functional assertions are unchanged.
 
-Scope: project creation, blank-name alternative flow, return/reopen, desktop
-layout overflow, unexpected HTTP/console/page errors. This does not cover the
-complete PDF, code edit, conflict analysis, terminal, Agent, or VS Code flows.
+Final rerun: 6 passed, 0 failed, 38.4 seconds.
+JUnit: playwright-junit.xml
+HTML report: playwright-html/index.html

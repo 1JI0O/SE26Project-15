@@ -1,4 +1,5 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app.services.document_parsers.jobs import PaperParsingService
@@ -53,3 +54,25 @@ def test_parse_job_records_parser_failure(tmp_path: Path) -> None:
     failed = service.get(job.id)
     assert failed is not None
     assert "MinerU is offline" in str(failed.error)
+
+
+def test_get_waits_for_an_in_progress_job_file_update(tmp_path: Path) -> None:
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-stub")
+    service = PaperParsingService(StubParser(), root=tmp_path / "jobs")
+    job = service.submit(1, "paper.pdf", pdf)
+    assert _wait(service, job.id) == "succeeded"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        service._lock.acquire()
+        try:
+            pending_read = executor.submit(service.get, job.id)
+            time.sleep(0.02)
+            was_blocked = not pending_read.done()
+        finally:
+            service._lock.release()
+        restored = pending_read.result(timeout=1)
+
+    assert was_blocked
+    assert restored is not None
+    assert restored.id == job.id

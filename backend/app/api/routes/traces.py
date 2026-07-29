@@ -359,6 +359,9 @@ def clear_trace_links(
     session.flush()
     _prune_orphan_targets(session, project_id)
     session.commit()
+    reviewed_statuses = {TraceStatus.ACCEPTED.value, TraceStatus.REJECTED.value}
+    if any(link.status in reviewed_statuses for link in doomed):
+        _invalidate_trace_index(session, project_id)
     return TraceClearResult(
         scope=scope,
         deleted_count=len(doomed),

@@ -36,7 +36,9 @@ test('项目基本流、名称备选流与桌面布局兼容性', async ({ page 
   await page.getByPlaceholder('项目说明（可选）').fill('浏览器兼容性自动化测试')
   await createButton.click()
   await expect(page).toHaveURL(/\/projects\/\d+$/)
-  await expect(page.getByText(projectName, { exact: true }).first()).toBeVisible()
+  await expect(page.getByText(projectName, { exact: true }).first()).toBeVisible({
+    timeout: 20_000,
+  })
 
   const projectId = Number(new URL(page.url()).pathname.split('/').pop())
   expect(Number.isInteger(projectId)).toBe(true)

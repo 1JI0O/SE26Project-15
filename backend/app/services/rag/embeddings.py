@@ -165,18 +165,20 @@ class RemoteEmbedder:
             raise EmbeddingError("embedding_rate_limited")
         if response.status_code >= 400:
             raise EmbeddingError(f"embedding_http_{response.status_code}")
+        vectors: list[list[float]] = []
         try:
             data = response.json()["data"]
-        except (ValueError, KeyError, TypeError) as exc:
+            if not isinstance(data, list):
+                raise TypeError("embedding data must be a list")
+            # Providers may reorder; ``index`` is authoritative when present.
+            ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
+            for item in ordered:
+                values = item.get("embedding")
+                if not isinstance(values, list) or not values:
+                    raise TypeError("embedding vector must be a non-empty list")
+                vectors.append(_normalize([float(value) for value in values]))
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
             raise EmbeddingError("embedding_response_invalid") from exc
-        vectors: list[list[float]] = []
-        # Providers may reorder; ``index`` is authoritative when present.
-        ordered = sorted(data, key=lambda item: int(item.get("index", 0)))
-        for item in ordered:
-            values = item.get("embedding")
-            if not isinstance(values, list) or not values:
-                raise EmbeddingError("embedding_response_invalid")
-            vectors.append(_normalize([float(value) for value in values]))
         if len(vectors) != len(batch):
             raise EmbeddingError("embedding_count_mismatch")
         return vectors
