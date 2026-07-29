@@ -294,7 +294,8 @@ flowchart LR
 | `traces.py` | `/trace-links`、`/trace-links/suggest`、`/trace-links/{trace_id}/status`、`workspace/trace-matrix` | `tracing.service`、`workspace_service` | 生成、持久化、审阅和矩阵 |
 | `workspace.py` | `/workspace`、`flow-graph`、`conflicts`、`report-summary`、`workspace/analyze` | `workspace_service`、`analysis_jobs` | 主工作台聚合读模型和分析入口 |
 | `agent.py` | `/agent/capabilities`、`conversations`、`runs`、`events`、`memories`、`confirmations`、`query` | `agent/*` | Agent 对话、Run、SSE、工具、能力、记忆和确认 |
-| `integration_settings.py` | `/settings/integrations` | `integration_settings`、`IntegrationConfig` | Agent/MinerU 地址、模型、开关和密钥配置 |
+| `integration_settings.py` | `/settings/integrations` | `integration_settings`、`IntegrationConfig` | Agent/MinerU/语义检索地址、模型、开关和密钥配置 |
+| `rag.py` | `/projects/{id}/rag/status`、`rag/rebuild`、`rag/search` | `services/rag` | 语义检索索引状态、重建与直接检索 |
 
 `main.py` 的 lifespan 启动顺序是：`init_db()` → 注册仓库分析回调 → 恢复仓库分析任务 → 恢复未结束 Agent Run。这样后台任务和 SSE 事件在进程重启后仍能从落盘状态继续。
 
@@ -390,6 +391,21 @@ flowchart LR
 `static_candidates.py` 以论文块、代码 symbol、模块名和 token 重叠生成低成本候选；`provider.py` 可用 LLM 补充 confidence、rationale、evidence 和 model 信息；`service.py` 负责 fingerprint 去重和写入 `TraceLink`。关系绑定 `paper_document_id`、`code_repository_id` 和 `code_revision`，默认 `proposed`，代码 revision 改变后标记 `stale`。
 
 当前候选发现的主路径是 Agent 追溯任务（静态关键词候选写入已退役）：`agent/analysis_jobs.py` 的父循环在 SCOUT/MAP 之后可调用 `dispatch_trace_subagents`，由 `agent/subagents.py` 在独立有界线程池中并行运行区域子代理；所有发布经单写者发布汇（`TracePublishSink`）串行落库，事件经线程安全总线（`SharedRunEventBus`）保持 `(run_id, sequence)` 单调。详见 `docs/trace/agent-tracing-implementation.md`。
+
+### 8.1 语义检索（RAG）
+
+`services/rag` 为追溯与对话提供语义检索，是叠加在既有穷举读工具之上的加速层：排序永远只是导航结果，Agent 仍必须读真实块/源码并逐字引用后才能发布。三个检索域及其失效条件：
+
+| 域 | 语料 | 生成键 | 失效时机 |
+|---|---|---|---|
+| `paper` | MinerU 页块（缺失时退化为 paragraphs） | `PaperDocument.content_hash` | 论文解析完成 |
+| `code` | 已索引 symbol + 路径/签名/docstring/callee + 真实源码片段 | `{repository_id}:{analysis_revision}` | 代码分析完成 |
+| `trace` | 已复核（accepted/rejected）的 `TraceLink` | 已复核链接 id + 状态的摘要 | 追溯复核改变结论 |
+
+- 嵌入可插拔（`rag/embeddings.py`）：默认 `local` 为离线签名哈希投影，按标识符切分与中文 n-gram 做词法级向量化，无需密钥与网络；`remote` 走任意 OpenAI-compatible `/embeddings`。切换嵌入方式、模型或维度会把全部索引标记为待重建，因为不同生成的向量不可比较。
+- 向量以 base64 float32 存在 SQLite `rag_chunk.embedding`，检索为精确余弦全扫描。千级分块规模下这比引入原生向量索引更简单，也不给 PyInstaller sidecar 增加依赖。
+- 暴露给 Agent 的工具：`semantic_search_paper`、`semantic_search_code`（架构与冲突任务也可用代码检索）、`recall_trace_cases`。索引不可用时工具返回 `found: false` 与回退指引，Agent 改用分页与文本搜索继续，追溯与对话流程不中断。
+- 追溯任务的系统提示会注入本项目相似的已复核案例作为校准用少样本（`_trace_precedents`），并显式声明它们不是本次运行的证据、不得复用结论。
 
 ## 9. Agent 运行时
 
@@ -650,6 +666,7 @@ push/pull；只有 `cloud_enabled` 项目进入 outbox。项目/TraceLink 使用
 - [代码仓库、编辑与张量流契约](contracts/repositories.md)
 - [追溯生命周期与 LLM 降级契约](contracts/traces.md)
 - [Agent 与写操作确认契约](contracts/agent.md)
+- [语义检索（RAG）契约](contracts/rag.md)
 - [数据库设计](database-design.md)
 - [云端服务器、账号与同步设计](cloud-sync-architecture.md)
 - [根目录 README](../README.md)

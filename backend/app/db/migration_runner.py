@@ -24,6 +24,7 @@ LOCAL_REVISIONS = (
     "0010_trace_targets",
     "0011_agent_analysis_model",
     "0012_trace_link_repair",
+    "0013_rag_index",
 )
 
 
@@ -155,6 +156,14 @@ def _detect_local_revision(engine: Engine, tables: set[str]) -> str:
         {"artifact_id", "score_basis_json", "provenance_json", "supersedes_trace_id"},
     ):
         detected = LOCAL_REVISIONS[11]
+    else:
+        return detected
+    # 0013 added the RAG chunk store and embedder configuration.
+    if (
+        {"rag_chunk", "rag_index_state"}.issubset(tables)
+        and _has_columns(inspector, "integration_config", {"rag_enabled", "rag_embedder"})
+    ):
+        detected = LOCAL_REVISIONS[12]
     return detected
 
 

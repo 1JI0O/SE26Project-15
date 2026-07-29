@@ -36,6 +36,19 @@ router = APIRouter(prefix="/projects/{project_id}/trace-links", tags=["trace-lin
 workspace_router = APIRouter(prefix="/projects/{project_id}/workspace", tags=["tracing"])
 
 
+def _invalidate_trace_index(session: Session, project_id: int) -> None:
+    """Mark the trace-precedent index stale after a review verdict changes.
+
+    Reviewed links are the corpus for ``recall_trace_cases``, so a new accept/reject changes
+    it. Invalidating (rather than rebuilding inline) keeps the review request fast; the next
+    search rebuilds. Advisory only — a failure here must not fail the review.
+    """
+
+    from app.services.rag import invalidate
+
+    invalidate(session, project_id, "trace")
+
+
 def _latest_paper(session: Session, project_id: int) -> PaperDocument | None:
     return session.exec(
         select(PaperDocument)
@@ -214,6 +227,7 @@ def update_trace_status(
     )
     session.commit()
     session.refresh(link)
+    _invalidate_trace_index(session, project_id)
     return trace_to_read(link)
 
 
@@ -267,6 +281,8 @@ def batch_update_trace_status(
     session.commit()
     for link in links:
         session.refresh(link)
+    if links:
+        _invalidate_trace_index(session, project_id)
     skipped = len(requested_ids) - len(links) if requested_ids else 0
     return TraceBatchStatusResult(
         status=payload.status,

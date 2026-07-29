@@ -7,6 +7,7 @@ from app.api.routes import (
     local_sync,
     papers,
     projects,
+    rag,
     repositories,
     traces,
     workspace,
@@ -21,6 +22,7 @@ api_router.include_router(papers.router)
 api_router.include_router(repositories.router)
 api_router.include_router(traces.router)
 api_router.include_router(traces.workspace_router)
+api_router.include_router(rag.router)
 api_router.include_router(agent.queue_router)
 api_router.include_router(agent.router)
 api_router.include_router(workspace.router)

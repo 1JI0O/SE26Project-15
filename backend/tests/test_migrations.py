@@ -5,7 +5,15 @@ from alembic.config import Config
 from sqlalchemy import inspect, text
 from sqlmodel import SQLModel, create_engine
 
-from app.db.migration_runner import _drop_drifted_target_tables, upgrade_database
+from app.db.migration_runner import (
+    LOCAL_REVISIONS,
+    _drop_drifted_target_tables,
+    upgrade_database,
+)
+
+# Assert against the declared head rather than a literal, so adding a migration does not
+# require editing every "upgrades to head" test.
+LOCAL_HEAD = LOCAL_REVISIONS[-1]
 
 
 def test_fresh_sqlite_migration_reaches_local_head_without_cloud_tables(tmp_path: Path) -> None:
@@ -48,7 +56,7 @@ def test_desktop_schema_created_at_revision_four_but_stamped_one_upgrades_lossle
         project = connection.execute(
             text("SELECT name, description, sync_mode FROM project")
         ).one()
-    assert revision == "0012_trace_link_repair"
+    assert revision == LOCAL_HEAD
     assert project == ("preserved", "legacy data", "local_only")
     tables = set(inspect(engine).get_table_names())
     assert {
@@ -137,7 +145,7 @@ def test_0012_repairs_early_0010_trace_target_drift(tmp_path: Path) -> None:
     assert {"event_id", "action", "actor_type"} <= review_columns
     with engine.connect() as connection:
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "0012_trace_link_repair"
+    assert revision == LOCAL_HEAD
 
 
 def test_drop_drifted_target_tables_only_drops_prototype_schema(tmp_path: Path) -> None:

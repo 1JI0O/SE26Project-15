@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from sqlalchemy.exc import OperationalError
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.entities import IntegrationConfig, utc_now
@@ -12,6 +12,7 @@ from app.schemas.integration_settings import (
     IntegrationSettingsRead,
     IntegrationSettingsUpdate,
     MinerUIntegrationRead,
+    RagIntegrationRead,
 )
 
 CONFIG_ID = 1
@@ -54,6 +55,17 @@ def _environment_defaults() -> IntegrationConfig:
         mineru_request_retries=int(os.getenv("TRACELAB_MINERU_REQUEST_RETRIES", "3")),
         mineru_task_timeout_seconds=float(os.getenv("TRACELAB_MINERU_TASK_TIMEOUT", "600")),
         mineru_poll_interval_seconds=float(os.getenv("TRACELAB_MINERU_POLL_INTERVAL", "2")),
+        rag_enabled=_env_bool("TRACELAB_RAG_ENABLED", True),
+        rag_embedder=(
+            os.getenv("TRACELAB_RAG_EMBEDDER", "local").strip().lower()
+            if os.getenv("TRACELAB_RAG_EMBEDDER", "local").strip().lower() in {"local", "remote"}
+            else "local"
+        ),
+        rag_base_url=os.getenv("TRACELAB_RAG_BASE_URL", "").rstrip("/"),
+        rag_api_key=os.getenv("TRACELAB_RAG_API_KEY", ""),
+        rag_model=os.getenv("TRACELAB_RAG_MODEL", ""),
+        rag_dimensions=int(os.getenv("TRACELAB_RAG_DIMENSIONS", "512")),
+        rag_timeout_seconds=float(os.getenv("TRACELAB_RAG_TIMEOUT", "30")),
     )
 
 
@@ -95,6 +107,15 @@ def integration_config_to_read(config: IntegrationConfig, source: str) -> Integr
             task_timeout_seconds=config.mineru_task_timeout_seconds,
             poll_interval_seconds=config.mineru_poll_interval_seconds,
         ),
+        rag=RagIntegrationRead(
+            enabled=config.rag_enabled,
+            embedder=config.rag_embedder if config.rag_embedder in {"local", "remote"} else "local",
+            base_url=config.rag_base_url,
+            model=config.rag_model,
+            dimensions=config.rag_dimensions,
+            timeout_seconds=config.rag_timeout_seconds,
+            api_key_configured=bool(config.rag_api_key),
+        ),
         source=source,
         updated_at=config.updated_at if source == "application" else None,
     )
@@ -135,8 +156,38 @@ def save_integration_config(
         config.mineru_official_api_token = (
             payload.mineru.official_api_token.get_secret_value().strip()
         )
+    if payload.rag is not None:
+        previous_signature = (config.rag_embedder, config.rag_model, config.rag_dimensions)
+        config.rag_enabled = payload.rag.enabled
+        config.rag_embedder = payload.rag.embedder
+        config.rag_base_url = payload.rag.base_url
+        config.rag_model = payload.rag.model.strip()
+        config.rag_dimensions = payload.rag.dimensions
+        config.rag_timeout_seconds = payload.rag.timeout_seconds
+        if payload.rag.clear_api_key:
+            config.rag_api_key = ""
+        elif payload.rag.api_key is not None:
+            config.rag_api_key = payload.rag.api_key.get_secret_value().strip()
+        if (config.rag_embedder, config.rag_model, config.rag_dimensions) != previous_signature:
+            # Vectors from a different embedder or dimension are not comparable with new
+            # queries, so every stored index must be rebuilt rather than silently mixed.
+            _invalidate_all_rag_indexes(session)
+
     config.updated_at = utc_now()
     session.add(config)
     session.commit()
     session.refresh(config)
     return config
+
+
+def _invalidate_all_rag_indexes(session: Session) -> None:
+    from app.models.entities import RagIndexState
+
+    try:
+        for state in session.exec(select(RagIndexState)).all():
+            state.status = "pending"
+            state.updated_at = utc_now()
+            session.add(state)
+    except OperationalError:
+        # Pre-0013 database being read through an old schema; nothing to invalidate.
+        pass
