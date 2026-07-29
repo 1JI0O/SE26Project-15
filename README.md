@@ -269,3 +269,4 @@ TraceLab 直接发现符合 AgentSkills `SKILL.md` 约定的目录。可放入�
 - [代码仓库、编辑与张量流](docs/contracts/repositories.md)
 - [追溯生命周期与 LLM 降级](docs/contracts/traces.md)
 - [Agent 与写操作确认](docs/contracts/agent.md)
+- [语义检索（RAG）](docs/contracts/rag.md)

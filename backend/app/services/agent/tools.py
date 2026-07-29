@@ -16,6 +16,9 @@ MAX_TOOL_CONTENT_CHARS = 512_000
 READ_TOOLS = {
     "get_project_overview",
     "search_paper",
+    "semantic_search_paper",
+    "semantic_search_code",
+    "recall_trace_cases",
     "get_paper_block",
     "search_code",
     "read_code_file",
@@ -139,9 +142,27 @@ class CreateTraceArguments(StrictArguments):
     rationale: str = Field(min_length=1, max_length=4000)
 
 
+class SemanticSearchPaperArguments(StrictArguments):
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(default=5, ge=1, le=15)
+
+
+class SemanticSearchCodeArguments(StrictArguments):
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(default=8, ge=1, le=20)
+
+
+class RecallTraceCasesArguments(StrictArguments):
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(default=3, ge=1, le=8)
+
+
 ARGUMENT_MODELS = {
     "get_project_overview": ProjectOverviewArguments,
     "search_paper": SearchPaperArguments,
+    "semantic_search_paper": SemanticSearchPaperArguments,
+    "semantic_search_code": SemanticSearchCodeArguments,
+    "recall_trace_cases": RecallTraceCasesArguments,
     "get_paper_block": PaperBlockArguments,
     "search_code": SearchCodeArguments,
     "read_code_file": ReadCodeFileArguments,
@@ -167,6 +188,22 @@ TOOL_DESCRIPTIONS = {
         "Read the current project, paper, repository, trace, and architecture summary."
     ),
     "search_paper": "Search structured paper paragraphs by keyword before making paper claims.",
+    "semantic_search_paper": (
+        "Semantically retrieve paper blocks by MEANING rather than shared keywords. Describe the "
+        "concept in your own words (or the user's) — useful when their question does not reuse "
+        "the paper's terminology, or when the paper is long. Read the block with get_paper_block "
+        "before quoting it to the user."
+    ),
+    "semantic_search_code": (
+        "Semantically retrieve code symbols by MEANING rather than by name. Describe what the "
+        "code should do; returns symbols with path and line range. Complements search_code, which "
+        "matches names and paths. Read the real source before describing behaviour."
+    ),
+    "recall_trace_cases": (
+        "Recall human-reviewed paper-code trace cases similar to a query, with verdict and "
+        "rationale. Use it to answer questions about how this project's traces were judged, or to "
+        "ground a new trace suggestion in accepted precedent."
+    ),
     "get_paper_block": "Read one exact structured paper block by ID.",
     "search_code": "Search repository paths and indexed symbols.",
     "read_code_file": "Read an editable repository file or a bounded line range.",
@@ -367,6 +404,39 @@ def execute_read_tool(
                 }
                 for _score, item in ranked[: validated.limit]
             ],
+        }
+    if isinstance(
+        validated,
+        SemanticSearchPaperArguments | SemanticSearchCodeArguments | RecallTraceCasesArguments,
+    ):
+        from app.services.rag import search
+
+        scope = (
+            "paper"
+            if isinstance(validated, SemanticSearchPaperArguments)
+            else "code"
+            if isinstance(validated, SemanticSearchCodeArguments)
+            else "trace"
+        )
+        result = search(session, project_id, scope, validated.query, limit=validated.limit)
+        if not result.get("ok"):
+            # The keyword tools cover every scope, so an unavailable index is a fallback
+            # signal for the model, not an error for the user.
+            return {
+                "found": False,
+                "items": [],
+                "reason": result.get("reason", "rag_unavailable"),
+                "instruction": (
+                    "Semantic retrieval is unavailable. Use search_paper, search_code, or "
+                    "list_trace_links instead."
+                ),
+            }
+        return {
+            "found": bool(result.get("items")),
+            "ref": f"rag:{scope}",
+            "query": result.get("query"),
+            "items": result.get("items", []),
+            "ranked_by": result.get("embedder"),
         }
     if isinstance(validated, PaperBlockArguments):
         if paper is None:

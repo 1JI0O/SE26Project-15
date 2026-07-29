@@ -37,10 +37,17 @@ router = APIRouter(prefix="/projects/{project_id}", tags=["papers"])
 
 
 def _trigger_auto_trace(project_id: int) -> None:
-    """Best-effort: start background trace once paper + code + provider are ready."""
+    """Best-effort: refresh the paper retrieval index, then start background trace.
 
+    The index is built before the trace job is enqueued so the agent's first
+    ``semantic_search_paper`` call already has a corpus; if it is not ready, the tool falls
+    back to paging and the run still completes.
+    """
+
+    from app.services.rag import refresh_project_indexes
     from app.services.tracing.coordinator import maybe_start_trace
 
+    refresh_project_indexes(project_id, ("paper",))
     maybe_start_trace(project_id)
 
 

@@ -76,9 +76,35 @@ class MinerUIntegrationUpdate(BaseModel):
     _normalize_official_url = field_validator("official_api_url")(_validate_http_url)
 
 
+class RagIntegrationRead(BaseModel):
+    enabled: bool
+    embedder: Literal["local", "remote"]
+    base_url: str
+    model: str
+    dimensions: int
+    timeout_seconds: float
+    api_key_configured: bool
+
+
+class RagIntegrationUpdate(BaseModel):
+    """Retrieval settings. ``local`` needs no network and is the default."""
+
+    enabled: bool = True
+    embedder: Literal["local", "remote"] = "local"
+    base_url: str = Field(default="", max_length=500)
+    api_key: SecretStr | None = None
+    clear_api_key: bool = False
+    model: str = Field(default="", max_length=160)
+    dimensions: int = Field(default=512, ge=64, le=4096)
+    timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+
+    _normalize_url = field_validator("base_url")(_validate_http_url)
+
+
 class IntegrationSettingsRead(BaseModel):
     agent: AgentIntegrationRead
     mineru: MinerUIntegrationRead
+    rag: RagIntegrationRead
     source: Literal["environment", "application"]
     updated_at: datetime | None = None
 
@@ -86,6 +112,9 @@ class IntegrationSettingsRead(BaseModel):
 class IntegrationSettingsUpdate(BaseModel):
     agent: AgentIntegrationUpdate
     mineru: MinerUIntegrationUpdate
+    # Optional so an older client that does not know about retrieval keeps working: omitting
+    # it preserves whatever is stored rather than silently resetting the embedder.
+    rag: RagIntegrationUpdate | None = None
 
 
 class IntegrationProbeRequest(BaseModel):

@@ -242,7 +242,55 @@ def cancel_analysis_job(
     return job
 
 
-def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, str]:
+def _trace_precedents(session: Session, job: AgentAnalysisJob) -> str:
+    """Few-shot block of this project's already-reviewed trace cases, or "" when none.
+
+    Recalled by similarity to the paper's own title/abstract, so the examples are topically
+    close to what this run will trace. Both verdicts are included: an accepted case shows the
+    evidence standard that held up, a rejected one shows a lexical near-miss that did not.
+    They are precedents for calibration, never evidence — the prompt says so explicitly,
+    because a model handed prior verdicts will otherwise copy them.
+    """
+
+    if job.paper_document_id is None:
+        return ""
+    try:
+        from app.services.rag import trace_examples
+
+        paper = session.get(PaperDocument, job.paper_document_id)
+        if paper is None:
+            return ""
+        query = " ".join(part for part in (paper.title, paper.abstract[:600]) if part).strip()
+        if not query:
+            return ""
+        examples = trace_examples(session, job.project_id, query, limit=4)
+    except Exception:  # noqa: BLE001 - prompt enrichment must never fail a job
+        logger.exception("trace precedent recall failed for job %s", job.job_id)
+        return ""
+    if not examples:
+        return ""
+    lines: list[str] = []
+    for index, example in enumerate(examples, start=1):
+        accepted = example["status"] == "accepted"
+        verdict = "ACCEPTED by reviewer" if accepted else "REJECTED by reviewer"
+        lines.append(
+            f"{index}. [{verdict}] relation={example['relation_type']}\n"
+            f"   paper: {example['paper_quote'][:240]}\n"
+            f"   code: {example['code_ref']} — {example['code_quote'][:240]}\n"
+            f"   reviewer-visible rationale: {example['rationale'][:240]}"
+        )
+    return (
+        "REVIEWED PRECEDENTS FROM THIS PROJECT. These paper-code relations were already judged "
+        "by a human reviewer. Use them ONLY to calibrate what counts as a defensible relation "
+        "and what evidence depth was expected. They are NOT evidence for this run: never cite "
+        "them as a quote, never reuse a verdict without re-reading the current code, and do not "
+        "assume a similar-looking pair deserves the same outcome.\n" + "\n".join(lines) + "\n\n"
+    )
+
+
+def _system_prompt(
+    job: AgentAnalysisJob, soft_target: int = 40, precedents: str = ""
+) -> tuple[str, str]:
     common = (
         "You are TraceLab's autonomous evidence analysis agent. You are the only semantic "
         "decision-maker. Local indexes are navigation aids, not conclusions. Inspect actual "
@@ -264,12 +312,20 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
             f"{job.code_revision}. Work in four stages inside this single run, publishing "
             f"candidates in batches as you confirm them. Aim to finish within about "
             f"{soft_target} tool steps.\n\n"
+            f"{precedents}"
+            "RETRIEVAL. semantic_search_paper and semantic_search_code rank paper blocks and code "
+            "symbols by MEANING, so you can locate a target by describing the computation instead "
+            "of paging the whole document or repository — use them first on a long paper or large "
+            "repository. recall_trace_cases surfaces this project's already-reviewed relations for "
+            "calibration. All three are navigation aids: a rank is never a verdict, and you must "
+            "still read the real block/source and quote it verbatim before publishing.\n\n"
             "STAGE 1 — SCOUT (paper focus). Read the abstract and section structure first "
             "(list_paper_blocks, get_paper_block). Identify 3-8 core contributions / method "
             "components and the sections that implement them. Mark method-chapter formulas, "
             "algorithms/pseudocode, and figures as must-inspect. Deliberately EXCLUDE background, "
             "related work, and experiment/result tables from tracing.\n\n"
-            "STAGE 2 — MAP (code responsibilities). Skim the repository (list_repository_files, "
+            "STAGE 2 — MAP (code responsibilities). Skim the repository (semantic_search_code for "
+            "each core target, then list_repository_files, "
             "list_code_symbols, get_symbol_source) to locate where the model, losses, tensor "
             "transforms, main train/inference loops, constraints, and update rules live. Treat "
             "this as navigation only, not a conclusion.\n\n"
@@ -916,7 +972,8 @@ def _execute_job(job_id: str) -> None:
 
             emitter.emit("analysis.started", {"job_id": job.job_id, "kind": job.kind})
             soft_target = _trace_soft_target(session, job) if job.kind == "trace" else 40
-            system_prompt, request = _system_prompt(job, soft_target)
+            precedents = _trace_precedents(session, job) if job.kind == "trace" else ""
+            system_prompt, request = _system_prompt(job, soft_target, precedents)
             context = {
                 "system_prompt": system_prompt,
                 "history": [],

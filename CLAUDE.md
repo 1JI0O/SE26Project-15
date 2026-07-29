@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `*Prototype/` 下的文档不做参考，在编写代码时不以这些文档为参考。
 - 参考文档主要使用 `docs/` 下的文档和计划，在对代码进行更新时同步更新 `docs/` 下的文档。
-- 架构以 `docs/architecture.md`（按源码核对）为准，接口契约按领域拆分在 `docs/contracts/*.md`（papers、repositories、traces、agent、cloud-sync）。
+- 架构以 `docs/architecture.md`（按源码核对）为准，接口契约按领域拆分在 `docs/contracts/*.md`（papers、repositories、traces、agent、rag、cloud-sync）。
 
 ## 常用命令
 
@@ -64,7 +64,7 @@ TraceLab 是本地优先、单体后端、双运行壳的论文—代码双向�
 
 - 双运行壳共用同一 Vue 前端：Web 模式由 Vite 把 `/api` 代理到 FastAPI（:8000）；Desktop 模式由 Tauri 2（`frontend/src-tauri/src/lib.rs`）启动 PyInstaller 打包的 FastAPI sidecar（:8765，由 `frontend/scripts/build-backend-sidecar.mjs` 构建）。前端统一请求 `/api/v1`。
 - backend 分层：`app/api/routes`（领域：projects、papers、repositories、traces、agent、workspace、integration_settings、local_sync、cloud_proxy）+ `app/schemas` → `app/services`（领域业务与异步任务）→ SQLModel/SQLAlchemy（`app/db`，仅 SQLite）。迁移在 FastAPI 启动时自动执行（`app/db/migration_runner.py`，说明见 `app/db/MIGRATIONS.md`）；lifespan 同时恢复中断的仓库分析和 Agent 异步任务。上传与缓存写入 `backend/uploads/`、`backend/data/`。
-- 核心服务域（`app/services`）：论文解析（MinerU 本地服务或官方 API，异步任务+本地缓存）、`code_analysis`（安全 ZIP/GitHub 导入、Python AST 分析）、`tensor_flow`（语义张量图）、`tracing` / `trace_suggester`（静态候选 + Agent 双向追溯）、`agent`（会话/记忆持久化、SSE 流式运行、AgentSkills/MCP 能力注册表、写操作需人工确认）。
+- 核心服务域（`app/services`）：论文解析（MinerU 本地服务或官方 API，异步任务+本地缓存）、`code_analysis`（安全 ZIP/GitHub 导入、Python AST 分析）、`tensor_flow`（语义张量图）、`tracing` / `trace_suggester`（静态候选 + Agent 双向追溯）、`agent`（会话/记忆持久化、SSE 流式运行、AgentSkills/MCP 能力注册表、写操作需人工确认）、`rag`（论文/代码/已复核追溯案例的语义检索，默认本地离线嵌入，索引由完成钩子自动维护）。
 - LLM 可选：任意 OpenAI-compatible 服务，经 `TRACELAB_LLM_*` 配置。未启用时追溯任务保持等待、Agent 不执行写操作；代码分析、张量流、静态追溯完全不依赖 LLM。
 - `server/` 是独立产品（`tracelab_server` 包）：只提供账号、Workspace、同步、Blob、维护 Worker 和 `/admin-console`，使用 PostgreSQL 与自己的 Alembic 迁移；不运行 MinerU/代码分析/LLM/Agent，也不进入 Desktop sidecar。前端云端请求经同源 `/cloud-api` 转发；项目在用户明确启用同步前始终 `local_only`。
 - frontend 结构：`src/views` + `src/features/`（agent、papers、repository、settings、tensor-flow、tracing）+ Pinia stores；HTTP 经 `src/api` 按领域拆分的 axios client，Agent 流式回复用 SSE fetch。

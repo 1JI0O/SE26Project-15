@@ -212,10 +212,12 @@ def import_code_from_github(
 
 
 def _trigger_auto_trace(project_id: int) -> None:
-    """Best-effort: start background trace once paper + code + provider are ready."""
+    """Best-effort: refresh the code retrieval index, then start background trace."""
 
+    from app.services.rag import refresh_project_indexes
     from app.services.tracing.coordinator import maybe_start_trace
 
+    refresh_project_indexes(project_id, ("code",))
     maybe_start_trace(project_id)
 
 
