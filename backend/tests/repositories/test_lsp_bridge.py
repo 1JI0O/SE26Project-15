@@ -1,3 +1,4 @@
+from app.services.code_analysis import lsp_bridge
 from app.services.code_analysis.lsp_bridge import decode_lsp_messages, encode_lsp_message
 
 
@@ -24,3 +25,12 @@ def test_decode_lsp_messages_multiple_frames() -> None:
     messages, remaining = decode_lsp_messages(buffer)
     assert messages == [first, second]
     assert remaining == bytearray()
+
+
+def test_hidden_subprocess_kwargs_suppresses_windows_console(monkeypatch) -> None:
+    monkeypatch.setattr(lsp_bridge.sys, "platform", "win32")
+    monkeypatch.setattr(lsp_bridge.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    assert lsp_bridge.hidden_subprocess_kwargs() == {"creationflags": 0x08000000}
+
+    monkeypatch.setattr(lsp_bridge.sys, "platform", "linux")
+    assert lsp_bridge.hidden_subprocess_kwargs() == {}

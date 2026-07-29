@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import subprocess
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -50,6 +51,12 @@ def basedpyright_command() -> list[str]:
     if executable:
         return [executable, "--stdio"]
     return [sys.executable, "-m", "basedpyright.langserver", "--stdio"]
+
+
+def hidden_subprocess_kwargs() -> dict[str, int]:
+    if sys.platform != "win32":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
 
 
 @dataclass
@@ -102,6 +109,7 @@ async def start_lsp_session(project_id: int, workspace_root: Path) -> LspBridgeS
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **hidden_subprocess_kwargs(),
     )
     session = LspBridgeSession(
         project_id=project_id,
