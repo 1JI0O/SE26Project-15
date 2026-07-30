@@ -390,7 +390,7 @@ flowchart LR
 
 `static_candidates.py` 以论文块、代码 symbol、模块名和 token 重叠生成低成本候选；`provider.py` 可用 LLM 补充 confidence、rationale、evidence 和 model 信息；`service.py` 负责 fingerprint 去重和写入 `TraceLink`。关系绑定 `paper_document_id`、`code_repository_id` 和 `code_revision`，默认 `proposed`，代码 revision 改变后标记 `stale`。
 
-当前候选发现的主路径是 Agent 追溯任务（静态关键词候选写入已退役）：`agent/analysis_jobs.py` 的父循环在 SCOUT/MAP 之后可调用 `dispatch_trace_subagents`，由 `agent/subagents.py` 在独立有界线程池中并行运行区域子代理；所有发布经单写者发布汇（`TracePublishSink`）串行落库，事件经线程安全总线（`SharedRunEventBus`）保持 `(run_id, sequence)` 单调。详见 `docs/trace/agent-tracing-implementation.md`。
+当前候选发现的主路径是 Agent 追溯任务（静态关键词候选写入已退役）：`agent/analysis_jobs.py` 的父循环在 SCOUT/MAP 之后可调用 `dispatch_trace_subagents`，由 `agent/subagents.py` 在独立有界线程池中并行运行区域子代理；所有发布经单写者发布汇（`TracePublishSink`）串行落库，事件经线程安全总线（`SharedRunEventBus`）保持 `(run_id, sequence)` 单调。默认由 Agent 直接给出 `confidence`；项目开启深度思考（`project.agent_deep_thinking`，默认关闭）后改为 Agent 评估六个维度、服务端按加权公式与减分项算出 `confidence`（`analysis_tools.compute_trace_confidence`），判断更细但每批发布更慢。详见 `docs/trace/agent-tracing-implementation.md` 与 `docs/contracts/agent.md`。
 
 ### 8.1 语义检索（RAG）
 

@@ -11,6 +11,7 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     description: str | None = None
+    agent_deep_thinking: bool | None = None
 
 
 class ProjectRead(BaseModel):
@@ -21,6 +22,7 @@ class ProjectRead(BaseModel):
     version: int
     sync_mode: str
     agent_history_sync: bool
+    agent_deep_thinking: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -66,6 +66,12 @@ def update_project(
     if payload.description is not None and payload.description != project.description:
         project.description = payload.description
         changed = True
+    if (
+        payload.agent_deep_thinking is not None
+        and payload.agent_deep_thinking != project.agent_deep_thinking
+    ):
+        project.agent_deep_thinking = payload.agent_deep_thinking
+        changed = True
     if changed:
         project.updated_at = utc_now()
         project.version += 1

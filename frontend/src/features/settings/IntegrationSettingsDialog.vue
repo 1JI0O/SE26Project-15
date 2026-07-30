@@ -80,6 +80,22 @@
               </el-form-item>
             </div>
 
+            <div v-if="projectId !== null" class="switch-row deep-thinking-row">
+              <div>
+                <strong>深度思考（当前项目）</strong>
+                <p>
+                  开启后追溯 Agent 会为每条关系逐项评估六个置信度维度（修改直接性、因果可达性、
+                  论文约束、追溯支持、可验证性、上下文完整度），由后端按加权公式并扣除减分项算出置信度。
+                  判断更细，但每批发布明显更慢。关闭时沿用 Agent 直接给出的置信度。
+                </p>
+              </div>
+              <el-switch
+                v-model="deepThinking"
+                :loading="savingDeepThinking"
+                @change="saveDeepThinking"
+              />
+            </div>
+
             <div class="probe-row">
               <el-button :loading="probing === 'agent'" @click="testAgent">测试连接</el-button>
               <el-alert
@@ -323,12 +339,14 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
 import {
   getIntegrationSettings,
   probeIntegration,
   updateIntegrationSettings,
 } from '@/api/integration-settings-api'
+import { getProject, updateProject } from '@/api/project-api'
 import type {
   IntegrationProbeResult,
   IntegrationSettings,
@@ -337,6 +355,16 @@ import type {
 
 defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
+
+const route = useRoute()
+// Deep thinking is per project, so the toggle only appears inside a project workspace.
+const projectId = computed(() => {
+  const raw = route.name === 'workspace' ? route.params.id : undefined
+  const parsed = Number(Array.isArray(raw) ? raw[0] : raw)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+})
+const deepThinking = ref(false)
+const savingDeepThinking = ref(false)
 
 const activeTab = ref('agent')
 const loading = ref(false)
@@ -451,6 +479,39 @@ async function loadSettings() {
     ElMessage.error('无法读取集成设置，请确认本地后端已启动')
   } finally {
     loading.value = false
+  }
+  await loadDeepThinking()
+}
+
+async function loadDeepThinking(): Promise<void> {
+  const id = projectId.value
+  if (id === null) return
+  try {
+    const project = await getProject(id)
+    deepThinking.value = project.agent_deep_thinking
+  } catch {
+    // Integration settings are still usable without this project-scoped extra.
+    deepThinking.value = false
+  }
+}
+
+/**
+ * Saved immediately rather than with the dialog footer: the rest of this dialog writes the
+ * machine-wide integration config, while this one field belongs to the open project.
+ */
+async function saveDeepThinking(value: boolean): Promise<void> {
+  const id = projectId.value
+  if (id === null) return
+  savingDeepThinking.value = true
+  try {
+    const project = await updateProject(id, { agent_deep_thinking: value })
+    deepThinking.value = project.agent_deep_thinking
+    ElMessage.success(value ? '已开启深度思考' : '已关闭深度思考')
+  } catch {
+    deepThinking.value = !value
+    ElMessage.error('保存深度思考设置失败')
+  } finally {
+    savingDeepThinking.value = false
   }
 }
 
@@ -628,6 +689,12 @@ async function saveSettings() {
   margin: 4px 0 0;
   color: #71808f;
   font-size: 13px;
+}
+
+/* Project-scoped, saved on toggle — separated from the machine-wide fields above. */
+.deep-thinking-row {
+  border-top: 1px solid #e6ebf0;
+  padding-top: 14px;
 }
 
 .form-grid {

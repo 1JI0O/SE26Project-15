@@ -25,6 +25,7 @@ LOCAL_REVISIONS = (
     "0011_agent_analysis_model",
     "0012_trace_link_repair",
     "0013_rag_index",
+    "0014_project_deep_thinking",
 )
 
 
@@ -296,6 +297,7 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
             "version": "INTEGER NOT NULL DEFAULT 1",
             "sync_mode": "VARCHAR(24) NOT NULL DEFAULT 'local_only'",
             "agent_history_sync": "BOOLEAN NOT NULL DEFAULT 1",
+            "agent_deep_thinking": "BOOLEAN NOT NULL DEFAULT 0",
             "deleted_at": "DATETIME",
         },
     )

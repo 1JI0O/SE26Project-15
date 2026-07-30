@@ -235,6 +235,8 @@ class RegionJobContext:
     code_revision: int
     system_prompt: str
     environment: dict[str, Any]
+    # Mirrors the project's deep-thinking toggle so region prompts match the parent's.
+    deep_thinking: bool = False
 
 
 @dataclass
@@ -301,6 +303,13 @@ def _region_request(region: DispatchRegion, ctx: RegionJobContext, step_budget: 
         "code_hints": region.code_hints,
         "notes": region.notes,
     }
+    scoring = (
+        "the six confidence dimensions (change_directness, causal_reachability, "
+        "requirement_support, trace_support, verification_support, context_coverage) plus any "
+        "confidence_penalties — the server computes confidence from them"
+        if ctx.deep_thinking
+        else "confidence"
+    )
     return (
         f"You are a TraceLab trace SUB-AGENT responsible ONLY for the region "
         f"\"{region.name}\" of paper document {ctx.paper_document_id} against repository "
@@ -315,7 +324,7 @@ def _region_request(region: DispatchRegion, ctx: RegionJobContext, step_budget: 
         "candidates for this region with publish_trace_candidates in small batches — each "
         "candidate needs paper_evidence{block_id,quote,occurrence}, "
         "code_evidence{path,line_start,line_end,quote,occurrence}, salience, relevance, and "
-        "confidence (or optionally the six dimension scores for finer control). Never publish "
+        f"{scoring}. Never publish "
         "an empty payload and never publish targets outside your region.\n"
         f"Work within about {step_budget} tool steps. When your region is fully covered (or "
         "nothing defensible exists), reply with a short plain-text summary of what you found "

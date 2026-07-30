@@ -5,10 +5,16 @@ import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.entities import AgentAnalysisArtifact, CodeRepository, PaperDocument
+from app.models.entities import (
+    AgentAnalysisArtifact,
+    CodeRepository,
+    PaperDocument,
+    Project,
+)
 from app.services.analysis_jobs import repository_edits_root
 from app.services.change_analysis import (
     build_conflict_context,
@@ -393,6 +399,21 @@ class TraceCandidate(TolerantModel):
     def _coerce_uncertainty(cls, value: object) -> str:
         text = str(value or "").strip().lower()
         return text if text in {"low", "medium", "high"} else "medium"
+
+
+def is_deep_thinking_enabled(session: Session, project_id: int) -> bool:
+    """Whether this project opted into multi-dimensional confidence scoring.
+
+    Off by default: the six-dimension pass asks the model for more per-candidate reasoning,
+    which slows the first publish batch. A missing project (or a pre-0014 database read
+    through an old schema) is treated as off so the original behaviour stays the fallback.
+    """
+
+    try:
+        project = session.get(Project, project_id)
+    except OperationalError:
+        return False
+    return bool(project is not None and project.agent_deep_thinking)
 
 
 def compute_trace_confidence(candidate: TraceCandidate) -> float:
@@ -1183,9 +1204,12 @@ def _execute_publish_trace(
     if raw_candidates and not schema_kept:
         raise ValueError("all_candidates_schema_invalid: " + "; ".join(dropped[:3]))
 
-    # Recompute confidence from the 6-dimension breakdown + penalties.
-    for candidate in schema_kept:
-        candidate.confidence = compute_trace_confidence(candidate)
+    # Deep thinking only: recompute confidence from the 6-dimension breakdown + penalties.
+    # With the toggle off the model's own ``confidence`` is used as-is, which is the original
+    # behaviour and keeps the publish batch fast.
+    if is_deep_thinking_enabled(session, project_id):
+        for candidate in schema_kept:
+            candidate.confidence = compute_trace_confidence(candidate)
 
     tp = TracePayload(candidates=schema_kept, unresolved=unresolved)
     paper = _paper(session, project_id, paper_id)

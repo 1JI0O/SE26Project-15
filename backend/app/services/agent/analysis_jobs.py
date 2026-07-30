@@ -32,6 +32,7 @@ from app.schemas.agent import AgentAnalysisJobCreate, AgentAnalysisJobRead
 from app.services.agent.analysis_tools import (
     DispatchSubagentsArguments,
     execute_tool,
+    is_deep_thinking_enabled,
     tool_definitions,
 )
 from app.services.agent.provider import AgentProviderFailure
@@ -288,9 +289,35 @@ def _trace_precedents(session: Session, job: AgentAnalysisJob) -> str:
     )
 
 
+_SCORING_DIRECT = (
+    "SCORING. For every candidate give THREE separate scores: salience (target importance), "
+    "relevance (how much the code implements it), confidence (certainty).\n\n"
+)
+
+_SCORING_DEEP = (
+    "SCORING. For every candidate give salience (target importance), relevance (how much the "
+    "code implements it), and the six confidence dimensions below — the server computes "
+    "confidence from them, so score each one deliberately.\n"
+    "Six dimensions [0,1]: change_directness (direct mapping 20%), causal_reachability "
+    "(traced call flow 25%), requirement_support (explicit in paper 20%), trace_support "
+    "(precedent exists 15%), verification_support (tests exist 10%), context_coverage "
+    "(files read 10%). Penalties (add to confidence_penalties list): "
+    '"paper_association_inferred" (-0.10), "no_call_entry" (-0.20), '
+    '"alternate_implementation" (-0.20), "config_or_caller_unread" (-0.15), '
+    '"context_truncated" (-0.15), "runtime_condition_unverified" (-0.15). '
+    "If omitted, defaults yield a 0.625 base score.\n\n"
+)
+
+
 def _system_prompt(
-    job: AgentAnalysisJob, soft_target: int = 40, precedents: str = ""
+    job: AgentAnalysisJob,
+    soft_target: int = 40,
+    precedents: str = "",
+    deep_thinking: bool = False,
 ) -> tuple[str, str]:
+    # Deep thinking asks for the six-dimension breakdown; the default keeps the original
+    # single-confidence wording so the run stays as fast as before the formula was added.
+    scoring = _SCORING_DEEP if deep_thinking else _SCORING_DIRECT
     common = (
         "You are TraceLab's autonomous evidence analysis agent. You are the only semantic "
         "decision-maker. Local indexes are navigation aids, not conclusions. Inspect actual "
@@ -346,20 +373,9 @@ def _system_prompt(
             "STAGE 4 — MERGE & SELF-CHECK. Keep only targets that matter: a core contribution, a "
             "must-inspect formula/algorithm, a defining variable/constraint, or something with a "
             "direct important implementation. Merge adjacent synonymous targets; do not stack "
-            "overlapping highlights. For every candidate give: salience (target importance), "
-            "relevance (how much the code implements it), and optionally six confidence-dimension "
-            "scores if you want finer control (otherwise set confidence directly). Set "
-            "paper_evidence.occurrence and code_evidence.occurrence correctly when a quote "
-            "repeats.\n\n"
-            "CONFIDENCE SCORING (optional fine-grained control; otherwise just set confidence):\n"
-            "Six dimensions [0,1]: change_directness (direct mapping 20%), causal_reachability "
-            "(traced call flow 25%), requirement_support (explicit in paper 20%), trace_support "
-            "(precedent exists 15%), verification_support (tests exist 10%), context_coverage "
-            "(files read 10%). Penalties (add to confidence_penalties list): "
-            "\"paper_association_inferred\" (-0.10), \"no_call_entry\" (-0.20), "
-            "\"alternate_implementation\" (-0.20), \"config_or_caller_unread\" (-0.15), "
-            "\"context_truncated\" (-0.15), \"runtime_condition_unverified\" (-0.15). "
-            "If omitted, defaults yield ~0.63 base score.\n\n"
+            "overlapping highlights. Set paper_evidence.occurrence and code_evidence.occurrence "
+            "correctly when a quote repeats.\n\n"
+            f"{scoring}"
             "Tooling rules: to read code, either call get_symbol_source with an exact id from "
             "list_code_symbols, or call read_source_lines(path, line_start, line_end) for any "
             "file window — do NOT guess symbol ids. code_symbol_id may be a file path plus a line "
@@ -617,7 +633,24 @@ def _persist_trace_links(
             for block in page.get("blocks", []):
                 if isinstance(block, dict) and block.get("id"):
                     section_paths[str(block["id"])] = list(block.get("section_path", []))
+    # The dimension breakdown is only meaningful when deep thinking produced it; recording
+    # placeholder dimensions for a directly-scored run would misrepresent how the number arose.
+    deep_thinking = is_deep_thinking_enabled(session, job.project_id)
+    prompt_version = "trace-agent-v3" if deep_thinking else "trace-agent-v2"
+    score_basis_extra: dict[str, Any] = {}
     for candidate in payload.get("candidates", []):
+        if deep_thinking:
+            score_basis_extra = {
+                "confidence_dimensions": {
+                    "change_directness": candidate.get("change_directness", 0.7),
+                    "causal_reachability": candidate.get("causal_reachability", 0.6),
+                    "requirement_support": candidate.get("requirement_support", 0.7),
+                    "trace_support": candidate.get("trace_support", 0.5),
+                    "verification_support": candidate.get("verification_support", 0.5),
+                    "context_coverage": candidate.get("context_coverage", 0.7),
+                },
+                "confidence_penalties": candidate.get("confidence_penalties", []),
+            }
         if "paper_anchor" not in candidate or "code_anchor" not in candidate:
             # Only anchored candidates (validated by publish_trace_candidates) are persisted.
             continue
@@ -700,26 +733,18 @@ def _persist_trace_links(
                 "relevance": candidate.get("relevance", 0.0),
                 "confidence": candidate["confidence"],
                 "salience_reason": candidate.get("salience_reason", ""),
-                "confidence_dimensions": {
-                    "change_directness": candidate.get("change_directness", 0.5),
-                    "causal_reachability": candidate.get("causal_reachability", 0.5),
-                    "requirement_support": candidate.get("requirement_support", 0.5),
-                    "trace_support": candidate.get("trace_support", 0.5),
-                    "verification_support": candidate.get("verification_support", 0.5),
-                    "context_coverage": candidate.get("context_coverage", 0.5),
-                },
-                "confidence_penalties": candidate.get("confidence_penalties", []),
+                **score_basis_extra,
             },
             "provenance_json": {
                 "job_id": job.job_id,
                 "run_id": artifact.agent_run_id,
                 "artifact_id": artifact.artifact_id,
-                "prompt_version": "trace-agent-v3",
+                "prompt_version": prompt_version,
                 "graph_node_ids": candidate.get("graph_node_ids", []),
             },
             "model_info_json": {
                 **artifact.model_info_json,
-                "prompt_version": "trace-agent-v3",
+                "prompt_version": prompt_version,
                 "run_id": artifact.agent_run_id,
                 "artifact_id": artifact.artifact_id,
             },
@@ -992,7 +1017,8 @@ def _execute_job(job_id: str) -> None:
             emitter.emit("analysis.started", {"job_id": job.job_id, "kind": job.kind})
             soft_target = _trace_soft_target(session, job) if job.kind == "trace" else 40
             precedents = _trace_precedents(session, job) if job.kind == "trace" else ""
-            system_prompt, request = _system_prompt(job, soft_target, precedents)
+            deep_thinking = is_deep_thinking_enabled(session, job.project_id)
+            system_prompt, request = _system_prompt(job, soft_target, precedents, deep_thinking)
             context = {
                 "system_prompt": system_prompt,
                 "history": [],
@@ -1339,6 +1365,7 @@ def _execute_job(job_id: str) -> None:
                             code_revision=job.code_revision,
                             system_prompt=system_prompt,
                             environment=context["environment"],
+                            deep_thinking=deep_thinking,
                         ),
                         regions=regions,
                         sink=sink,

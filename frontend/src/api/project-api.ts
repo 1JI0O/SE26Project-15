@@ -22,7 +22,7 @@ export async function getProject(projectId: number): Promise<Project> {
 
 export async function updateProject(
   projectId: number,
-  payload: { name?: string; description?: string },
+  payload: { name?: string; description?: string; agent_deep_thinking?: boolean },
 ): Promise<Project> {
   const { data } = await http.patch<Project>(`/projects/${projectId}`, payload)
   return data

@@ -38,6 +38,10 @@ class Project(SQLModel, table=True):
     version: int = Field(default=1, ge=1)
     sync_mode: str = Field(default="local_only", max_length=24, index=True)
     agent_history_sync: bool = Field(default=True)
+    # Opt-in per project: when enabled the trace agent scores six confidence dimensions and
+    # the server recomputes confidence from the weighted formula. Off by default because the
+    # extra reasoning makes each publish batch noticeably slower.
+    agent_deep_thinking: bool = Field(default=False)
     deleted_at: datetime | None = Field(default=None)
 
 
