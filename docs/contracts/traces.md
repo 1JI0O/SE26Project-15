@@ -35,7 +35,7 @@ trace 分析任务内部可将区域取证并行派发给子代理（见 [agent 
 - `quote_hash` / `code_quote_hash`：`sha256(规范化 quote)`，用于跨 revision 的内容一致性；
 - 论文侧 `target_type`（formula/variable/constraint/algorithm/figure/method_text）、`salience`；代码侧 `role`。
 
-发布前，`publish_trace_candidates` 在指定 occurrence 处校验 quote 命中并计算上述锚点；命中失败即拒绝，不静默通过。三个分数含义不同：`salience`（目标重要性）、`relevance`（该代码承担实现的程度，边级）、`confidence`（关系判断正确的把握，边级）。一对多列表按 `relevance` 排序。
+发布前，`publish_trace_candidates` 在指定 occurrence 处校验 quote 命中并计算上述锚点；命中失败即拒绝，不静默通过。三个分数含义不同：`salience`（目标重要性）、`relevance`（该代码承担实现的程度，边级）、`confidence`（关系判断正确的把握，边级）。一对多列表按 `relevance` 排序。项目开启深度思考（`agent_deep_thinking`，默认关闭）时 `confidence` 由服务端按六维加权公式算出而非取模型自报值，细节见 `docs/contracts/agent.md`。
 
 ### Legacy endpoint (retired keyword path)
 

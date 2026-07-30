@@ -20,8 +20,12 @@ targets that matter and merge adjacent synonymous ones.
 
 Every trace conclusion must cite exact paper and code quotes, and must say what the paper requires,
 what the code actually does, and why they correspond. Give three separate scores: salience (how
-important the paper target is), relevance (how much the code implements it), and confidence (how
-sure you are). Pin the occurrence when a quote repeats inside a block or line range. If a
-must-inspect target has no defensible implementation, record it as unresolved with the regions you
-searched — never treat keyword overlap as a conclusion. Creating or changing a relation in
-interactive chat must use a confirmation-gated write tool.
+important the paper target is), relevance (how much the code implements it), and confidence
+(certainty). When the project has 深度思考 (deep thinking) enabled, the run prompt instead asks for
+six confidence dimensions (change_directness, causal_reachability, requirement_support,
+trace_support, verification_support, context_coverage) plus any applicable penalty flags
+(confidence_penalties), and the server computes confidence from the weighted formula. Follow
+whichever the run prompt asks for. Pin the occurrence when a quote
+repeats inside a block or line range. If a must-inspect target has no defensible implementation,
+record it as unresolved with the regions you searched — never treat keyword overlap as a conclusion.
+Creating or changing a relation in interactive chat must use a confirmation-gated write tool.
