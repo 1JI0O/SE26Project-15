@@ -124,6 +124,20 @@ paper_document/code_repository → paper_target/code_target → trace_link），
 push 冲突不进冲突中心，本地 outbox 置为 `superseded`，改由下一次 pull 取服务端副本——否则重算
 产生的噪声会淹没真正需要人工决定的冲突（追溯决定、文件版本）。
 
+### 有意未接入：TraceReviewEvent
+
+`trace_review_event` 表已由迁移 `0010`/`0012` 建好，但**全仓库没有任何写入点**，因此未接入同步。
+这不是遗漏：按 [双向追溯架构 §14](../trace/agent-bidirectional-tracing-architecture.md) 的设计，它记录
+接受/拒绝/修改/合并/拆分/恢复等人工事件，写入方是尚未实现的「交互 Agent 修订关系」链路。
+
+当前人工决策只更新 `TraceLink.status` 与 `decided_at`（`traces.py`），没有决策历史。等修订链路落地
+时再一并实现写入与同步（append-only 类型），那时才有真实数据可验证。在此之前给一张恒空的表接同步
+只会扩大 all-or-nothing 推送信封而无收益。
+
+该表同时被迁移版本探测逻辑引用（`migration_runner.py` 用它是否存在判定 0010 版本，
+`_DRIFTED_TARGET_TABLES` 用它做漂移重建），删表需改动这套曾导致「追溯到中途零输出」的逻辑，
+风险高于收益，因此也不删。
+
 ## 同步数据分类
 
 | 分类 | 进入 outbox/event | 存储方式 |
