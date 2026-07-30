@@ -16,8 +16,61 @@ jobs:
         working-directory: backend
         run: |
           uv sync --frozen --extra dev
-          uv run ruff check app tests
+          uv run ruff check app tests "../FinalRelease/单元测试代码"
           uv run pytest -q
+          uv run pytest -q \
+            tests/test_code_analyzer.py \
+            tests/repositories/test_analysis.py \
+            tests/repositories/test_file_access.py \
+            "../FinalRelease/单元测试代码" \
+            --cov=app.services.code_analysis \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-report=html:htmlcov \
+            --junitxml=junit.xml \
+            --cov-fail-under=90.01
+          uv run pytest -q tests/rag \
+            --cov=app.services.rag \
+            --cov-report=term-missing \
+            --cov-report=xml:rag-coverage.xml \
+            --cov-report=html:rag-htmlcov \
+            --junitxml=rag-junit.xml \
+            --cov-fail-under=90.01
+      - name: Upload local backend test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-backend-test-reports
+          path: |
+            backend/coverage.xml
+            backend/htmlcov/
+            backend/junit.xml
+            backend/rag-coverage.xml
+            backend/rag-htmlcov/
+            backend/rag-junit.xml
+
+  vscode-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: VS Code core unit tests and coverage
+        working-directory: packages/tracelab_core
+        run: |
+          uv sync --frozen --extra dev
+          uv run ruff check tracelab_core/workspace.py tracelab_core/review.py tracelab_core/probe.py tests
+          uv run pytest -q --junitxml=junit.xml --cov-report=xml:coverage.xml --cov-report=html:htmlcov
+      - name: Upload VS Code core test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-core-test-reports
+          path: |
+            packages/tracelab_core/coverage.xml
+            packages/tracelab_core/htmlcov/
+            packages/tracelab_core/junit.xml
 
   sync-server:
     runs-on: ubuntu-latest
@@ -69,3 +122,18 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm typecheck
           pnpm build
+
+  vscode-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+      - name: VS Code extension compile and unit tests
+        working-directory: vscode-extension
+        run: |
+          npm ci
+          npm test

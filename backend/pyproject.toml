@@ -25,6 +25,7 @@ build-backend = "setuptools.build_meta"
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.0",
+  "pytest-cov>=7.0.0",
   "ruff>=0.6.0"
 ]
 desktop = [
@@ -41,7 +42,21 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["B008"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "../FinalRelease/单元测试代码"]
+
+[tool.coverage.run]
+source = ["app.services.code_analysis"]
+omit = [
+  "*/definition_resolve.py",
+  "*/lsp_bridge.py",
+]
+relative_files = true
+
+[tool.coverage.report]
+fail_under = 90.01
+precision = 2
+show_missing = true
+skip_empty = true
 
 [tool.setuptools.packages.find]
 include = ["app*"]

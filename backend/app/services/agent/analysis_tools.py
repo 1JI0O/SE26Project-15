@@ -90,6 +90,21 @@ class ArtifactArguments(StrictModel):
     kind: Literal["architecture", "trace", "conflict"]
 
 
+class SemanticPaperSearchArguments(StrictModel):
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(default=5, ge=1, le=15)
+
+
+class SemanticCodeSearchArguments(StrictModel):
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(default=8, ge=1, le=20)
+
+
+class RecallTraceCasesArguments(StrictModel):
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(default=3, ge=1, le=8)
+
+
 class CodeEvidence(StrictModel):
     path: str = Field(min_length=1, max_length=1000)
     line_start: int = Field(ge=1)
@@ -446,6 +461,9 @@ TOOL_MODELS: dict[str, type[StrictModel]] = {
     "list_paper_blocks": PaperBlocksArguments,
     "search_paper_blocks": SearchPaperBlocksArguments,
     "get_paper_block": PaperBlockArguments,
+    "semantic_search_paper": SemanticPaperSearchArguments,
+    "semantic_search_code": SemanticCodeSearchArguments,
+    "recall_trace_cases": RecallTraceCasesArguments,
     "get_analysis_artifact": ArtifactArguments,
     "publish_architecture_graph": PublishArchitectureArguments,
     "publish_trace_candidates": PublishTraceArguments,
@@ -490,6 +508,29 @@ TOOL_DESCRIPTIONS = {
     "get_paper_block": (
         "Read one exact paper block and stable evidence spans. Prefer the shortest sufficient "
         "span_id over copying or reformatting a long quote."
+    ),
+    "semantic_search_paper": (
+        "Semantically retrieve the paper blocks closest in MEANING to a query, without needing "
+        "the same words. Describe the computation or concept you are looking for (e.g. 'loss "
+        "that down-weights easy examples'). Returns block ids ranked by similarity — use it to "
+        "find where to look in a long paper instead of paging through every block, then read the "
+        "real block with get_paper_block before quoting. Ranking is a navigation aid, never a "
+        "verdict."
+    ),
+    "semantic_search_code": (
+        "Semantically retrieve indexed code symbols closest in MEANING to a query. Describe the "
+        "computation a paper target requires (e.g. 'scaled dot-product over queries and keys'); "
+        "returns symbol ids with path and line range, ranked by similarity. Complements "
+        "search_repository_text, which needs exact substrings. Always read the real source with "
+        "get_symbol_source or read_source_lines before quoting or publishing."
+    ),
+    "recall_trace_cases": (
+        "Recall previously human-reviewed paper-code trace cases from this project that resemble "
+        "your query, with their accept/reject verdict and rationale. An accepted case shows what "
+        "a defensible relation looked like; a rejected one warns of a lexical near-miss that did "
+        "not hold up. Use it to calibrate before publishing. These are precedents, not evidence: "
+        "never cite a recalled case as your quote, and never copy its verdict without checking "
+        "the current code."
     ),
     "get_analysis_artifact": (
         "Read the latest Agent-generated architecture or trace artifact for the current revision."
@@ -570,6 +611,7 @@ def tool_definitions(kind: str, *, role: str = "parent") -> list[dict[str, Any]]
             "get_symbol_source",
             "get_symbol_calls",
             "read_source_lines",
+            "semantic_search_code",
             "get_analysis_artifact",
             "publish_architecture_graph",
         },
@@ -583,6 +625,9 @@ def tool_definitions(kind: str, *, role: str = "parent") -> list[dict[str, Any]]
             "list_paper_blocks",
             "search_paper_blocks",
             "get_paper_block",
+            "semantic_search_paper",
+            "semantic_search_code",
+            "recall_trace_cases",
             "get_analysis_artifact",
             "publish_trace_candidates",
             "finish_analysis",
@@ -603,6 +648,8 @@ def tool_definitions(kind: str, *, role: str = "parent") -> list[dict[str, Any]]
             "list_paper_blocks",
             "search_paper_blocks",
             "get_paper_block",
+            "semantic_search_paper",
+            "semantic_search_code",
             "get_analysis_artifact",
             "publish_conflict_report",
         },
@@ -768,9 +815,7 @@ def _paper_block_result(block: dict[str, Any], arguments: PaperBlockArguments) -
         result["evidence_spans"].pop()
     returned = len(result["evidence_spans"])
     result["next_span_cursor"] = (
-        arguments.span_cursor + returned
-        if arguments.span_cursor + returned < len(spans)
-        else None
+        arguments.span_cursor + returned if arguments.span_cursor + returned < len(spans) else None
     )
     return result
 
@@ -819,9 +864,7 @@ def _offset_to_linecol(content: str, offset: int) -> tuple[int, int]:
     return line, col
 
 
-def _resolve_paper_anchor(
-    block: dict[str, Any], evidence: TracePaperEvidence
-) -> dict[str, Any]:
+def _resolve_paper_anchor(block: dict[str, Any], evidence: TracePaperEvidence) -> dict[str, Any]:
     try:
         resolved = resolve_paper_evidence(
             block,
@@ -969,9 +1012,7 @@ def _validate_traces(
         try:
             anchor = _validate_one_trace(repository, blocks, symbols, paths, candidate)
         except ValueError as exc:
-            dropped.append(
-                f"{candidate.paper_block_id}->{candidate.code_symbol_id}: {exc}"[:200]
-            )
+            dropped.append(f"{candidate.paper_block_id}->{candidate.code_symbol_id}: {exc}"[:200])
             continue
         kept.append(candidate)
         anchors.append(anchor)
@@ -1033,8 +1074,7 @@ def _execute_publish_conflict(
         *payload.unresolved,
     ]
     if any(
-        value.strip() and re.search(r"[\u3400-\u9fff]", value) is None
-        for value in chinese_fields
+        value.strip() and re.search(r"[\u3400-\u9fff]", value) is None for value in chinese_fields
     ):
         raise ValueError("conflict_output_must_be_chinese")
     changes = collect_repository_changes(repository)
@@ -1043,12 +1083,10 @@ def _execute_publish_conflict(
 
     paper = session.get(PaperDocument, paper_id) if paper_id is not None else None
     blocks = {
-        str(item.get("id")): item
-        for item in (_paper_blocks(paper) if paper is not None else [])
+        str(item.get("id")): item for item in (_paper_blocks(paper) if paper is not None else [])
     }
     affected_trace_map = {
-        item["trace_id"]: item
-        for item in list_affected_traces(session, repository)
+        item["trace_id"]: item for item in list_affected_traces(session, repository)
     }
     output_items: list[dict[str, Any]] = []
     for item_index, item in enumerate(payload.items):
@@ -1201,8 +1239,7 @@ def _normalize_publish_arguments(tool_name: str, arguments: dict[str, Any]) -> d
             item["change_evidence"] = [
                 entry
                 for entry in evidence
-                if not isinstance(entry, dict)
-                or bool(str(entry.get("quote") or "").strip())
+                if not isinstance(entry, dict) or bool(str(entry.get("quote") or "").strip())
             ]
         normalized_items.append(item)
     normalized_payload = dict(conflict_payload)
@@ -1278,6 +1315,84 @@ def _execute_publish_trace(
     return {"published": True, "payload": payload, "dropped": dropped}
 
 
+_SEMANTIC_TOOLS = {
+    "semantic_search_paper": "paper",
+    "semantic_search_code": "code",
+    "recall_trace_cases": "trace",
+}
+
+_SEMANTIC_HINTS = {
+    "rag_disabled": "Semantic retrieval is switched off in settings. Use the paging and text "
+    "search tools instead.",
+    "rag_index_empty": "Nothing is indexed for this scope yet. Use the paging and text search "
+    "tools instead.",
+    "rag_empty_query": "Send a non-empty natural-language description of what you are looking for.",
+}
+
+
+def _execute_semantic_search(
+    session: Session,
+    project_id: int,
+    tool_name: str,
+    model: type[StrictModel],
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Run one semantic retrieval tool.
+
+    Retrieval failures are returned as ``found: false`` plus an instruction rather than
+    raised: the agent has complete non-semantic tools for every scope, so the correct
+    response to a missing index is to fall back, not to abort the analysis.
+    """
+
+    from app.services.rag import search
+
+    validated = model.model_validate(arguments)
+    scope = _SEMANTIC_TOOLS[tool_name]
+    result = search(
+        session,
+        project_id,
+        scope,
+        validated.query,  # type: ignore[attr-defined]
+        limit=validated.limit,  # type: ignore[attr-defined]
+    )
+    if not result.get("ok"):
+        reason = str(result.get("reason", "rag_unavailable"))
+        return {
+            "found": False,
+            "items": [],
+            "reason": reason,
+            "instruction": _SEMANTIC_HINTS.get(
+                reason,
+                "Semantic retrieval is unavailable. Use list_paper_blocks / list_code_symbols / "
+                "search_repository_text instead.",
+            ),
+        }
+    items = result.get("items", [])
+    payload: dict[str, Any] = {
+        "found": bool(items),
+        "query": result.get("query"),
+        "items": items,
+        "ranked_by": result.get("embedder"),
+    }
+    if scope == "paper":
+        payload["instruction"] = (
+            "Ranked by semantic similarity, not confirmed relevance. Read each candidate with "
+            "get_paper_block before quoting."
+        )
+    elif scope == "code":
+        payload["instruction"] = (
+            "Ranked by semantic similarity, not confirmed relevance. Read the real source with "
+            "get_symbol_source or read_source_lines and verify the computation actually happens "
+            "before publishing."
+        )
+    else:
+        payload["instruction"] = (
+            "Reviewed precedents for calibration only. Do not cite them as evidence and do not "
+            "reuse a verdict without re-checking the current code."
+        )
+    return payload
+
+
 def execute_tool(
     session: Session,
     project_id: int,
@@ -1310,6 +1425,8 @@ def execute_tool(
         if isinstance(arguments, dict):
             summary = str(arguments.get("summary", ""))[:2000]
         return {"finished": True, "summary": summary}
+    if tool_name in _SEMANTIC_TOOLS:
+        return _execute_semantic_search(session, project_id, tool_name, model, arguments)
     validated = model.model_validate(arguments)
     repository = _repository(session, project_id, repository_id)
 
@@ -1332,11 +1449,7 @@ def execute_tool(
         changes = collect_repository_changes(repository)
         items = [
             {
-                **{
-                    key: value
-                    for key, value in item.items()
-                    if key not in {"diff", "hunks"}
-                },
+                **{key: value for key, value in item.items() if key not in {"diff", "hunks"}},
                 "hunks": [
                     {
                         key: value
@@ -1354,9 +1467,7 @@ def execute_tool(
             "repository_revision": changes["repository_revision"],
             "items": page,
             "next_cursor": (
-                validated.cursor + len(page)
-                if validated.cursor + len(page) < len(items)
-                else None
+                validated.cursor + len(page) if validated.cursor + len(page) < len(items) else None
             ),
             "total": len(items),
             "changed_line_count": changes["changed_line_count"],
@@ -1424,8 +1535,7 @@ def execute_tool(
             "line_start": start,
             "line_end": end,
             "content": "\n".join(
-                f"{number:>5} | {line}"
-                for number, line in enumerate(lines[start - 1 : end], start)
+                f"{number:>5} | {line}" for number, line in enumerate(lines[start - 1 : end], start)
             ),
         }
     if isinstance(validated, SymbolArguments):

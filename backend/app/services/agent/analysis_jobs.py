@@ -195,9 +195,7 @@ def _submit(job_id: str) -> None:
     _executor.submit(_execute_job, job_id)
 
 
-def cancel_analysis_job(
-    session: Session, project_id: int, job_id: str
-) -> AgentAnalysisJob | None:
+def cancel_analysis_job(session: Session, project_id: int, job_id: str) -> AgentAnalysisJob | None:
     """Request early interruption of an analysis job, keeping already-published links.
 
     A running worker sees ``status=cancelling`` at its next step boundary and finalizes the
@@ -218,11 +216,7 @@ def cancel_analysis_job(
         job.status = "succeeded"
         job.error_code = None
         job.progress_json = {
-            "message": (
-                "追溯已中止（未发现可靠关系）"
-                if job.kind == "trace"
-                else "分析已中止"
-            ),
+            "message": ("追溯已中止（未发现可靠关系）" if job.kind == "trace" else "分析已中止"),
             "code": "analysis_cancelled",
         }
         job.completed_at = now
@@ -230,9 +224,7 @@ def cancel_analysis_job(
         job.status = "cancelling"
         job.progress_json = {
             "message": (
-                "正在中止追溯（保留已发现的关系）"
-                if job.kind == "trace"
-                else "正在中止分析"
+                "正在中止追溯（保留已发现的关系）" if job.kind == "trace" else "正在中止分析"
             ),
             "code": "analysis_cancelling",
         }
@@ -243,7 +235,55 @@ def cancel_analysis_job(
     return job
 
 
-def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, str]:
+def _trace_precedents(session: Session, job: AgentAnalysisJob) -> str:
+    """Few-shot block of this project's already-reviewed trace cases, or "" when none.
+
+    Recalled by similarity to the paper's own title/abstract, so the examples are topically
+    close to what this run will trace. Both verdicts are included: an accepted case shows the
+    evidence standard that held up, a rejected one shows a lexical near-miss that did not.
+    They are precedents for calibration, never evidence — the prompt says so explicitly,
+    because a model handed prior verdicts will otherwise copy them.
+    """
+
+    if job.paper_document_id is None:
+        return ""
+    try:
+        from app.services.rag import trace_examples
+
+        paper = session.get(PaperDocument, job.paper_document_id)
+        if paper is None:
+            return ""
+        query = " ".join(part for part in (paper.title, paper.abstract[:600]) if part).strip()
+        if not query:
+            return ""
+        examples = trace_examples(session, job.project_id, query, limit=4)
+    except Exception:  # noqa: BLE001 - prompt enrichment must never fail a job
+        logger.exception("trace precedent recall failed for job %s", job.job_id)
+        return ""
+    if not examples:
+        return ""
+    lines: list[str] = []
+    for index, example in enumerate(examples, start=1):
+        accepted = example["status"] == "accepted"
+        verdict = "ACCEPTED by reviewer" if accepted else "REJECTED by reviewer"
+        lines.append(
+            f"{index}. [{verdict}] relation={example['relation_type']}\n"
+            f"   paper: {example['paper_quote'][:240]}\n"
+            f"   code: {example['code_ref']} — {example['code_quote'][:240]}\n"
+            f"   reviewer-visible rationale: {example['rationale'][:240]}"
+        )
+    return (
+        "REVIEWED PRECEDENTS FROM THIS PROJECT. These paper-code relations were already judged "
+        "by a human reviewer. Use them ONLY to calibrate what counts as a defensible relation "
+        "and what evidence depth was expected. They are NOT evidence for this run: never cite "
+        "them as a quote, never reuse a verdict without re-reading the current code, and do not "
+        "assume a similar-looking pair deserves the same outcome.\n" + "\n".join(lines) + "\n\n"
+    )
+
+
+def _system_prompt(
+    job: AgentAnalysisJob, soft_target: int = 40, precedents: str = ""
+) -> tuple[str, str]:
     common = (
         "You are TraceLab's autonomous evidence analysis agent. You are the only semantic "
         "decision-maker. Local indexes are navigation aids, not conclusions. Inspect actual "
@@ -265,13 +305,21 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
             f"{job.code_revision}. Work in four stages inside this single run, publishing "
             f"candidates in batches as you confirm them. Aim to finish within about "
             f"{soft_target} tool steps.\n\n"
+            f"{precedents}"
+            "RETRIEVAL. semantic_search_paper and semantic_search_code rank paper blocks and code "
+            "symbols by MEANING, so you can locate a target by describing the computation instead "
+            "of paging the whole document or repository — use them first on a long paper or large "
+            "repository. recall_trace_cases surfaces this project's already-reviewed relations for "
+            "calibration. All three are navigation aids: a rank is never a verdict, and you must "
+            "still read the real block/source and quote it verbatim before publishing.\n\n"
             "STAGE 1 — SCOUT (paper focus). Browse bounded paper metadata first with "
             "list_paper_blocks, use search_paper_blocks for focused concepts, then read only "
             "specific evidence with get_paper_block. Identify 3-8 core contributions / method "
             "components and the sections that implement them. Mark method-chapter formulas, "
             "algorithms/pseudocode, and figures as must-inspect. Deliberately EXCLUDE background, "
             "related work, and experiment/result tables from tracing.\n\n"
-            "STAGE 2 — MAP (code responsibilities). Skim the repository (list_repository_files, "
+            "STAGE 2 — MAP (code responsibilities). Skim the repository (semantic_search_code for "
+            "each core target, then list_repository_files, "
             "list_code_symbols, get_symbol_source) to locate where the model, losses, tensor "
             "transforms, main train/inference loops, constraints, and update rules live. Treat "
             "this as navigation only, not a conclusion.\n\n"
@@ -333,7 +381,9 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
             "with previously_accepted=true was accepted before the edit and deserves extra "
             "scrutiny. Prefer the shortest sufficient span from an existing TraceLink. If no "
             "trace covers an important change, inspect inferred_paper_candidates first, then "
-            "call search_paper_blocks with a focused behavioral query only when needed. Read "
+            "call search_paper_blocks with a focused behavioral query only when needed. If "
+            "lexical candidates are insufficient for a conceptual match, use "
+            "semantic_search_paper as navigation, then read the exact block and span. Read "
             "only the highest-value blocks and mark such evidence association=inferred. Do not "
             "page through the whole paper with list_paper_blocks. If no "
             "paper is available, perform code-only analysis and do not invent paper evidence.\n\n"
@@ -341,7 +391,7 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
             "behavior_regression, trace_invalidation, trace_coverage, configuration_risk. Every "
             "item must cite a verbatim non-empty before or after quote from get_change_diff with "
             "its real line range. For a pure insertion or deletion, include only the non-empty "
-            "side in change_evidence; never submit quote=\"\". Paper claims should use "
+            'side in change_evidence; never submit quote="". Paper claims should use '
             "paper_evidence{block_id,span_id,association}; do not manually retype or reformat "
             "the quote. A pure code risk does not require paper evidence. Separate "
             "severity from confidence and give concrete recommendations and verification steps. "
@@ -468,9 +518,7 @@ def _upsert_paper_target(
             ]
         ).encode()
     ).hexdigest()
-    target = session.exec(
-        select(PaperTarget).where(PaperTarget.fingerprint == fingerprint)
-    ).first()
+    target = session.exec(select(PaperTarget).where(PaperTarget.fingerprint == fingerprint)).first()
     values = {
         "artifact_id": artifact.artifact_id,
         "paper_document_id": job.paper_document_id,
@@ -518,9 +566,7 @@ def _upsert_code_target(
             ]
         ).encode()
     ).hexdigest()
-    target = session.exec(
-        select(CodeTarget).where(CodeTarget.fingerprint == fingerprint)
-    ).first()
+    target = session.exec(select(CodeTarget).where(CodeTarget.fingerprint == fingerprint)).first()
     values = {
         "artifact_id": artifact.artifact_id,
         "code_repository_id": job.code_repository_id,
@@ -693,9 +739,8 @@ def _persist_artifact(
         )
     ).all()
     for item in current:
-        if (
-            job.kind == "architecture"
-            and item.payload_json.get("root_symbol") != payload.get("root_symbol")
+        if job.kind == "architecture" and item.payload_json.get("root_symbol") != payload.get(
+            "root_symbol"
         ):
             continue
         item.is_current = False
@@ -761,8 +806,7 @@ def _trace_soft_target(session: Session, job: AgentAnalysisJob) -> int:
     n_formula = sum(
         1
         for b in blocks
-        if isinstance(b, dict)
-        and b.get("kind") in {"equation", "equation_interline", "algorithm"}
+        if isinstance(b, dict) and b.get("kind") in {"equation", "equation_interline", "algorithm"}
     )
     soft = 18 + 2 * n_formula + len(blocks) // 30
     return max(28, min(soft, 64))
@@ -929,7 +973,8 @@ def _execute_job(job_id: str) -> None:
 
             emitter.emit("analysis.started", {"job_id": job.job_id, "kind": job.kind})
             soft_target = _trace_soft_target(session, job) if job.kind == "trace" else 40
-            system_prompt, request = _system_prompt(job, soft_target)
+            precedents = _trace_precedents(session, job) if job.kind == "trace" else ""
+            system_prompt, request = _system_prompt(job, soft_target, precedents)
             context = {
                 "system_prompt": system_prompt,
                 "history": [],
@@ -1059,6 +1104,9 @@ def _execute_job(job_id: str) -> None:
                 "list_paper_blocks",
                 "search_paper_blocks",
                 "get_paper_block",
+                "semantic_search_paper",
+                "semantic_search_code",
+                "recall_trace_cases",
                 "get_analysis_artifact",
                 "get_conflict_context",
                 "list_changed_files",
@@ -1107,8 +1155,14 @@ def _execute_job(job_id: str) -> None:
                         },
                     )
                     _finalize_trace_run(
-                        session, job, run, emitter, _current_artifact(), _published(),
-                        trace_entries=trace_entries, cancelled=True,
+                        session,
+                        job,
+                        run,
+                        emitter,
+                        _current_artifact(),
+                        _published(),
+                        trace_entries=trace_entries,
+                        cancelled=True,
                     )
                     return
                 if job.status == "failed":
@@ -1426,12 +1480,8 @@ def _execute_job(job_id: str) -> None:
                     continue
                 except ConflictEvidenceError as exc:
                     details = exc.details()
-                    location = (
-                        f"items.{exc.item_index}.paper_evidence.{exc.evidence_index}"
-                    )
-                    details_text = (
-                        f"{location}: block={exc.block_id}, reason={exc.reason}"
-                    )
+                    location = f"items.{exc.item_index}.paper_evidence.{exc.evidence_index}"
+                    details_text = f"{location}: block={exc.block_id}, reason={exc.reason}"
                     feedback = {
                         "tool": tool_name,
                         "ok": False,
@@ -1510,7 +1560,12 @@ def _execute_job(job_id: str) -> None:
                     if sink is not None:
                         sink.close()
                     _finalize_trace_run(
-                        session, job, run, emitter, _current_artifact(), _published(),
+                        session,
+                        job,
+                        run,
+                        emitter,
+                        _current_artifact(),
+                        _published(),
                         trace_entries=trace_entries,
                     )
                     return
@@ -1540,9 +1595,7 @@ def _execute_job(job_id: str) -> None:
                         run.completed_at = now
                         # Flush accumulated in-memory trace entries to the run row.
                         run.trace_json = trace_entries
-                        run.step_count = sum(
-                            e.get("type") == "model_step" for e in trace_entries
-                        )
+                        run.step_count = sum(e.get("type") == "model_step" for e in trace_entries)
                         session.add(job)
                         session.add(run)
                         session.add(artifact)
@@ -1608,7 +1661,12 @@ def _execute_job(job_id: str) -> None:
             final_artifact = _current_artifact()
             if final_artifact is not None or _published() > 0:
                 _finalize_trace_run(
-                    session, job, run, emitter, final_artifact, _published(),
+                    session,
+                    job,
+                    run,
+                    emitter,
+                    final_artifact,
+                    _published(),
                     trace_entries=trace_entries,
                 )
                 return
@@ -1698,10 +1756,6 @@ def recover_analysis_jobs() -> None:
         session.commit()
         # Capture ids before the session closes; committed instances expire and would
         # raise DetachedInstanceError if their attributes were read outside the session.
-        job_ids = [
-            job.job_id
-            for job in jobs
-            if job.status == "queued"
-        ]
+        job_ids = [job.job_id for job in jobs if job.status == "queued"]
     for job_id in job_ids:
         _submit(job_id)

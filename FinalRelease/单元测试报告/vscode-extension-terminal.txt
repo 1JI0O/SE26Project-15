@@ -1,0 +1,12 @@
+TraceLab VS Code extension compile and unit tests
+Executed: 2026-07-28
+Baseline: b79ae8e plus current test/fix worktree
+
+TypeScript compile: passed
+Node test runner: 3 passed, 0 failed, 0 skipped
+
+Covered behavior:
+- HTML-significant character escaping
+- Inline JSON script-breakout prevention
+- U+2028 and U+2029 escaping
+- undefined/null serialization

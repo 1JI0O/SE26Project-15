@@ -1,0 +1,21 @@
+....................................................                     [100%]
+=============================== tests coverage ================================
+_______________ coverage: platform win32, python 3.14.5-final-0 _______________
+
+Name                                         Stmts   Miss    Cover   Missing
+----------------------------------------------------------------------------
+app\services\code_analysis\__init__.py           4      0  100.00%
+app\services\code_analysis\analyzer.py          53      0  100.00%
+app\services\code_analysis\archive.py           68      0  100.00%
+app\services\code_analysis\constants.py          8      0  100.00%
+app\services\code_analysis\editor.py            73      0  100.00%
+app\services\code_analysis\ignore_rules.py      48      0  100.00%
+app\services\code_analysis\languages.py         21      0  100.00%
+app\services\code_analysis\python_ast.py        87      0  100.00%
+app\services\code_analysis\tree.py              27      0  100.00%
+----------------------------------------------------------------------------
+TOTAL                                          389      0  100.00%
+Coverage HTML written to dir ../FinalRelease/单元测试报告/htmlcov
+Coverage XML written to file ../FinalRelease/单元测试报告/coverage.xml
+Required test coverage of 100% reached. Total coverage: 100.00%
+52 passed in 1.46s

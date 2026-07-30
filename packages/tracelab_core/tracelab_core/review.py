@@ -39,10 +39,10 @@ def _parse_code_target(code_ref: str, code_symbol_id: str) -> tuple[str, int, in
     if "::" in code_symbol_id:
         path = code_symbol_id.split("::", 1)[0]
         return path or code_symbol_id, 1, 1
-    if code_ref.endswith(".py") or "/" in code_ref:
-        return code_ref, 1, 1
     if "::" in code_ref:
         return code_ref.split("::", 1)[0] or code_symbol_id, 1, 1
+    if code_ref.endswith(".py") or "/" in code_ref:
+        return code_ref, 1, 1
     return code_symbol_id.split("::", 1)[0] or code_ref or "unknown.py", 1, 1
 
 

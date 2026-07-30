@@ -12,6 +12,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.0",
+  "pytest-cov>=6.0.0",
   "ruff>=0.6.0",
 ]
 
@@ -28,6 +29,13 @@ include = ["tracelab_core*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = [
+  "--cov=tracelab_core.workspace",
+  "--cov=tracelab_core.review",
+  "--cov=tracelab_core.probe",
+  "--cov-report=term-missing",
+  "--cov-fail-under=90.01",
+]
 
 [tool.ruff]
 line-length = 100

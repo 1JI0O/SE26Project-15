@@ -517,6 +517,66 @@ class IntegrationConfig(SQLModel, table=True):
     mineru_request_retries: int = Field(default=3, ge=1, le=10)
     mineru_task_timeout_seconds: float = Field(default=600.0, gt=0, le=7200)
     mineru_poll_interval_seconds: float = Field(default=2.0, gt=0, le=30)
+    rag_enabled: bool = Field(default=True)
+    rag_embedder: str = Field(default="local", max_length=16)
+    rag_base_url: str = Field(default="", max_length=500)
+    rag_api_key: str = Field(default="", sa_column=Column(Text, nullable=False), repr=False)
+    rag_model: str = Field(default="", max_length=160)
+    rag_dimensions: int = Field(default=512, ge=64, le=4096)
+    rag_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RagChunk(SQLModel, table=True):
+    """One embedded retrieval unit (paper block, code symbol, or confirmed trace case).
+
+    Chunks are derived data: every row is rebuilt from its source (paper document, code
+    revision, trace links) and keyed by ``scope`` + ``source_key`` so a rebuild replaces the
+    previous generation wholesale. ``embedding`` is a base64 float32 vector — SQLite has no
+    vector type and the corpora here are small enough (thousands of chunks) that an exact
+    in-Python cosine scan beats taking on a native index dependency inside the PyInstaller
+    sidecar.
+    """
+
+    __tablename__ = "rag_chunk"
+
+    id: int | None = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    # "paper" | "code" | "trace"
+    scope: str = Field(max_length=16, index=True)
+    # Identifies the indexed generation: paper content hash, code revision, or "trace".
+    source_key: str = Field(max_length=128, index=True)
+    # Stable id of the underlying object (paper block id, code symbol id, trace id).
+    ref: str = Field(max_length=500)
+    text: str = Field(sa_column=Column(Text, nullable=False))
+    embedding: str = Field(sa_column=Column(Text, nullable=False), repr=False)
+    dimensions: int = Field(default=0, ge=0)
+    embedder: str = Field(default="local", max_length=64)
+    token_count: int = Field(default=0, ge=0)
+    metadata_json: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False)
+    )
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class RagIndexState(SQLModel, table=True):
+    """Bookkeeping for one (project, scope) index so rebuilds are skipped when current."""
+
+    __tablename__ = "rag_index_state"
+    __table_args__ = (UniqueConstraint("project_id", "scope", name="uq_rag_index_project_scope"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    scope: str = Field(max_length=16, index=True)
+    source_key: str = Field(default="", max_length=128)
+    embedder: str = Field(default="local", max_length=64)
+    model: str = Field(default="", max_length=160)
+    dimensions: int = Field(default=0, ge=0)
+    chunk_count: int = Field(default=0, ge=0)
+    # "pending" | "building" | "ready" | "failed"
+    status: str = Field(default="pending", max_length=16, index=True)
+    error: str | None = Field(default=None, max_length=500)
+    built_at: datetime | None = Field(default=None)
     updated_at: datetime = Field(default_factory=utc_now)
 
 

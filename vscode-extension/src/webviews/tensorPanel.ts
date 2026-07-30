@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 import { CoreRunner } from '../coreRunner'
 import { openWorkspaceCode } from '../openCode'
 import { zh } from '../zh'
+import { escapeHtml, shellAssets } from './shell'
 
 interface TensorNode {
   id: string
@@ -42,6 +43,7 @@ export class TensorPanelProvider {
   private currentView: 'architecture' | 'debug' = 'architecture'
   private currentRoot = ''
   private navStack: string[] = []
+  private dirty = true
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -54,34 +56,23 @@ export class TensorPanelProvider {
     _token: vscode.CancellationToken,
   ): void {
     this.view = webviewView
-    webviewView.webview.options = { enableScripts: true }
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')],
+    }
+    webviewView.onDidDispose(() => {
+      this.view = undefined
+    })
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible && this.dirty) void this.refresh()
+    })
     this.bind(webviewView.webview)
     void this.refresh()
   }
 
   open(): void {
-    void vscode.commands.executeCommand('workbench.view.extension.tracelab-panel')
     void vscode.commands.executeCommand(`${TensorPanelProvider.viewType}.focus`)
-    if (this.view) {
-      this.view.show?.(true)
-      void this.refresh()
-      return
-    }
-    if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.Beside)
-      void this.refresh()
-      return
-    }
-    this.panel = vscode.window.createWebviewPanel(
-      'tracelab.tensorEditor',
-      zh.tensorTitle,
-      vscode.ViewColumn.Beside,
-      { enableScripts: true, retainContextWhenHidden: true },
-    )
-    this.panel.onDidDispose(() => {
-      this.panel = undefined
-    })
-    this.bind(this.panel.webview)
+    this.view?.show?.(true)
     void this.refresh()
   }
 
@@ -117,27 +108,37 @@ export class TensorPanelProvider {
     })
   }
 
-  async refresh(): Promise<void> {
-    const html = await this.buildHtml()
-    if (this.panel) {
-      this.panel.webview.html = html
-    }
-    if (this.view) {
-      this.view.webview.html = html
+  /** Mark stale; the graph is only recomputed while the view is actually shown. */
+  invalidate(): void {
+    this.dirty = true
+    if (this.view?.visible || this.panel?.visible) {
+      void this.refresh()
     }
   }
 
-  private async buildHtml(): Promise<string> {
+  async refresh(): Promise<void> {
+    const target = this.panel?.webview ?? this.view?.webview
+    if (!target) return
+    if (this.view && !this.view.visible && !this.panel) {
+      this.dirty = true
+      return
+    }
+    this.dirty = false
+    target.html = await this.buildHtml(target)
+  }
+
+  private async buildHtml(webview: vscode.Webview): Promise<string> {
+    const assets = shellAssets(webview, this.extensionUri)
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
     if (!root) {
-      return emptyHtml(zh.openFolderFirst)
+      return emptyHtml(zh.openFolderFirst, assets.media, assets.csp)
     }
     const result = await this.runner.tensorFlow(root, {
       view: this.currentView,
       root: this.currentRoot || undefined,
     })
     if (!result.ok) {
-      return emptyHtml(String(result.error ?? zh.runAnalyzeFirst))
+      return emptyHtml(String(result.error ?? zh.runAnalyzeFirst), assets.media, assets.csp)
     }
     const graph = (result.graph as TensorGraph) || {}
     const nodes = graph.nodes ?? []
@@ -147,7 +148,7 @@ export class TensorPanelProvider {
       this.currentRoot || graph.selected_root || graph.root_symbol || graph.default_root || ''
 
     if (!nodes.length) {
-      return emptyHtml(zh.tensorEmpty)
+      return emptyHtml(zh.tensorEmpty, assets.media, assets.csp)
     }
 
     const maxX = Math.max(...nodes.map((n) => (n.x ?? 0) + (n.width ?? 180)), 640)
@@ -199,40 +200,52 @@ export class TensorPanelProvider {
       .join('')
 
     const viewLabel = this.currentView === 'debug' ? zh.debug : zh.architecture
+    const { media, nonce, csp } = assets
     return `<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
+<meta http-equiv="Content-Security-Policy" content="${csp}" />
+<link rel="stylesheet" href="${media('ui.css')}" />
 <style>
-  body { margin: 0; font: 12px var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); height: 100vh; display: grid; grid-template-rows: auto 1fr; }
-  .bar { display: flex; gap: 8px; align-items: center; padding: 8px; border-bottom: 1px solid var(--vscode-widget-border); flex-wrap: wrap; }
-  .stage { position: relative; overflow: hidden; }
+  .stage { position: relative; min-height: 0; overflow: hidden; }
   svg { width: 100%; height: 100%; cursor: grab; }
   svg.dragging { cursor: grabbing; }
-  .edge { fill: none; stroke: #889; stroke-width: 1.5; }
-  .node rect { fill: #1f2a44; stroke: #6ae; stroke-width: 1.2; cursor: pointer; }
-  .node text { fill: #e8eefc; font-size: 11px; pointer-events: none; }
-  .node .sub { fill: #9ab; font-size: 10px; }
-  button.active { outline: 1px solid var(--vscode-focusBorder); }
+  .edge { fill: none; stroke: var(--tl-fg-muted); stroke-width: 1.4; opacity: .75; }
+  .node rect {
+    fill: var(--tl-surface-raised);
+    stroke: var(--tl-accent);
+    stroke-width: 1.2;
+    cursor: pointer;
+  }
+  .node:hover rect { fill: var(--vscode-list-hoverBackground, var(--tl-surface-raised)); stroke-width: 1.8; }
+  .node text { fill: var(--tl-fg); font-size: 11px; pointer-events: none; }
+  .node .sub { fill: var(--tl-fg-muted); font-size: 10px; }
 </style></head>
-<body>
-  <div class="bar">
-    <label>${zh.selectRoot} <select id="root">${rootOptions || `<option value="">${escapeHtml(selected || '无')}</option>`}</select></label>
-    <button id="arch" class="${this.currentView === 'architecture' ? 'active' : ''}">${zh.architecture}</button>
-    <button id="debug" class="${this.currentView === 'debug' ? 'active' : ''}">${zh.debug}</button>
-    <button id="back" ${this.navStack.length ? '' : 'disabled'}>${zh.back}</button>
-    <button id="zoomIn">${zh.zoomIn}</button>
-    <button id="zoomOut">${zh.zoomOut}</button>
-    <button id="fit">${zh.fit}</button>
-    <span>${nodes.length} 节点 · ${viewLabel} · ${zh.tensorHint}</span>
-  </div>
+<body class="tl-shell">
+  <header class="tl-bar">
+    <select id="root" title="${escapeHtml(zh.selectRoot)}">${rootOptions || `<option value="">${escapeHtml(selected || '无')}</option>`}</select>
+    <span class="tl-bar-group">
+      <button id="arch" class="${this.currentView === 'architecture' ? 'active' : ''}">${zh.architecture}</button>
+      <button id="debug" class="${this.currentView === 'debug' ? 'active' : ''}">${zh.debug}</button>
+    </span>
+    <button class="tl-ghost" id="back" ${this.navStack.length ? '' : 'disabled'}>${zh.back}</button>
+    <span class="tl-bar-group">
+      <button id="zoomOut" title="${escapeHtml(zh.zoomOut)}">−</button>
+      <button id="fit" title="${escapeHtml(zh.fit)}">适应</button>
+      <button id="zoomIn" title="${escapeHtml(zh.zoomIn)}">+</button>
+    </span>
+    <span class="tl-bar-spacer"></span>
+    <span class="tl-chip tl-chip-accent">${nodes.length} 节点</span>
+    <span class="tl-chip">${viewLabel}</span>
+    <span class="tl-muted">${zh.tensorHint}</span>
+  </header>
   <div class="stage">
     <svg id="canvas" viewBox="0 0 ${maxX + 40} ${maxY + 40}">
       ${edgeSvg}
       ${nodeSvg}
     </svg>
   </div>
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const svg = document.getElementById('canvas');
     let vb = { x: 0, y: 0, w: ${maxX + 40}, h: ${maxY + 40} };
@@ -294,14 +307,16 @@ export class TensorPanelProvider {
   }
 }
 
-function emptyHtml(message: string): string {
-  return `<!DOCTYPE html><html lang="zh-CN"><body style="font:13px sans-serif;padding:16px;color:var(--vscode-foreground)">${escapeHtml(message)}</body></html>`
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
+function emptyHtml(message: string, media: (rel: string) => string, csp: string): string {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="${csp}" />
+  <link rel="stylesheet" href="${media('ui.css')}" />
+</head>
+<body>
+  <div class="tl-empty"><strong>张量流图</strong><span>${escapeHtml(message)}</span></div>
+</body>
+</html>`
 }

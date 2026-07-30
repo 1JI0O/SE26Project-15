@@ -29,9 +29,23 @@ export interface MinerUIntegrationSettings {
   poll_interval_seconds: number
 }
 
+export type RagEmbedder = 'local' | 'remote'
+
+export interface RagIntegrationSettings {
+  enabled: boolean
+  /** `local` runs offline with no key; `remote` calls an OpenAI-compatible /embeddings API. */
+  embedder: RagEmbedder
+  base_url: string
+  model: string
+  dimensions: number
+  timeout_seconds: number
+  api_key_configured: boolean
+}
+
 export interface IntegrationSettings {
   agent: AgentIntegrationSettings
   mineru: MinerUIntegrationSettings
+  rag: RagIntegrationSettings
   source: 'environment' | 'application'
   updated_at: string | null
 }
@@ -44,6 +58,10 @@ export interface IntegrationSettingsUpdate {
   mineru: Omit<MinerUIntegrationSettings, 'api_token_configured'> & {
     official_api_token?: string
     clear_api_token: boolean
+  }
+  rag: Omit<RagIntegrationSettings, 'api_key_configured'> & {
+    api_key?: string
+    clear_api_key: boolean
   }
 }
 

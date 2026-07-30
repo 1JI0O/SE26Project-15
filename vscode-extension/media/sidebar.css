@@ -1,0 +1,93 @@
+/* TraceLab sidebar workbench. */
+body {
+  padding: 10px 10px 20px;
+}
+
+.tl-section-title:first-of-type {
+  margin-top: 10px;
+}
+
+.tl-status-grid {
+  display: grid;
+  gap: 4px 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+}
+
+.tl-status-grid dt {
+  color: var(--tl-fg-muted);
+  font-size: 11px;
+}
+
+.tl-status-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tl-path {
+  color: var(--tl-fg-muted);
+  font-family: var(--tl-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.tl-task {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 6px 9px;
+  border: 1px solid var(--tl-border);
+  border-radius: var(--tl-radius);
+  background: var(--tl-surface-raised);
+  color: var(--tl-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.tl-steps {
+  display: grid;
+  gap: 4px;
+}
+
+.tl-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.tl-step-index {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.tl-step.tl-ghost .tl-step-index {
+  background: var(--vscode-badge-background, rgba(128, 128, 128, 0.3));
+  color: var(--vscode-badge-foreground, inherit);
+}
+
+.tl-open-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.tl-field {
+  display: grid;
+  gap: 3px;
+}
+
+.tl-log:empty::after {
+  content: '（暂无）';
+  color: var(--tl-fg-muted);
+}

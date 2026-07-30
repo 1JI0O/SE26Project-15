@@ -1,9 +1,7 @@
 import { onBeforeUnmount, onMounted, ref, shallowRef, type Ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import type { LSPClient } from '@codemirror/lsp-client'
-import { isDesktop } from '@/api/http'
+import { extractErrorDetail, isDesktop } from '@/api/http'
 import { materializeCheckout } from '@/api/repository-api'
-import { extractErrorDetail } from '@/api/http'
 import { WebSocketLspTransport, buildLspWebSocketUrl } from '@/features/repository/lspTransport'
 import { createTraceLabLspClient } from '@/features/repository/traceLabWorkspace'
 
@@ -35,7 +33,11 @@ export function useDesktopPythonLsp(
       lspClient.value = client
       lspReady.value = true
     } catch (error) {
-      ElMessage.warning(extractErrorDetail(error, '语言服务不可用'))
+      const detail = extractErrorDetail(error, '语言服务不可用')
+      console.info('[lsp]', detail)
+      lspClient.value = null
+      lspReady.value = false
+      lspCheckoutRoot.value = null
       transport?.close()
       transport = null
     }

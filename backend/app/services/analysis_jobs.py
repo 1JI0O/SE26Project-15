@@ -126,9 +126,12 @@ def _execute_job(job_id: str) -> None:
                     f"revision-{repository.revision}",
                 )
         if analysis_ready:
-            # Code analysis just became current; kick the auto trace coordinator.
+            # Code analysis just became current: reindex code for semantic retrieval (the
+            # previous generation is keyed to the old revision), then kick the coordinator.
+            from app.services.rag import refresh_project_indexes
             from app.services.tracing.coordinator import maybe_start_trace
 
+            refresh_project_indexes(project_id, ("code",))
             maybe_start_trace(project_id)
     except Exception as exc:
         with Session(engine) as session:

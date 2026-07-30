@@ -13,7 +13,7 @@ export interface CliResult {
   [key: string]: unknown
 }
 
-export type ProgressHandler = (event: {
+export interface ProgressEvent {
   phase: string
   message: string
   current?: number
@@ -21,8 +21,11 @@ export type ProgressHandler = (event: {
   event_kind?: string
   tool?: string
   published?: number
+  step?: number
   [key: string]: unknown
-}) => void
+}
+
+export type ProgressHandler = (event: ProgressEvent) => void
 
 export class CoreRunner {
   private readonly log: vscode.OutputChannel
@@ -63,9 +66,24 @@ export class CoreRunner {
     return this.syncPromise
   }
 
+  /**
+   * Interpreter inside the bundled venv, when `uv sync` already created it.
+   *
+   * Calling it directly skips `uv run`'s per-invocation project resolution
+   * (~350ms vs ~70ms), which matters because the CLI is invoked for every
+   * status / tensor refresh.
+   */
+  private venvPython(): string | undefined {
+    const candidates =
+      process.platform === 'win32'
+        ? [path.join(this.bundledRoot, '.venv', 'Scripts', 'python.exe')]
+        : [path.join(this.bundledRoot, '.venv', 'bin', 'python')]
+    return candidates.find((candidate) => fs.existsSync(candidate))
+  }
+
   private async syncBundledDeps(): Promise<CliResult> {
-    const marker = path.join(this.bundledRoot, '.venv', 'bin', 'python')
-    if (fs.existsSync(marker)) {
+    const marker = this.venvPython()
+    if (marker) {
       this.log.appendLine(`[runtime] using existing venv at ${marker}`)
       return { ok: true }
     }
@@ -138,9 +156,10 @@ export class CoreRunner {
     const label = `tracelab ${subcommand.join(' ')}`
     this.log.appendLine(`[run] bundled=${this.bundledRoot} workspace=${workspace} ${label}`)
 
-    const command = pythonPath === 'uv' ? 'uv' : pythonPath
+    const venv = pythonPath === 'uv' ? this.venvPython() : undefined
+    const command = venv ?? (pythonPath === 'uv' ? 'uv' : pythonPath)
     const args =
-      pythonPath === 'uv'
+      command === 'uv'
         ? ['run', '--project', this.bundledRoot, 'python', '-m', 'tracelab_core.cli', ...tracelabArgs]
         : ['-m', 'tracelab_core.cli', ...tracelabArgs]
 
@@ -209,13 +228,9 @@ export class CoreRunner {
             }
             if (parsed.event === 'progress') {
               this.onProgress?.({
+                ...parsed,
                 phase: String(parsed.phase ?? ''),
                 message: String(parsed.message ?? ''),
-                current: parsed.current,
-                total: parsed.total,
-                event_kind: parsed.event_kind,
-                tool: parsed.tool,
-                published: parsed.published,
               })
             } else {
               final = parsed
@@ -237,6 +252,7 @@ export class CoreRunner {
             const parsed = JSON.parse(trimmed) as CliResult & { event?: string }
             if (parsed.event === 'progress') {
               this.onProgress?.({
+                ...parsed,
                 phase: String((parsed as { phase?: string }).phase ?? ''),
                 message: String((parsed as { message?: string }).message ?? ''),
               })

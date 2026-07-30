@@ -26,6 +26,10 @@ def _sha256(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
 
 
+def _normalize_newlines(content: str) -> str:
+    return content.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _ranges_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
     return start_a <= end_b and start_b <= end_a
 
@@ -79,6 +83,8 @@ def collect_repository_changes(repository: CodeRepository) -> dict[str, Any]:
                 )
             except (FileAccessError, ValueError):
                 continue
+            before = _normalize_newlines(before)
+            after = _normalize_newlines(after)
             if before == after:
                 continue
             hunks = _change_hunks(before, after)
