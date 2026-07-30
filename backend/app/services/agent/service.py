@@ -8,7 +8,14 @@ from pydantic import ValidationError
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.entities import AgentToolRequest, Project, TraceLink, as_utc, utc_now
+from app.models.entities import (
+    AgentRun,
+    AgentToolRequest,
+    Project,
+    TraceLink,
+    as_utc,
+    utc_now,
+)
 from app.schemas.agent import (
     AgentCitation,
     AgentConfirmationRead,
@@ -47,6 +54,44 @@ from app.services.tracing.manual_anchors import (
 
 AnalysisEnqueuer = Callable[[int, list[str], str], dict[str, Any]]
 _analysis_enqueuer: AnalysisEnqueuer | None = None
+
+# Chat-tool create_trace_link; distinct from analysis publish versions (trace-agent-v2/v3).
+CHAT_CREATE_TRACE_PROMPT_VERSION = "chat-create-trace-v1"
+
+
+def _model_info_for_chat_tool(session: Session, request: AgentToolRequest) -> dict[str, str]:
+    """Shape required by ``TraceModelInfo`` so GET /trace-links does not 500.
+
+    Earlier builds stuffed ``source``/``confirmation_id`` into ``model_info_json``; the read
+    schema requires ``provider``/``name``/``prompt_version``. Those provenance fields belong in
+    ``provenance_json`` instead (see ``_provenance_for_chat_tool``).
+    """
+
+    run: AgentRun | None = None
+    if request.run_id:
+        run = session.get(AgentRun, request.run_id)
+    provider = (run.provider_name if run else "") or ""
+    name = (run.model_name if run else "") or ""
+    if not provider or not name:
+        configured, _ = _provider_from_settings(session)
+        if configured is not None:
+            provider = provider or configured.provider_name or "openai-compatible"
+            name = name or configured.model_name or "unknown"
+    return {
+        "provider": provider or "agent_tool",
+        "name": name or "unknown",
+        "prompt_version": CHAT_CREATE_TRACE_PROMPT_VERSION,
+    }
+
+
+def _provenance_for_chat_tool(request: AgentToolRequest) -> dict[str, Any]:
+    provenance: dict[str, Any] = {
+        "source": "agent_tool",
+        "confirmation_id": request.confirmation_id,
+    }
+    if request.run_id:
+        provenance["run_id"] = request.run_id
+    return provenance
 
 
 class ToolExecutionError(RuntimeError):
@@ -417,7 +462,8 @@ def _execute_create_trace(
             "level": "low" if arguments.confidence >= 0.85 else "medium",
             "reasons": ["Agent-generated relation; user confirmation recorded"],
         },
-        model_info_json={"source": "agent_tool", "confirmation_id": request.confirmation_id},
+        model_info_json=_model_info_for_chat_tool(session, request),
+        provenance_json=_provenance_for_chat_tool(request),
         # Without evidence the link would carry no anchor ids, and the reader's decoration
         # index drops any link whose target id is null — the relation would appear in the
         # matrix and jump correctly while leaving both panes unhighlighted.

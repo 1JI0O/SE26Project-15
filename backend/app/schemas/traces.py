@@ -24,6 +24,52 @@ class TraceRelationType(StrEnum):
     MENTIONS = "mentions"
 
 
+# Chat LLMs often invent near-synonyms that are not in the enum; map the common ones so a
+# single bad string cannot 500 the whole GET /trace-links list after confirmation lands.
+_RELATION_TYPE_ALIASES: dict[str, TraceRelationType] = {
+    "references": TraceRelationType.MENTIONS,
+    "reference": TraceRelationType.MENTIONS,
+    "refers": TraceRelationType.MENTIONS,
+    "refers_to": TraceRelationType.MENTIONS,
+    "related": TraceRelationType.MENTIONS,
+    "related_to": TraceRelationType.MENTIONS,
+    "describes": TraceRelationType.MENTIONS,
+    "mentions": TraceRelationType.MENTIONS,
+    "implements": TraceRelationType.IMPLEMENTS,
+    "computes": TraceRelationType.COMPUTES,
+    "defines": TraceRelationType.DEFINES,
+    "constrains": TraceRelationType.CONSTRAINS,
+    "updates": TraceRelationType.UPDATES,
+    "configures": TraceRelationType.CONFIGURES,
+    "invokes": TraceRelationType.INVOKES,
+    "tests": TraceRelationType.TESTS,
+}
+
+
+def normalize_relation_type(
+    value: object,
+    *,
+    fallback: TraceRelationType = TraceRelationType.MENTIONS,
+) -> TraceRelationType:
+    """Coerce a free-form relation label into a known ``TraceRelationType``.
+
+    Unknown values fall back to ``mentions`` so stored chat-tool rows remain listable even when
+    the model invents a type the schema never declared (e.g. ``references``).
+    """
+
+    if isinstance(value, TraceRelationType):
+        return value
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not raw:
+        return fallback
+    if raw in _RELATION_TYPE_ALIASES:
+        return _RELATION_TYPE_ALIASES[raw]
+    try:
+        return TraceRelationType(raw)
+    except ValueError:
+        return fallback
+
+
 class TraceEvidence(BaseModel):
     side: str = Field(pattern="^(paper|code)$")
     ref: str = Field(min_length=1, max_length=500)
