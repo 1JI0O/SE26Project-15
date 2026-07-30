@@ -25,6 +25,8 @@ const MARK_SELECTOR = 'mark[data-trace-target]'
 const BLOCK_CLASS = 'trace-block-target'
 /** Comma-separated list of every target that resolved to one block-level element. */
 const TARGET_LIST_ATTR = 'data-trace-targets'
+/** Carries the real MinerU block id; injected into the markdown by the backend. */
+const BLOCK_ID_ATTR = 'data-paper-block-id'
 
 const FORMULA_TARGET_TYPES = new Set([
   'formula',
@@ -113,6 +115,54 @@ export function resolveVisualBlock(anchor: HTMLElement): HTMLElement {
     return sibling
   }
   return container
+}
+
+/**
+ * The real MinerU block id for whatever the user clicked or selected, or null.
+ *
+ * This is the inverse of `blockElement`: the backend injects the id on a zero-width
+ * `<span data-paper-block-id="…">` at the START of each block's markdown line, so the id is a
+ * *descendant* of the rendered paragraph rather than an ancestor of the clicked text — a plain
+ * `closest('[data-paper-block-id]')` from the selection finds nothing (or, worse, some outer
+ * element that happens to carry the attribute).
+ *
+ * Resolution deliberately routes every anchor through `resolveVisualBlock`, the same helper the
+ * decoration pass uses, so a manual selection lands on exactly the block that will later be
+ * highlighted. Anything else re-introduces the class of bug where a relation is stored against
+ * one block and drawn against another (or not drawn at all).
+ */
+export function resolveBlockIdAt(root: HTMLElement, node: Node | null): string | null {
+  if (!node) return null
+  const start =
+    node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement | null)
+  if (!start) return null
+
+  // Fast path: the click landed on (or inside) an already-decorated target, which carries the
+  // block id directly.
+  const decorated = start.closest<HTMLElement>(`[${BLOCK_ID_ATTR}]`)
+  if (decorated?.getAttribute(BLOCK_ID_ATTR)) {
+    return decorated.getAttribute(BLOCK_ID_ATTR)
+  }
+
+  const container =
+    start.closest<HTMLElement>(
+      'h1, h2, h3, h4, h5, h6, p, li, pre, blockquote, td, .math-display, table, img',
+    ) ?? start
+  if (!root.contains(container)) return null
+
+  // Build anchor → visual block once and match by identity. Cheap at paper scale (hundreds of
+  // anchors) and guarantees agreement with the decoration pass.
+  let fallback: string | null = null
+  for (const anchor of root.querySelectorAll<HTMLElement>(`[${BLOCK_ID_ATTR}]`)) {
+    const blockId = anchor.getAttribute(BLOCK_ID_ATTR)
+    if (!blockId) continue
+    const visual = anchor.matches('span') ? resolveVisualBlock(anchor) : anchor
+    if (visual === container) return blockId
+    // An anchor whose own container is ours (e.g. several anchors inside one merged paragraph)
+    // is a weaker but still correct answer; keep the first as a fallback.
+    if (fallback === null && container.contains(anchor)) fallback = blockId
+  }
+  return fallback
 }
 
 /** Walk up to `maxSteps` following siblings to find a visual block (formula/table). */

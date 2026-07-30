@@ -85,7 +85,7 @@
       <div
         v-for="row in mergedRows"
         :key="row.key"
-        :class="['trace-row', 'clickable', { selected: isRowSelected(row) }]"
+        :class="['trace-row', 'clickable', { selected: isRowSelected(row), fresh: isFreshRow(row) }]"
         @click="$emit('selectRow', row.top)"
         @mouseenter="$emit('hoverRow', row.top)"
         @mouseleave="$emit('leaveRow')"
@@ -143,10 +143,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { TraceRowView } from '@/composables/useTrace'
 import type { TraceStatus } from '@/types/tracing'
 import { confidenceColor } from './confidence'
+
+const freshTraceIds = ref<Set<string>>(new Set())
 
 const props = withDefaults(
   defineProps<{
@@ -271,6 +273,34 @@ watch(allProposedIds, (ids) => {
 function isRowSelected(row: MergedTraceRow): boolean {
   return Boolean(props.selectedId && row.ids.includes(props.selectedId))
 }
+
+function isFreshRow(row: MergedTraceRow): boolean {
+  return row.ids.some((id) => freshTraceIds.value.has(id))
+}
+
+function handleNewTraceLink(event: Event): void {
+  const customEvent = event as CustomEvent
+  const { traceId } = customEvent.detail
+  if (traceId) {
+    freshTraceIds.value.add(traceId)
+
+    // Remove highlight after 3 seconds
+    setTimeout(() => {
+      freshTraceIds.value.delete(traceId)
+    }, 3000)
+
+    // Emit event to parent to refresh trace data
+    // The parent (ProjectWorkspaceView) should call trace.refresh()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('trace-link-created', handleNewTraceLink)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('trace-link-created', handleNewTraceLink)
+})
 
 function isGroupChecked(row: MergedTraceRow): boolean {
   return row.proposedIds.every((id) => selectedSet.value.has(id))
@@ -513,6 +543,23 @@ function statusType(status: MergedTraceRow['status']): 'success' | 'warning' | '
 
 .trace-head:hover {
   background: transparent;
+}
+
+/* Fresh trace link animation */
+@keyframes flash-yellow {
+  0% {
+    background-color: #fdf6ec;
+  }
+  50% {
+    background-color: #f5daa5;
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.trace-row.fresh {
+  animation: flash-yellow 3s ease-out;
 }
 
 @media (max-width: 820px) {

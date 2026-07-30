@@ -1,5 +1,16 @@
 export type TraceStatus = 'proposed' | 'accepted' | 'rejected' | 'stale'
 
+export type TraceRelationType =
+  | 'implements'
+  | 'describes'
+  | 'motivates'
+  | 'evaluates'
+  | 'defines'
+  | 'computes'
+  | 'calls'
+  | 'tests'
+  | 'related'
+
 export interface WorkspaceTraceRow {
   paper_ref: string
   code_ref: string

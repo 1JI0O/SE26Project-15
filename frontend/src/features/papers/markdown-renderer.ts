@@ -96,6 +96,13 @@ export function renderPaperMarkdown(markdownText: string, resolveAsset: AssetRes
     return renderer.renderToken(tokens, index, options)
   }
 
+  // NOTE: paragraphs deliberately get no `data-paper-block-id` here. The backend already
+  // injects `<span data-paper-block-id="p1-b6">` anchors carrying the real MinerU block ids
+  // (`paper_markdown.inject_block_anchors`). Adding the attribute to the wrapping `<p>` as well
+  // shadowed them: `closest('[data-paper-block-id]')` from selected text hit the paragraph
+  // first and returned an invented `para-N` id that matches no stored block, which broke both
+  // evidence quoting and highlight resolution. Use `resolveBlockIdAt` to read the real id.
+
   const fallbackImageRenderer = markdown.renderer.rules.image
   markdown.renderer.rules.image = (tokens, index, options, environment, renderer) => {
     const source = tokens[index].attrGet('src')

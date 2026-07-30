@@ -112,6 +112,15 @@
             </span>
           </button>
         </el-tooltip>
+        <el-tooltip content="标注模式" placement="right">
+          <button
+            :class="['activity-button', { active: annotation.annotationMode }]"
+            aria-label="标注模式"
+            @click="annotation.toggleAnnotationMode()"
+          >
+            <el-icon :size="21"><EditPen /></el-icon>
+          </button>
+        </el-tooltip>
         <el-tooltip content="张量流图" placement="right">
           <button
             :class="['activity-button', { active: bottomPanelOpen && activeBottomPanel === 'flow' }]"
@@ -623,6 +632,7 @@
       @open-code="jumpToTraceCode"
     />
 
+    <AnnotationDialog />
     <DebugPanel />
     <el-dialog v-model="artifactVersionsVisible" title="本机保留的云端文件版本" width="760px">
       <el-table :data="artifactVersions">
@@ -656,6 +666,7 @@ import {
   UploadFilled,
   Warning,
   Monitor,
+  EditPen,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -664,6 +675,7 @@ import { localCloudSyncAvailable, localHttp } from '@/api/http'
 import { resolveDefinition } from '@/api/repository-api'
 import { useAuthStore } from '@/stores/auth'
 import { useSyncStore } from '@/stores/sync'
+import { useAnnotationStore } from '@/stores/annotation'
 
 import { isEditableFile, fileIcon, useCode } from '@/composables/useCode'
 import { useDebug } from '@/composables/useDebug'
@@ -677,6 +689,7 @@ import { useTraceIndex } from '@/composables/useTraceIndex'
 import { useWorkspace } from '@/composables/useWorkspace'
 import type { PaperMark } from '@/features/papers/trace-decorations'
 import AgentPanel from '@/features/agent/AgentPanel.vue'
+import AnnotationDialog from '@/features/tracing/AnnotationDialog.vue'
 import DebugPanel from '@/components/DebugPanel.vue'
 import PaperOutlineTree from '@/features/papers/PaperOutlineTree.vue'
 import PaperReader from '@/features/papers/PaperReader.vue'
@@ -716,6 +729,7 @@ interface LocalArtifactVersionRow {
 const workspace = useWorkspace()
 const auth = useAuthStore()
 const sync = useSyncStore()
+const annotation = useAnnotationStore()
 const cloudSyncEnabled = computed(
   () => localCloudSyncAvailable && auth.authenticated && auth.verified,
 )
@@ -902,6 +916,7 @@ function onWindowResize(): void {
 onMounted(async () => {
   window.addEventListener('resize', onWindowResize)
   window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('trace-link-created', handleTraceLinkCreated)
   await nextTick()
   clampAgentWidth()
   clampTraceSummaryWidth()
@@ -924,9 +939,15 @@ onMounted(async () => {
   }
 })
 
+function handleTraceLinkCreated(): void {
+  // Refresh trace data when a new link is created
+  void trace.loadTraceRows()
+}
+
 onUnmounted(() => {
   window.removeEventListener('resize', onWindowResize)
   window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('trace-link-created', handleTraceLinkCreated)
   stopResize()
   paper.cancelPolling() // stop any in-flight parse poll so it can't hit /projects/NaN/... (422)
 })

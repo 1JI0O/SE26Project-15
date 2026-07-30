@@ -26,9 +26,11 @@ from app.services.agent.provider import (
 from app.services.agent.tools import (
     WRITE_TOOLS,
     CreateTraceArguments,
+    DeleteTraceLinkArguments,
     RerunAnalysisArguments,
     SaveCodeArguments,
     UpdateTraceArguments,
+    UpdateTraceLinkArguments,
     build_context_snapshot,
     content_sha256,
     latest_code,
@@ -37,6 +39,10 @@ from app.services.agent.tools import (
     validate_tool_arguments,
 )
 from app.services.integration_settings import get_effective_integration_config
+from app.services.tracing.manual_anchors import (
+    UnresolvableAnchorError,
+    build_reference_evidence,
+)
 
 AnalysisEnqueuer = Callable[[int, list[str], str], dict[str, Any]]
 _analysis_enqueuer: AnalysisEnqueuer | None = None
@@ -348,6 +354,19 @@ def _execute_create_trace(
             "status": existing.status,
             "created": False,
         }
+    try:
+        evidence = build_reference_evidence(
+            session,
+            request.project_id,
+            paper,
+            code,
+            arguments.paper_ref,
+            arguments.code_ref,
+        )
+    except UnresolvableAnchorError as exc:
+        # A relation whose reference cannot be anchored can never be highlighted or quoted, so
+        # it must fail loudly here rather than land in the matrix as a dead row.
+        raise ToolExecutionError(f"{exc.side}_reference_not_anchorable") from exc
     link = TraceLink(
         project_id=request.project_id,
         paper_document_id=paper.id,
@@ -365,6 +384,10 @@ def _execute_create_trace(
             "reasons": ["Agent-generated relation; user confirmation recorded"],
         },
         model_info_json={"source": "agent_tool", "confirmation_id": request.confirmation_id},
+        # Without evidence the link would carry no anchor ids, and the reader's decoration
+        # index drops any link whose target id is null — the relation would appear in the
+        # matrix and jump correctly while leaving both panes unhighlighted.
+        evidence_json=evidence,
         fingerprint=fingerprint,
         status="accepted",
         decided_at=utc_now(),
@@ -373,6 +396,72 @@ def _execute_create_trace(
     session.commit()
     session.refresh(link)
     return {"trace_id": link.trace_id, "status": link.status, "created": True}
+
+
+def _execute_update_trace_link(
+    session: Session,
+    request: AgentToolRequest,
+    arguments: UpdateTraceLinkArguments,
+) -> dict[str, Any]:
+    link = session.exec(
+        select(TraceLink).where(
+            TraceLink.project_id == request.project_id,
+            TraceLink.trace_id == arguments.trace_id,
+        )
+    ).first()
+    if link is None:
+        raise ToolExecutionError("trace_link_not_found")
+
+    updated_fields = []
+    if arguments.relation_type is not None:
+        link.relation_type = arguments.relation_type
+        updated_fields.append("relation_type")
+    if arguments.confidence is not None:
+        link.confidence = arguments.confidence
+        link.static_confidence = arguments.confidence
+        updated_fields.append("confidence")
+    if arguments.rationale is not None:
+        link.rationale = arguments.rationale
+        updated_fields.append("rationale")
+
+    link.updated_at = utc_now()
+    link.version += 1
+    session.add(link)
+    session.commit()
+    session.refresh(link)
+    return {
+        "trace_id": link.trace_id,
+        "updated_fields": updated_fields,
+        "status": link.status,
+    }
+
+
+def _execute_delete_trace_link(
+    session: Session,
+    request: AgentToolRequest,
+    arguments: DeleteTraceLinkArguments,
+) -> dict[str, Any]:
+    link = session.exec(
+        select(TraceLink).where(
+            TraceLink.project_id == request.project_id,
+            TraceLink.trace_id == arguments.trace_id,
+        )
+    ).first()
+    if link is None:
+        raise ToolExecutionError("trace_link_not_found")
+
+    # Soft delete: set status to rejected
+    link.status = "rejected"
+    link.decided_at = utc_now()
+    link.updated_at = utc_now()
+    link.version += 1
+    session.add(link)
+    session.commit()
+    return {
+        "trace_id": link.trace_id,
+        "deleted": True,
+        "reason": arguments.reason,
+    }
 
 
 def _execute_tool(session: Session, request: AgentToolRequest) -> dict[str, Any]:
@@ -399,6 +488,10 @@ def _execute_tool(session: Session, request: AgentToolRequest) -> dict[str, Any]
         return _execute_rerun_analysis(request, arguments)
     if isinstance(arguments, CreateTraceArguments):
         return _execute_create_trace(session, request, arguments)
+    if isinstance(arguments, UpdateTraceLinkArguments):
+        return _execute_update_trace_link(session, request, arguments)
+    if isinstance(arguments, DeleteTraceLinkArguments):
+        return _execute_delete_trace_link(session, request, arguments)
     raise ToolExecutionError("tool_not_executable")
 
 
