@@ -1,123 +1,274 @@
 # TraceLab 论文代码双向追溯工作台
 
-TraceLab 是面向论文复现与代码审阅的本地工作台。当前技术原型已打通项目创建、MinerU 论文解析、代码仓库导入与静态分析、可交互张量流图、追溯候选审阅，以及带写操作确认的 Agent 接口。Web 与 Tauri 桌面端共用 Vue 3 前端和 FastAPI 后端。
+TraceLab 提供两种客户端形态：
 
-## 技术栈
+- **桌面端**：适合独立使用，以 Tauri 安装包交付。
+- **VS Code 插件**：直接在代码工作区中完成论文解析、代码分析与双向追溯。
 
-- 前端：Vue 3、TypeScript、Vite、Element Plus、CodeMirror 6、Axios
-- 桌面端：Tauri 2（复用同一前端，提供系统文件选择）
-- 后端：FastAPI、Pydantic v2、SQLModel/SQLAlchemy、SQLite
-- 论文解析：MinerU 本地服务或 MinerU 官方 API，异步任务与本地缓存
-- 代码分析：安全 ZIP/GitHub 导入、`.gitignore`/macOS 元数据过滤、Python AST、语义张量图
-- 智能能力：Agent 双向追溯、可选 OpenAI-compatible provider、流式 Agent Run、持久化会话/记忆、AgentSkills/MCP 能力注册表、人工确认
+另有可选的 **TraceLab Sync Server**，用于桌面端账号、项目同步、Blob 存储和管理员操作。
+桌面端不登录服务器也可使用本地项目；VS Code 插件当前使用工作区内的 `.tracelab/`
+目录，不连接同步服务器。
 
-## 目录
+## 选择部署方式
+
+| 组件 | 支持平台 | 适用场景 | 是否需要服务器 |
+| --- | --- | --- | --- |
+| 桌面端 | macOS、Windows、Linux | 完整的独立图形界面 | 否；云同步时需要 |
+| VS Code 插件 | macOS、Windows、Linux | 在现有代码工作区内使用 | 否 |
+| Sync Server | Linux 生产服务器 | 账号、同步、Blob 和管理控制台 | 本身即服务器 |
+
+> 桌面端安装包包含运行所需组件。最终用户无需安装 Python、Node.js 或 Rust，也无需另行
+> 启动本地网页或服务进程。
+
+## 仓库目录
 
 ```text
-backend/                 FastAPI、数据库、解析/分析/追溯/Agent 服务
-frontend/                Vue Web UI 与 Tauri 2 壳
-vscode-extension/        VS Code 扩展（工作区 `.tracelab/` 存储，见 docs/vscode-extension.md）
-packages/tracelab_core/  扩展用无头分析 CLI（parse / analyze / trace）
-server/                  独立账号、同步、Blob、管理员与部署服务
-docs/contracts/          按领域拆分的接口契约
-docs/collaboration/      四人协作边界与任务派发
-UIPrototype/             迭代材料、模型和演示文档
+frontend/                Vue 3 + Tauri 2 桌面客户端
+server/                  TraceLab Sync Server 与 Docker Compose 部署配置
+vscode-extension/        VS Code 插件
+packages/tracelab_core/  VS Code 插件使用的分析 CLI
+scripts/                 插件运行时打包与端到端检查脚本
+docs/                    设计、契约与部署补充文档
 ```
 
-## 环境要求
+## 桌面端
 
-- Python 3.11 或更高版本，推荐使用 [uv](https://docs.astral.sh/uv/)
-- Node.js 20 或更高版本、pnpm 9 或更高版本
-- 论文解析二选一：本地 `mineru-api`，或 MinerU 官方 API 令牌
-- 构建桌面端时额外安装 Rust 1.77.2+ 和 Tauri 系统依赖；已打包应用的使用者不需要安装 Python、Node.js 或 Rust
+### 安装已构建版本
 
-## 配置
+桌面安装包与生成它的操作系统和 CPU 架构绑定，请选择匹配的平台产物。
 
-Web 与桌面端启动后，点击右上角的设置按钮即可配置 Agent API 和 MinerU。设置保存在本机 SQLite 应用数据中，保存后无需重启；读取接口只返回密钥是否已配置，不会回传密钥内容。桌面端日常使用不需要编辑 `.env`。
+| 平台 | 安装产物 | 安装与启动 |
+| --- | --- | --- |
+| macOS | `.dmg` / `.app` | 打开 DMG，将 TraceLab 拖入“应用程序”，再从 Launchpad 或 Finder 启动 |
+| Windows | NSIS `.exe` | 运行安装程序，然后从开始菜单启动 TraceLab |
+| Debian/Ubuntu | `.deb` | 运行 `sudo apt install ./TraceLab_*.deb`，再从应用菜单启动 |
+| 其他主流 Linux | `.AppImage` | `chmod +x TraceLab_*.AppImage` 后运行该文件 |
 
-`.env` 仅作为首次启动默认值和无前端部署时的兼容配置：
+开发构建目前未进行正式代码签名。macOS 对外分发应使用 Developer ID 签名并完成公证，
+否则 Gatekeeper 可能阻止启动；Windows 对外分发应使用代码签名证书，否则 SmartScreen
+可能显示安全提示。
 
-```bash
-cp .env.example backend/.env
-```
+### 日常使用
 
-默认使用本地 MinerU：
+1. 启动 TraceLab，新建项目。
+2. 导入论文 PDF，并在“设置”中选择 MinerU 官方 API 或可访问的 MinerU 服务。
+3. 导入代码 ZIP 或公开 GitHub 仓库，等待代码分析完成。
+4. 在“设置”中配置 OpenAI-compatible LLM 地址、模型和密钥。
+5. 生成追溯关系，在论文、代码、追溯矩阵与张量流图之间查看和审阅结果。
+6. 如需多设备同步，登录账号，并在项目列表中为指定项目启用云同步。
 
-```bash
-mineru-api --host 127.0.0.1 --port 8001 --enable-vlm-preload true
-```
+MinerU 与 LLM 密钥不要提交到 Git。不登录服务器时，项目保持在当前设备；启用同步前请先
+确认项目中允许上传的论文、代码和其他数据范围。
 
-若以无前端方式使用官方 API，可修改 `backend/.env`：
+桌面端数据和启动错误日志位于系统应用数据目录：
 
-```dotenv
-TRACELAB_MINERU_PROVIDER=official
-TRACELAB_MINERU_API_TOKEN=<your-token>
-```
+| 平台 | 默认目录 |
+| --- | --- |
+| macOS | `~/Library/Application Support/com.se26project.tracelab/` |
+| Windows | `%APPDATA%\com.se26project.tracelab\` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/com.se26project.tracelab/` |
 
-Agent 默认关闭；未配置时追溯任务保持等待，不生成静态替代关系。无前端部署启用 OpenAI-compatible 服务时配置：
+启动失败时检查该目录下的 `startup-error.log`。
 
-```dotenv
-TRACELAB_LLM_ENABLED=true
-TRACELAB_LLM_BASE_URL=https://example.com/v1
-TRACELAB_LLM_API_KEY=<your-key>
-TRACELAB_LLM_MODEL=<model-name>
-```
+### 从源码构建：通用要求
 
-DeepSeek V4 的 JSON 模式还应设置 `TRACELAB_LLM_THINKING_MODE=disabled`；其他服务不支持该扩展字段时保持为空。
+- Python 3.11 或更高版本
+- [uv](https://docs.astral.sh/uv/)
+- Node.js 20 或更高版本
+- pnpm 9 或更高版本
+- Rust 1.77.2 或更高版本
 
-DeepSeek V4 示例：
-
-```dotenv
-TRACELAB_LLM_BASE_URL=https://api.deepseek.com
-TRACELAB_LLM_MODEL=deepseek-v4-flash
-TRACELAB_LLM_THINKING_MODE=disabled
-```
-
-不要将令牌提交到 Git。应用内填写的密钥保存在本机数据库中，应同时保护操作系统账号和应用数据目录；当前技术原型尚未接入系统钥匙串。完整 MinerU 参数见 [论文解析契约](docs/contracts/papers.md)，追溯与 LLM 参数见 [追溯契约](docs/contracts/traces.md)。
-
-## 启动 Web 版
-
-终端 1：
-
-```bash
-cd backend
-uv sync --extra dev
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-终端 2：
+先安装 JavaScript 依赖：
 
 ```bash
 cd frontend
 pnpm install
-pnpm dev
 ```
 
-打开 `http://127.0.0.1:5173`。Vite 会把 `/api` 代理到 `http://127.0.0.1:8000`；OpenAPI 文档位于 `http://127.0.0.1:8000/docs`。
+桌面构建会先生成当前平台的运行组件，再交给 Tauri 打包。因此 macOS、Windows 和 Linux
+安装包应分别在对应系统和目标 CPU 架构上构建，不要直接复制其他平台生成的运行目录。
 
-如需让本地 Web 工作台登录云端账号，并同步用户明确启用的本地项目，再复制 Web 云端配置：
+#### macOS
+
+额外安装 Xcode Command Line Tools：
+
+```bash
+xcode-select --install
+```
+
+开发运行与正式构建：
 
 ```bash
 cd frontend
-cp .env.web.example .env.local
-# 将 VITE_CLOUD_PROXY_TARGET 改为实际云端站点，例如 https://cloud.example.com
-pnpm dev
+pnpm desktop:dev
+pnpm desktop:build
 ```
 
-浏览器仍通过 `/api/v1` 使用本地 FastAPI；账号、Workspace、Blob 和同步请求通过同源的 `/cloud-api` 转发至 Cloud API。登录后，项目列表会显示“启用同步”，顶部会显示“云端项目”“云同步”和冲突中心入口。项目在用户确认上云范围之前始终为 `local_only`，不会产生上传操作。`.env.local` 仅用于本机开发且已被 Git 忽略。
+产物位于：
 
-## 部署账号与同步服务器
+```text
+frontend/src-tauri/target/release/bundle/macos/TraceLab.app
+frontend/src-tauri/target/release/bundle/dmg/TraceLab_*.dmg
+```
 
-完整 TraceLab 前端和 Local API 仍运行在本地 Web/Tauri Desktop。远程服务器只提供账号、
-Workspace、基础同步、Blob、维护任务和最小管理员控制台，不构建应用前端，也不执行
-MinerU、代码分析、LLM 或 Agent。完整约束见
-[服务器重构方案](docs/server-deployment-refactor-plan.md)和
-[云端同步实施说明](docs/cloud-sync-implementation-plan.md)。最小部署流程：
+当前 Tauri 配置支持 macOS 10.15 及以上。Apple Silicon 与 Intel 版本应在相应架构的构建
+环境中分别生成。
+
+#### Windows
+
+在 Windows 10/11 上额外安装：
+
+- Rust stable 的 MSVC 工具链；
+- Visual Studio 2022 的“使用 C++ 的桌面开发”工作负载；
+- Microsoft Edge WebView2 Runtime（系统缺失时安装）。
+
+在 PowerShell 中开发运行：
+
+```powershell
+Set-Location frontend
+pnpm install
+pnpm desktop:dev
+```
+
+生成 NSIS 安装程序：
+
+```powershell
+Set-Location frontend
+pnpm exec tauri build --bundles nsis
+```
+
+产物位于：
+
+```text
+frontend\src-tauri\target\release\bundle\nsis\
+```
+
+PyInstaller 构建时可能报告 `tzdata`、`pysqlite2` 或 `MySQLdb` 等可选驱动未找到。桌面端
+使用内置 SQLite；只要日志继续出现 `Prepared Tauri backend runtime` 且 Tauri 编译成功，
+这些提示不影响打包。
+
+#### Linux
+
+以 Ubuntu/Debian 为例，先安装 Tauri 2 所需系统库：
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential curl file libayatana-appindicator3-dev libssl-dev \
+  librsvg2-dev libwebkit2gtk-4.1-dev libxdo-dev wget
+```
+
+开发运行：
+
+```bash
+cd frontend
+pnpm install
+pnpm desktop:dev
+```
+
+生成 DEB 和 AppImage：
+
+```bash
+cd frontend
+pnpm exec tauri build --bundles deb,appimage
+```
+
+产物位于：
+
+```text
+frontend/src-tauri/target/release/bundle/deb/
+frontend/src-tauri/target/release/bundle/appimage/
+```
+
+Fedora、Arch 等发行版需要安装对应名称的 GTK 3、WebKitGTK 4.1、OpenSSL、librsvg、
+AppIndicator 和基础编译工具包。
+
+### 连接自己的 Sync Server
+
+桌面端默认连接项目预置的统一服务器。开发环境可在启动桌面端前覆盖服务器地址：
+
+```bash
+TRACELAB_CLOUD_UPSTREAM=https://sync.example.com pnpm desktop:dev
+```
+
+如果服务器使用自签名或私有 CA 证书，还需提供 CA 文件：
+
+```bash
+TRACELAB_CLOUD_UPSTREAM=https://sync.example.com \
+TRACELAB_CLOUD_CA_FILE=/absolute/path/to/ca.pem \
+pnpm desktop:dev
+```
+
+需要向普通用户分发连接私有服务器的安装包时，应在构建前将
+`backend/app/desktop.py` 中的默认 `TRACELAB_CLOUD_UPSTREAM` 和随包 CA 资源改为目标部署。
+`frontend/.env.desktop.local` 配置的是桌面 WebView 到本机回环地址，不是远程服务器地址，
+通常不应修改。
+
+## TraceLab Sync Server
+
+Sync Server 只部署账号、同步、Blob、Worker 和管理员控制台，不承载桌面界面，也不执行
+论文解析、代码分析或 LLM 任务。生产部署目标为 **Linux + Docker Engine + Docker Compose
+plugin**。
+
+### 平台说明
+
+| 操作平台 | 支持方式 |
+| --- | --- |
+| Linux | 生产部署平台，直接运行仓库中的 `server/compose.yaml` |
+| macOS | 通过终端 SSH 管理 Linux 服务器；Docker Desktop 仅建议用于本地验证 |
+| Windows | 通过 PowerShell/Windows Terminal SSH 管理 Linux 服务器；Docker Desktop/WSL2 仅建议用于本地验证 |
+
+Compose 配置使用 Linux 持久化目录、`/etc/letsencrypt` 证书目录以及 systemd 备份单元，
+因此不建议把 macOS 或 Windows Docker Desktop 作为生产服务器。
+
+从 macOS/Linux 终端或 Windows PowerShell 进入生产服务器后，后续命令完全相同：
+
+```bash
+ssh deploy@sync.example.com
+cd /path/to/TraceLab/server
+```
+
+### Linux 生产部署
+
+准备以下资源：
+
+- 一台安装了 Docker Engine 和 Compose plugin 的 Linux 主机；
+- 指向主机的域名，以及该域名的 HTTPS 证书；
+- 可用的 SMTP 账号；
+- 位于服务器之外的 rclone 备份目标；
+- 仅向公网开放 80/443 端口。
+
+创建持久化目录：
+
+```bash
+sudo mkdir -p /srv/tracelab/postgres /srv/tracelab/blobs /srv/tracelab/tmp
+sudo chown -R 10001:10001 /srv/tracelab/blobs /srv/tracelab/tmp
+```
+
+建议分别为 PostgreSQL、Blob 和临时目录设置磁盘配额，并预留至少约 8 GB、25 GB 和 4 GB。
+将证书放在 `/etc/letsencrypt/live/<SERVER_NAME>/fullchain.pem` 和 `privkey.pem`；Nginx 容器以
+只读方式挂载该目录。
+
+初始化配置：
 
 ```bash
 cd server
 cp .env.example .env
-# 填写域名、随机密钥、SMTP、数据库密码和外部备份目标
+openssl rand -hex 32
+```
+
+将随机值填入 `CLOUD_JWT_SECRET`，再编辑 `server/.env`，至少替换以下项目：
+
+- `PUBLIC_ORIGIN`、`ACCOUNT_LINK_ORIGIN`、`SERVER_NAME`；
+- `CLOUD_JWT_SECRET` 和 `POSTGRES_PASSWORD`；
+- `ALLOWED_ORIGINS`；
+- SMTP 参数；
+- `BACKUP_REMOTE` 和 `RCLONE_CONFIG_PATH`；
+- 需要改变磁盘位置时设置 `TRACELAB_DATA_ROOT`。
+
+首次部署先保持 `CLOUD_SYNC_FEATURE_ENABLED=false`，再运行：
+
+```bash
 docker compose --env-file .env up -d postgres
 docker compose --env-file .env run --rm migrator
 docker compose --env-file .env up -d api worker proxy
@@ -125,148 +276,170 @@ docker compose --env-file .env run --rm api \
   python -m tracelab_server.cli create-admin --email admin@example.com
 ```
 
-服务器只开放 80/443；`postgres`、API 和 Worker 没有宿主端口。管理员控制台位于
-`https://<domain>/admin-console/login`。Desktop 仍使用本地 SQLite，只有用户明确为项目
-启用云同步后才会生成上传操作。
-
-### Windows（PowerShell）启动 Web 版
-
-在 Windows 10/11 上安装 Python 3.11+、[uv](https://docs.astral.sh/uv/)、Node.js 20+ 和 pnpm 9+ 后，在仓库根目录分别打开两个 PowerShell 窗口。首次启动可先复制默认配置：
-
-```powershell
-Copy-Item .env.example backend\.env
-```
-
-终端 1 启动后端：
-
-```powershell
-Set-Location backend
-uv sync --extra dev
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-终端 2 启动前端：
-
-```powershell
-Set-Location frontend
-pnpm install
-pnpm dev
-```
-
-浏览器打开 `http://127.0.0.1:5173`。若需要本地论文解析，另开一个终端运行 `mineru-api --host 127.0.0.1 --port 8001 --enable-vlm-preload true`，或在应用设置中改用 MinerU 官方 API。
-
-## 启动桌面版
-
-开发模式会先把 FastAPI 构建为本机后端运行目录，再由 Tauri 自动启动前端和后端：
+检查服务：
 
 ```bash
-cd frontend
-pnpm install
-pnpm desktop:dev
+docker compose --env-file .env ps
+curl https://sync.example.com/api/v1/health
+curl https://sync.example.com/api/v1/health/ready
 ```
 
-构建可独立运行的 macOS 应用：
+确认 HTTPS、邮件、备份和恢复演练都正常后，将 `CLOUD_SYNC_FEATURE_ENABLED` 改为 `true`，
+再应用配置：
 
 ```bash
-cd frontend
-pnpm install
-pnpm desktop:build
+docker compose --env-file .env up -d api worker
 ```
 
-桌面端默认连接统一云端 `https://10.119.5.94`。不登录时可完全离线使用本地项目；登录后可在项目列表中按项目启用云同步。平台管理员账号登录后，顶栏会出现「管理」入口。
-
-如需覆盖云端地址（仅开发/临时 staging），可创建 `frontend/.env.desktop.local`：
-
-```bash
-cp .env.desktop.example .env.desktop.local
-# 仅在必要时修改 VITE_CLOUD_API_BASE_URL
-```
-
-构建完成后可直接运行：
-
-```bash
-open "src-tauri/target/release/bundle/macos/TraceLab.app"
-```
-
-同时会生成以下安装产物：
+管理员在任意桌面平台的浏览器中访问：
 
 ```text
-frontend/src-tauri/target/release/bundle/macos/TraceLab.app
-frontend/src-tauri/target/release/bundle/dmg/TraceLab_0.1.0_aarch64.dmg
+https://<SERVER_NAME>/admin-console/login
 ```
 
-### Windows 桌面版
+普通用户无需直接访问服务器页面；在桌面端登录后，按项目启用同步即可。Compose 只发布
+Nginx 的 80/443，PostgreSQL、API 和 Worker 不发布宿主机端口。
 
-桌面开发需要额外安装 Rust stable（`x86_64-pc-windows-msvc` 工具链）和 Visual Studio 2022 的“使用 C++ 的桌面开发”工作负载；Windows 10/11 通常已自带 Microsoft Edge WebView2 Runtime，缺失时需先安装。安装好 Python、uv、Node.js 和 pnpm 后，在 PowerShell 中运行：
+### 更新、日志与备份
 
-```powershell
-Set-Location frontend
-pnpm install
-pnpm desktop:dev
-```
-
-该命令会打包并启动内置 FastAPI 后端，然后启动 Tauri 窗口；不需要另行启动 Uvicorn。首次运行会下载 Rust/Python/Node 依赖，耗时较长。
-
-PyInstaller 可能提示 `tzdata`、`pysqlite2` 或 `MySQLdb` 等 hidden import 未找到。这些是
-SQLAlchemy 探测的可选驱动；桌面版使用 Python 内置 SQLite，不影响启动和项目功能。构建以
-`Prepared Tauri backend runtime` 和后续 Tauri 编译结果为准。
-
-要生成可安装的 Windows 包，请在 Windows 主机上执行：
-
-```powershell
-Set-Location frontend
-pnpm install
-pnpm exec tauri build --bundles nsis
-```
-
-安装程序输出在 `frontend\src-tauri\target\release\bundle\nsis\`；安装后从开始菜单启动 TraceLab。当前包未进行 Windows 代码签名，首次运行可能出现 SmartScreen 提示。桌面数据保存在 `%LOCALAPPDATA%\com.se26project.tracelab\`；启动失败时可查看其中的 `startup-error.log`。
-
-应用内已包含 FastAPI 后端和展开后的 Python 运行目录，启动和退出由 Tauri 自动管理，不会在每次启动时重复解压。桌面数据保存在 `~/Library/Application Support/com.se26project.tracelab/`。当前本地构建使用 ad-hoc 签名并启用 Hardened Runtime，产物面向 Apple Silicon。为 Intel Mac、Windows 或 Linux 分发时，应在对应目标平台重新构建。对外分发 macOS 安装包时，应改用 Developer ID 并完成公证。
-
-MinerU 官方 API 可直接在设置窗口配置。选择“本地 MinerU”时，模型推理服务仍是可选外部依赖，需要在设置的地址运行 `mineru-api`；这不影响项目管理、代码分析和其他本地功能。
-
-## 演示闭环
-
-1. 新建项目并进入工作台。
-2. 上传 PDF；前端提交 MinerU 异步任务并显示 queued/running/succeeded/failed 状态。
-3. 上传 ZIP 或输入公开 GitHub 仓库地址；检查过滤后的完整文件树与分析摘要。
-4. 打开并编辑文本代码文件；保存后仓库修订号递增，旧追溯关系自动标记 stale。
-5. 查看主模型的分层架构图，双击自定义模块下钻；需要排查时切换算子调试图，点击节点可跳转到对应代码。
-6. 论文与代码就绪后自动启动 Agent 追溯；未配置 provider 时保持等待，结果可人工接受或拒绝。悬停论文核心片段（公式/变量/约束/算法/方法句）高亮对应核心代码并按相关度列出，反向悬停代码亦然，点击可固定、Esc 取消。
-7. 在 Agent 侧栏连续对话；可新建、重命名和归档会话，并管理项目/跨项目记忆。Agent 可读取当前论文、代码、架构图和追溯证据，定位代码或聚焦架构图。
-8. Agent 回答通过 SSE 逐步显示，同时展示可审计的进度摘要和工具交互；重复的成功读取会复用证据，达到预算后强制收敛为结论。
-9. Agent“能力”页可查看和开关内置/外部 Skill 与 Tool。外部能力默认关闭且不受信任；保存代码、重跑分析、创建/更新追溯关系仍须人工确认。
-10. 上传大型仓库或保存代码后，架构图在后台生成并持久化；打开流程图只读取缓存，分析完成后 UI 自动刷新。
-11. 通过右上角设置窗口切换 Agent 服务或 MinerU 本地/官方接入，无需重启。
-12. 返回项目入口，点击“批量管理”，可全选或勾选多个项目并永久删除其关联数据。
-
-“魔改冲突分析”和“报告文件导出”当前仅保留稳定 UI/接口，不应视为算法已实现。
-
-## 构建与测试
+拉取新版本后，重新构建、执行显式迁移并滚动服务：
 
 ```bash
-cd backend
-uv run ruff check .
-uv run python -m pytest -q
-
-cd ../frontend
-pnpm typecheck
-pnpm build
+cd server
+docker compose --env-file .env build migrator api worker
+docker compose --env-file .env run --rm migrator
+docker compose --env-file .env up -d api worker proxy
 ```
 
-SQLite 表结构迁移会在 FastAPI 启动时自动执行。开发数据默认写入 `backend/data/` 和 `backend/uploads/`（取决于启动工作目录与 `.env` 配置）。
+常用维护命令：
 
-## 外部 Agent 能力
+```bash
+docker compose --env-file .env logs -f api worker proxy
+docker compose --env-file .env --profile maintenance run --rm backup
+```
 
-TraceLab 直接发现符合 AgentSkills `SKILL.md` 约定的目录。可放入仓库根目录 `skills/<name>/SKILL.md`、`~/.tracelab/skills/` 或 `~/.openclaw/skills/`。其他目录可通过 `TRACELAB_AGENT_SKILL_ROOTS` 显式追加。外部 Skill 首次出现时不会自动进入 Agent 上下文，需要在 Agent 侧栏“能力”页同时启用并标记为可信。
+外部恢复校验使用 `server/deploy/restore-verify.sh`。该脚本只接受空验证库和空 Blob 目录；
+`server/deploy/rebuild-cloud.sh` 是显式破坏性入口，不应放入普通启动或更新流程。完整说明见
+[server/README.md](server/README.md)。
 
-外部可调用工具通过 `plugins/<plugin>/tracelab.plugin.json` 声明 HTTP MCP server。TraceLab 会读取 `tools/list` 的 JSON Schema，并在执行前后校验参数/结构化输出；外部写工具沿用人工确认。完整格式和安全边界见 [Agent 契约](docs/contracts/agent.md)。
+## VS Code 插件
 
-## 接口文档
+### 运行要求
 
-- [接口总览](docs/api-contract.md)
-- [论文解析与 MinerU](docs/contracts/papers.md)
-- [代码仓库、编辑与张量流](docs/contracts/repositories.md)
-- [追溯生命周期与 LLM 降级](docs/contracts/traces.md)
-- [Agent 与写操作确认](docs/contracts/agent.md)
-- [语义检索（RAG）](docs/contracts/rag.md)
+- VS Code 1.85 或更高版本；
+- `uv` 在 VS Code 扩展宿主的 `PATH` 中；
+- 首次启用时可访问 Python 依赖源；
+- 生成 Agent 追溯时需要 LLM API Key；
+- 高质量论文解析需要 MinerU 官方令牌或可访问的 MinerU 服务。
+
+VSIX 包含 TraceLab Python 源码，但不打包平台专用的 Python 虚拟环境。插件首次运行会执行
+`uv sync`，在当前平台创建自己的 `.venv`。安装 `uv` 后应完全退出并重启 VS Code，使扩展
+宿主读取新的 `PATH`。
+
+使用 Remote SSH、Dev Container 或 WSL 时，插件运行在远程扩展宿主中，因此 `uv` 和网络
+访问也必须在远程主机或容器内可用。
+
+### 在各平台安装 VSIX
+
+所有平台都可在 VS Code 中打开“扩展”视图，点击右上角 `…`，选择
+“从 VSIX 安装…”，然后选择 `tracelab-vscode-0.5.0.vsix`。
+
+macOS/Linux 也可使用：
+
+```bash
+code --install-extension ./tracelab-vscode-0.5.0.vsix --force
+```
+
+Windows PowerShell：
+
+```powershell
+code --install-extension .\tracelab-vscode-0.5.0.vsix --force
+```
+
+安装后执行“Developer: Reload Window”，或完全重启 VS Code。
+
+### 从源码生成 VSIX
+
+构建要求 Node.js 20+、npm、Python 3.11+、`uv`、Bash 和 Make。macOS/Linux：
+
+```bash
+make extension-build
+cd vscode-extension
+npx @vscode/vsce package --allow-missing-repository
+```
+
+产物位于：
+
+```text
+vscode-extension/tracelab-vscode-0.5.0.vsix
+```
+
+Windows 建议直接安装在 macOS/Linux 构建的 VSIX；虚拟环境不会进入 VSIX，因此同一文件可
+安装到 Windows、macOS 和 Linux。若必须在 Windows 上打包，请使用带 `python3`、`uv` 和
+Make 的 WSL 或 Git Bash 环境运行同一组命令。
+
+### 使用流程
+
+1. 用 VS Code 打开需要分析的代码目录；插件使用第一个工作区目录。
+2. 点击活动栏中的 TraceLab 图标，选择“初始化工作区”。
+3. 选择“导入论文”，再执行“解析论文”。
+4. 执行“分析代码”生成符号和张量流图。
+5. 在 TraceLab 侧栏保存并测试 MinerU、LLM 配置。
+6. 执行“生成追溯”，在底栏查看追溯矩阵和 Agent 进度。
+7. 打开论文或张量流图；点击追溯证据或图节点可跳转到对应代码。
+
+插件产物保存在当前工作区的 `.tracelab/`：
+
+```text
+.tracelab/
+  papers/       原始 PDF、Markdown 与解析资源
+  analysis/     代码符号、架构和张量流图
+  traces/       追溯关系与任务日志
+```
+
+LLM API Key 和 MinerU Token 保存在 VS Code `SecretStorage`，不会写入 `.tracelab/`。其他
+设置保存在 VS Code 全局用户配置中。如果不希望提交生成产物，请将 `.tracelab/` 加入项目的
+`.gitignore`。
+
+运行失败时执行命令“TraceLab: 显示输出”，并依次检查：
+
+```bash
+uv --version
+code --version
+```
+
+然后确认工作区可写、网络可访问依赖源，重启 VS Code 后重试。插件的详细数据结构和验收项见
+[docs/vscode-extension.md](docs/vscode-extension.md)。
+
+## 开发检查
+
+桌面端：
+
+```bash
+cd frontend
+pnpm typecheck
+pnpm test:unit
+```
+
+Sync Server：
+
+```bash
+cd server
+uv sync --extra dev
+uv run ruff check tracelab_server tests
+uv run pytest
+```
+
+VS Code 插件：
+
+```bash
+make extension-build
+cd vscode-extension
+npm test
+```
+
+包含真实 MinerU 和 LLM 调用的插件端到端测试：
+
+```bash
+MINERU_TOKEN=... DEEPSEEK_KEY=... ./scripts/e2e_vscode_bundled.sh
+```
