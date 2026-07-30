@@ -13,7 +13,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -21,7 +20,12 @@ from app.models.entities import (
     AgentAnalysisArtifact,
     CodeRepository,
     PaperDocument,
-    Project,
+)
+from app.services.agent.confidence import (
+    compute_trace_confidence as _compute_trace_confidence,
+)
+from app.services.agent.confidence import (
+    is_deep_thinking_enabled as _is_deep_thinking_enabled,
 )
 from app.services.analysis_jobs import repository_edits_root
 from app.services.change_analysis import (
@@ -364,27 +368,6 @@ _RELATION_TYPES = {
     "mentions",
 }
 
-# Multi-dimensional confidence formula weights (sum to 1.0).
-_CONFIDENCE_WEIGHTS = {
-    "change_directness": 0.20,
-    "causal_reachability": 0.25,
-    "requirement_support": 0.20,
-    "trace_support": 0.15,
-    "verification_support": 0.10,
-    "context_coverage": 0.10,
-}
-
-# Confidence penalty keys and their values.
-_CONFIDENCE_PENALTIES = {
-    "paper_association_inferred": -0.10,
-    "no_call_entry": -0.20,
-    "alternate_implementation": -0.20,
-    "config_or_caller_unread": -0.15,
-    "context_truncated": -0.15,
-    "runtime_condition_unverified": -0.15,
-}
-
-
 class TracePaperEvidence(TolerantModel):
     block_id: str = Field(min_length=1, max_length=255)
     quote: str = Field(min_length=1, max_length=3000)
@@ -467,11 +450,7 @@ def is_deep_thinking_enabled(session: Session, project_id: int) -> bool:
     through an old schema) is treated as off so the original behaviour stays the fallback.
     """
 
-    try:
-        project = session.get(Project, project_id)
-    except OperationalError:
-        return False
-    return bool(project is not None and project.agent_deep_thinking)
+    return _is_deep_thinking_enabled(session, project_id)
 
 
 def compute_trace_confidence(candidate: TraceCandidate) -> float:
@@ -480,36 +459,9 @@ def compute_trace_confidence(candidate: TraceCandidate) -> float:
     Formula: base_score = Σ(weight_i × dimension_i) + Σ(penalty_j)
     Result is clamped to [0, 1] and rounded to 4 decimals.
 
-    If all dimensions are at their default values (model didn't fill them explicitly),
-    fall back to the model's raw confidence field to avoid over-complicating simple cases.
+    If the model did not supply any dimension fields, fall back to its raw confidence.
     """
-    # Check if model explicitly filled dimension scores (any differs from default)
-    defaults = [0.7, 0.6, 0.7, 0.5, 0.5, 0.7]  # change, causal, req, trace, verif, context
-    values = [
-        candidate.change_directness,
-        candidate.causal_reachability,
-        candidate.requirement_support,
-        candidate.trace_support,
-        candidate.verification_support,
-        candidate.context_coverage,
-    ]
-    # If all dimensions are at defaults and no penalties, use raw confidence (backward compat)
-    all_defaults = all(abs(v - d) < 0.01 for v, d in zip(values, defaults, strict=True))
-    if all_defaults and not candidate.confidence_penalties:
-        return round(max(0.0, min(1.0, candidate.confidence)), 4)
-
-    base = (
-        _CONFIDENCE_WEIGHTS["change_directness"] * candidate.change_directness
-        + _CONFIDENCE_WEIGHTS["causal_reachability"] * candidate.causal_reachability
-        + _CONFIDENCE_WEIGHTS["requirement_support"] * candidate.requirement_support
-        + _CONFIDENCE_WEIGHTS["trace_support"] * candidate.trace_support
-        + _CONFIDENCE_WEIGHTS["verification_support"] * candidate.verification_support
-        + _CONFIDENCE_WEIGHTS["context_coverage"] * candidate.context_coverage
-    )
-    penalty = sum(
-        _CONFIDENCE_PENALTIES.get(flag, 0.0) for flag in candidate.confidence_penalties
-    )
-    return round(max(0.0, min(1.0, base + penalty)), 4)
+    return _compute_trace_confidence(candidate)
 
 
 class TracePayload(TolerantModel):
@@ -1350,6 +1302,8 @@ def _execute_publish_trace(
     repository_id: int,
     paper_id: int | None,
     arguments: dict[str, Any],
+    *,
+    deep_thinking: bool | None = None,
 ) -> dict[str, Any]:
     """Tolerant trace publish: drop individually-bad candidates instead of failing the batch.
 
@@ -1396,7 +1350,12 @@ def _execute_publish_trace(
     # Deep thinking only: recompute confidence from the 6-dimension breakdown + penalties.
     # With the toggle off the model's own ``confidence`` is used as-is, which is the original
     # behaviour and keeps the publish batch fast.
-    if is_deep_thinking_enabled(session, project_id):
+    scoring_mode = (
+        is_deep_thinking_enabled(session, project_id)
+        if deep_thinking is None
+        else deep_thinking
+    )
+    if scoring_mode:
         for candidate in schema_kept:
             candidate.confidence = compute_trace_confidence(candidate)
 
@@ -1505,6 +1464,8 @@ def execute_tool(
     depth: int,
     tool_name: str,
     arguments: dict[str, Any],
+    *,
+    deep_thinking: bool | None = None,
 ) -> dict[str, Any]:
     model = TOOL_MODELS.get(tool_name)
     if model is None:
@@ -1515,7 +1476,14 @@ def execute_tool(
         raise ValueError("dispatch_not_available_here")
     arguments = _normalize_publish_arguments(tool_name, arguments)
     if tool_name == "publish_trace_candidates":
-        return _execute_publish_trace(session, project_id, repository_id, paper_id, arguments)
+        return _execute_publish_trace(
+            session,
+            project_id,
+            repository_id,
+            paper_id,
+            arguments,
+            deep_thinking=deep_thinking,
+        )
     if tool_name == "publish_conflict_report":
         return _execute_publish_conflict(
             session,

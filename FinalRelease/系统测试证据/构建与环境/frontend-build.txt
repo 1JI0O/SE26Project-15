@@ -1,4 +1,12 @@
-$ pnpm assets:pdfjs && vue-tsc --noEmit && vite build
+Already up to date
+Done in 302ms using pnpm v11.13.0
+node.exe : $ pnpm assets:pdfjs && vue-tsc --noEmit && vite build
+At D:\npm-global\pnpm.ps1:24 char:5
++     & "node$exe"  "$basedir/node_modules/pnpm/bin/pnpm.mjs" $args
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ($ pnpm assets:p...t && vite build:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
 $ node scripts/copy-pdfjs-assets.mjs
 [pdfjs-assets] staged cmaps, standard_fonts into public/pdfjs
 vite v5.4.21 building for production...
@@ -19,7 +27,7 @@ A comment
 in "node_modules/.pnpm/@vueuse+core@14.3.0_vue@3.5.39_typescript@5.9.3_/node_modules/@vueuse/core/dist/index.js" contai
 ns an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid
 issues.
-✓ 1885 modules transformed.
+✓ 1889 modules transformed.
 rendering chunks...
 computing gzip size...
 dist/index.html                                           0.47 kB │ gzip:   0.30 kB
@@ -85,28 +93,28 @@ dist/assets/KaTeX_Main-Regular-ypZvNtVU.ttf              53.58 kB
 dist/assets/KaTeX_AMS-Regular-DRggAlZN.ttf               63.63 kB
 dist/assets/pdf.worker.min-yatZIOMy.mjs               1,375.84 kB
 dist/assets/xterm-6GBZ9nXN.css                            5.24 kB │ gzip:   1.92 kB
-dist/assets/index-BXSLXGCG.css                          458.93 kB │ gzip:  69.81 kB
+dist/assets/index-B06_buac.css                          462.60 kB │ gzip:  70.39 kB
 dist/assets/core-DV6XEvTN.js                              0.10 kB │ gzip:   0.11 kB
 dist/assets/index-CNF69EbB.js                             0.17 kB │ gzip:   0.17 kB
 dist/assets/index-BX_V-ZHP.js                             1.07 kB │ gzip:   0.59 kB
 dist/assets/addon-fit-YJmn1quW.js                         1.60 kB │ gzip:   0.71 kB
-dist/assets/index-CxW2xVj0.js                             2.01 kB │ gzip:   1.27 kB
+dist/assets/index-ouHmJfIe.js                             2.01 kB │ gzip:   1.27 kB
 dist/assets/index.es-fdR-WvdI.js                          3.10 kB │ gzip:   1.17 kB
-dist/assets/index-Bf4jeriM.js                            11.59 kB │ gzip:   5.18 kB
-dist/assets/index-DOrpHppf.js                            13.99 kB │ gzip:   6.07 kB
-dist/assets/index-CeUPuZfG.js                            14.79 kB │ gzip:   5.97 kB
-dist/assets/index-DHV3M4ZN.js                            26.49 kB │ gzip:   8.79 kB
-dist/assets/index-91Ou_lNA.js                            28.11 kB │ gzip:  12.69 kB
-dist/assets/index-D5pNq6CN.js                            28.69 kB │ gzip:  11.66 kB
-dist/assets/index-MAYNBfe_.js                            44.17 kB │ gzip:  15.32 kB
-dist/assets/index-Blt2cHKy.js                            45.10 kB │ gzip:  19.16 kB
-dist/assets/index-Bg5RuE4S.js                            84.63 kB │ gzip:  33.49 kB
+dist/assets/index-C0gjFKJD.js                            11.59 kB │ gzip:   5.17 kB
+dist/assets/index-BCoRjZHB.js                            13.99 kB │ gzip:   6.07 kB
+dist/assets/index-BA9KH_OJ.js                            14.79 kB │ gzip:   5.97 kB
+dist/assets/index-DqRObLiA.js                            26.49 kB │ gzip:   8.79 kB
+dist/assets/index-Cxn_mCjs.js                            28.11 kB │ gzip:  12.69 kB
+dist/assets/index-0zjxx0KR.js                            28.69 kB │ gzip:  11.66 kB
+dist/assets/index-CA4MmP7m.js                            44.17 kB │ gzip:  15.33 kB
+dist/assets/index-CGttb6rU.js                            45.10 kB │ gzip:  19.16 kB
+dist/assets/index-DvYBZKEr.js                            84.63 kB │ gzip:  33.49 kB
 dist/assets/xterm-BT7tBf8A.js                           332.44 kB │ gzip:  84.18 kB
-dist/assets/index-KF0pTlyJ.js                         2,529.85 kB │ gzip: 829.61 kB
+dist/assets/index-B6ynOx4F.js                         2,539.55 kB │ gzip: 833.33 kB
 
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-m
 anualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
-✓ built in 15.24s
+✓ built in 7.25s

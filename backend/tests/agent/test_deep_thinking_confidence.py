@@ -137,7 +137,14 @@ def _candidate() -> dict:
     }
 
 
-def _publish(session: Session, tmp_path: Path, *, deep: bool, candidate: dict) -> float:
+def _publish(
+    session: Session,
+    tmp_path: Path,
+    *,
+    deep: bool,
+    candidate: dict,
+    run_mode: bool | None = None,
+) -> float:
     project, paper, code = _artifacts(session, tmp_path, deep_thinking=deep)
     published = execute_tool(
         session,
@@ -147,6 +154,7 @@ def _publish(session: Session, tmp_path: Path, *, deep: bool, candidate: dict) -
         2,
         "publish_trace_candidates",
         {"payload": {"candidates": [candidate], "unresolved": []}},
+        deep_thinking=run_mode,
     )
     return published["payload"]["candidates"][0]["confidence"]
 
@@ -193,6 +201,44 @@ def test_deep_thinking_applies_penalties(tmp_path: Path) -> None:
     with _session() as session:
         # 1.0 - 0.20 - 0.15
         assert _publish(session, tmp_path, deep=True, candidate=candidate) == 0.65
+
+
+def test_running_analysis_uses_its_frozen_scoring_mode(tmp_path: Path) -> None:
+    candidate = _candidate()
+    candidate.update(
+        {
+            "change_directness": 1.0,
+            "causal_reachability": 1.0,
+            "requirement_support": 1.0,
+            "trace_support": 1.0,
+            "verification_support": 1.0,
+            "context_coverage": 1.0,
+        }
+    )
+    with _session() as session:
+        # Project was switched on after a direct-scoring run started.
+        assert (
+            _publish(
+                session,
+                tmp_path,
+                deep=True,
+                candidate=candidate,
+                run_mode=False,
+            )
+            == 0.91
+        )
+    with _session() as session:
+        # Project was switched off after a six-dimension run started.
+        assert (
+            _publish(
+                session,
+                tmp_path,
+                deep=False,
+                candidate=candidate,
+                run_mode=True,
+            )
+            == 1.0
+        )
 
 
 def test_missing_project_is_treated_as_deep_thinking_off(tmp_path: Path) -> None:

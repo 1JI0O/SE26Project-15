@@ -128,16 +128,18 @@ watch(visible, (newVal) => {
 })
 
 const handleClose = () => {
+  annotationStore.clearSelection()
   visible.value = false
 }
 
 const handleCreate = async () => {
   if (!formRef.value) return
 
-  try {
-    await formRef.value.validate()
-    creating.value = true
+  const valid = await formRef.value.validate().catch(() => false)
+  if (!valid) return
 
+  creating.value = true
+  try {
     const result = await annotationStore.createManualTraceLink({
       relationType: form.value.relationType,
       confidence: form.value.confidence,
@@ -151,10 +153,6 @@ const handleCreate = async () => {
 
     visible.value = false
   } catch (error: any) {
-    if (error.errors) {
-      // Validation error
-      return
-    }
     ElMessage.error('创建失败: ' + (error.message || '未知错误'))
   } finally {
     creating.value = false

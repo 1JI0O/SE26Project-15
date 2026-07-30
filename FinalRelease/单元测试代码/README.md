@@ -6,6 +6,7 @@
 - test_code_analysis_extended.py：补充静态分析、定义解析和 LSP 桥接的异常、歧义、进程及异步 I/O 路径。
 - vscode-extension/webview_utils.test.cjs：VS Code Webview HTML 与内联 JSON 安全转义测试。
 - rag/：RAG 分块、Embedding、索引服务和 API 边界测试的交付归档副本；正式执行源位于 backend/tests/rag。
+- trace-authoring/：手工标注锚点、六维置信度、项目设置 API/迁移和 Agent 追溯 CRUD 测试的交付归档副本。
 
 新增 `tracelab_core` 测试与源码共同维护，避免 FinalRelease 副本失同步；本目录作为交付索引，正式代码位置为：
 
@@ -24,6 +25,14 @@
 - backend/tests/rag/test_rag_chunking_embeddings.py
 - backend/tests/rag/test_rag_embedding_boundaries.py
 - backend/tests/rag/test_rag_service_boundaries.py
+
+`trace-authoring/` 中各文件的正式执行源为：
+
+- `backend/tests/tracing/test_annotation_mode.py`
+- `backend/tests/agent/test_confidence_boundaries.py`
+- `backend/tests/projects/test_project_confidence_api.py`
+- `backend/tests/test_confidence_migration.py`
+- `backend/tests/agent/test_agent_confirmation.py`（归档副本仅保留 Agent 追溯 CRUD 相关测试）
 
 backend/pyproject.toml 已把本目录加入 pytest 的 testpaths。从 backend 目录执行：
 

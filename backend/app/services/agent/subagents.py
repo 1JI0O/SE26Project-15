@@ -140,6 +140,7 @@ class TracePublishSink:
         *,
         persist_artifact: Callable[..., Any],
         append_links: Callable[..., None],
+        deep_thinking: bool = False,
     ) -> None:
         self._engine = engine
         self._job_id = job_id
@@ -148,6 +149,7 @@ class TracePublishSink:
         self._bus = bus
         self._persist_artifact = persist_artifact
         self._append_links = append_links
+        self._deep_thinking = deep_thinking
         self.artifact_id: str | None = None
         self.published_count = 0
         self._closed = False
@@ -178,12 +180,24 @@ class TracePublishSink:
                     ).one()
                 if self.artifact_id is None:
                     self._bus.emit("analysis.validating", {"job_id": job.job_id})
-                    artifact = self._persist_artifact(session, job, run, payload)
+                    artifact = self._persist_artifact(
+                        session,
+                        job,
+                        run,
+                        payload,
+                        deep_thinking=self._deep_thinking,
+                    )
                 else:
                     artifact = session.get(AgentAnalysisArtifact, self.artifact_id)
                     if artifact is None:
                         raise ValueError("analysis_artifact_missing")
-                    self._append_links(session, job, artifact, payload)
+                    self._append_links(
+                        session,
+                        job,
+                        artifact,
+                        payload,
+                        deep_thinking=self._deep_thinking,
+                    )
                 session.flush()
                 after_count = session.exec(
                     select(func.count(TraceLink.id)).where(
@@ -500,6 +514,7 @@ def _run_region(
                         ctx.requested_depth,
                         tool_name,
                         step.arguments,
+                        deep_thinking=ctx.deep_thinking,
                     )
                 except ValidationError as exc:
                     details = "; ".join(

@@ -1,0 +1,95 @@
+uv : C:\Users\Qin\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\collections\__init__.py:455: ResourceW
+arning: unclosed database in <sqlite3.Connection object at 0x000001EC43ED7B50>
+At line:2 char:1
++ uv run pytest -q tests/tracing/test_annotation_mode.py tests/agent/te ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\Qin\Ap...0001EC43ED7B50>:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+  result = tuple_new(cls, iterable)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\Users\Qin\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\collections\__init__.py:455: ResourceWarnin
+g: unclosed database in <sqlite3.Connection object at 0x000001EC43B564D0>
+  result = tuple_new(cls, iterable)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\_pytest\unraisableexception.py:33: R
+esourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC42694400>
+  gc.collect()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\_pytest\unraisableexception.py:33: R
+esourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC429B8A90>
+  gc.collect()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\_pytest\unraisableexception.py:33: R
+esourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC42847E20>
+  gc.collect()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\_pytest\unraisableexception.py:33: R
+esourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC43C8C5E0>
+  gc.collect()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+....................                                                     [100%]
+============================== warnings summary ===============================
+.venv\Lib\site-packages\fastapi\testclient.py:1
+  D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+tests/tracing/test_annotation_mode.py::test_anchor_id_is_stable_across_identical_recreation
+  D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\sqlalchemy\sql\type_api.py:975: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC426976A0>
+    def _dialect_info(self, dialect: Dialect) -> _TypeMemoDict:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/tracing/test_annotation_mode.py::test_anchor_id_is_stable_across_identical_recreation
+  D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\sqlalchemy\sql\type_api.py:975: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC428447C0>
+    def _dialect_info(self, dialect: Dialect) -> _TypeMemoDict:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/tracing/test_annotation_mode.py::test_update_and_delete_round_trip
+  D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\sqlalchemy\sql\type_api.py:975: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC42697D30>
+    def _dialect_info(self, dialect: Dialect) -> _TypeMemoDict:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/tracing/test_annotation_mode.py::test_update_and_delete_round_trip
+  D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\sqlalchemy\sql\type_api.py:975: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC429BB100>
+    def _dialect_info(self, dialect: Dialect) -> _TypeMemoDict:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/tracing/test_annotation_mode.py::test_update_and_delete_round_trip
+  D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\sqlalchemy\sql\type_api.py:975: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC429BB1F0>
+    def _dialect_info(self, dialect: Dialect) -> _TypeMemoDict:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/tracing/test_annotation_mode.py::test_update_and_delete_round_trip
+  D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\sqlalchemy\sql\type_api.py:975: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC43B55D50>
+    def _dialect_info(self, dialect: Dialect) -> _TypeMemoDict:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/tracing/test_annotation_mode.py::test_update_and_delete_round_trip
+  D:\my_programs\Tracelab-add-comment\SE26Project-15\backend\.venv\Lib\site-packages\sqlalchemy\sql\type_api.py:975: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x000001EC43B56890>
+    def _dialect_info(self, dialect: Dialect) -> _TypeMemoDict:
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=============================== tests coverage ================================
+_______________ coverage: platform win32, python 3.14.5-final-0 _______________
+
+Name                                                       Stmts   Miss    Cover   Missing
+------------------------------------------------------------------------------------------
+app\api\routes\projects.py                                    57      0  100.00%
+app\db\migrations\versions\0014_project_deep_thinking.py      17      0  100.00%
+app\schemas\projects.py                                       15      0  100.00%
+app\services\agent\confidence.py                              30      0  100.00%
+app\services\tracing\manual_anchors.py                        69      0  100.00%
+------------------------------------------------------------------------------------------
+TOTAL                                                        188      0  100.00%
+Coverage HTML written to dir ../FinalRelease/单元测试报告/trace-authoring-htmlcov
+Coverage XML written to file ../FinalRelease/单元测试报告/trace-authoring-coverage.xml
+Required test coverage of 100% reached. Total coverage: 100.00%
+20 passed, 8 warnings in 4.93s

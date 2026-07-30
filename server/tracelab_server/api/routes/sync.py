@@ -84,6 +84,7 @@ def bootstrap(
                 "version": item.version,
                 "sync_mode": item.sync_mode,
                 "agent_history_sync": item.agent_history_sync,
+                "agent_deep_thinking": item.agent_deep_thinking,
                 "deleted_at": item.deleted_at,
             }
             for item in projects

@@ -1,7 +1,8 @@
-Command: pnpm typecheck
-Result: PASS
-
-$ vue-tsc --noEmit
-Exit code: 0
-Executed: 2026-07-29
-Baseline: b79ae8e plus current test/fix worktree
+Already up to date
+Done in 316ms using pnpm v11.13.0
+node.exe : $ vue-tsc --noEmit
+At D:\npm-global\pnpm.ps1:24 char:5
++     & "node$exe"  "$basedir/node_modules/pnpm/bin/pnpm.mjs" $args
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ($ vue-tsc --noEmit:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError

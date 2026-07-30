@@ -141,8 +141,13 @@ def test_bootstrap_includes_device_bindings(cloud_client: TestClient) -> None:
     created = cloud_client.post(
         "/api/v1/projects",
         headers=headers,
-        json={"workspace_id": workspace_id, "name": "binding fixture"},
+        json={
+            "workspace_id": workspace_id,
+            "name": "binding fixture",
+            "agent_deep_thinking": True,
+        },
     ).json()
+    assert created["agent_deep_thinking"] is True
     cloud_client.patch(
         f"/api/v1/projects/{created['public_id']}/device-sync",
         headers=headers,
@@ -161,6 +166,10 @@ def test_bootstrap_includes_device_bindings(cloud_client: TestClient) -> None:
         "project_public_id": created["public_id"],
         "sync_mode": "cloud_paused",
     } in body["device_bindings"]
+    project = next(
+        item for item in body["projects"] if item["public_id"] == created["public_id"]
+    )
+    assert project["agent_deep_thinking"] is True
 
 
 def test_project_sync_enable_pause_detach(cloud_client: TestClient) -> None:

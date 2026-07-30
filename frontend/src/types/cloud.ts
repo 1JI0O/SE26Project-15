@@ -34,6 +34,7 @@ export interface CloudProject {
   version: number
   sync_mode: 'cloud_enabled' | 'cloud_paused' | 'cloud_detached'
   agent_history_sync: boolean
+  agent_deep_thinking: boolean
   created_at: string
   updated_at: string
 }

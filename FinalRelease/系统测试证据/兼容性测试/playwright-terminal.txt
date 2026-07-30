@@ -1,19 +1,59 @@
-Command: pnpm test:system
-Executed: 2026-07-29
-Baseline: b79ae8e plus current test/fix worktree
+Already up to date
+Done in 298ms using pnpm v11.13.0
+node.exe : $ playwright test --config=playwright.config.ts
+At D:\npm-global\pnpm.ps1:24 char:5
++     & "node$exe"  "$basedir/node_modules/pnpm/bin/pnpm.mjs" $args
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ($ playwright te...right.config.ts:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
 
-Projects:
-- chrome-1366x768
-- chrome-1920x1080
-- edge-1366x768
-- edge-1920x1080
-- firefox-1366x768
-- firefox-1920x1080
+[WebServer] (node:33072) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
 
-Initial run: 5 passed, 1 failed.
-Initial failure: the first Chrome cold-start run entered the correct project URL but the workspace remained loading beyond the global 8-second assertion timeout.
-Adjustment: project-data visibility now has a local 20-second timeout; HTTP, console, layout, and functional assertions are unchanged.
+[WebServer] $ pnpm assets:pdfjs && vite --host 127.0.0.1
 
-Final rerun: 6 passed, 0 failed, 38.4 seconds.
-JUnit: playwright-junit.xml
-HTML report: playwright-html/index.html
+[WebServer] (node:23952) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] $ node scripts/copy-pdfjs-assets.mjs
+
+[WebServer] (node:34884) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:15176) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+
+Running 6 tests using 1 worker
+
+(node:29256) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[1/6] [chrome-1366x768] › ..\FinalRelease\系统测试代码\browser_compatibility.spec.ts:4:5 › 项目基本流、名称备选流与桌面布局兼容性
+
+
+(node:34676) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[2/6] [chrome-1920x1080] › ..\FinalRelease\系统测试代码\browser_compatibility.spec.ts:4:5 › 项目基本流、名称备选流与桌面布局兼容性
+(node:7600) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[3/6] [edge-1366x768] › ..\FinalRelease\系统测试代码\browser_compatibility.spec.ts:4:5 › 项目基本流、名称备选流与桌面布局兼容性
+(node:22452) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[4/6] [edge-1920x1080] › ..\FinalRelease\系统测试代码\browser_compatibility.spec.ts:4:5 › 项目基本流、名称备选流与桌面布局兼容性
+
+
+(node:33968) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[5/6] [firefox-1366x768] › ..\FinalRelease\系统测试代码\browser_compatibility.spec.ts:4:5 › 项目基本流、名称备选流与桌面布局兼容性
+(node:35740) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[6/6] [firefox-1920x1080] › ..\FinalRelease\系统测试代码\browser_compatibility.spec.ts:4:5 › 项目基本流、名称备选流与桌面布局兼容性
+  6 passed (59.1s)
