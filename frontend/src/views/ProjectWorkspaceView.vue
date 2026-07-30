@@ -112,11 +112,11 @@
             </span>
           </button>
         </el-tooltip>
-        <el-tooltip content="标注模式" placement="right">
+        <el-tooltip content="追加追溯关系" placement="right">
           <button
-            :class="['activity-button', { active: annotation.annotationMode }]"
-            aria-label="标注模式"
-            @click="annotation.toggleAnnotationMode()"
+            :class="['activity-button', { active: annotation.active }]"
+            aria-label="追加追溯关系"
+            @click="startAnnotation()"
           >
             <el-icon :size="21"><EditPen /></el-icon>
           </button>
@@ -252,6 +252,7 @@
       />
 
       <main ref="workAreaRef" class="work-area">
+        <AnnotationGuide />
         <section
           ref="editorGridRef"
           class="editor-grid"
@@ -690,6 +691,7 @@ import { useWorkspace } from '@/composables/useWorkspace'
 import type { PaperMark } from '@/features/papers/trace-decorations'
 import AgentPanel from '@/features/agent/AgentPanel.vue'
 import AnnotationDialog from '@/features/tracing/AnnotationDialog.vue'
+import AnnotationGuide from '@/features/tracing/AnnotationGuide.vue'
 import DebugPanel from '@/components/DebugPanel.vue'
 import PaperOutlineTree from '@/features/papers/PaperOutlineTree.vue'
 import PaperReader from '@/features/papers/PaperReader.vue'
@@ -1112,6 +1114,16 @@ function onOutlineSelect(sectionId: string): void {
 function openBottomPanel(tab: BottomPanelKey): void {
   activeBottomPanel.value = tab
   bottomPanelOpen.value = true
+}
+
+/** Reveal the matrix alongside the guide, so the new row is visible the moment it lands. */
+function startAnnotation(): void {
+  if (annotation.active) {
+    annotation.cancel()
+    return
+  }
+  openBottomPanel('trace')
+  annotation.start()
 }
 
 const hasGeneratedTrace = computed(
@@ -1811,12 +1823,20 @@ watch(activeBottomPanel, (tab) => {
   min-width: 0;
   min-height: 0;
   flex: 1;
-  grid-template-rows: minmax(0, 1fr) auto;
+  /* Named areas keep editor/bottom on fixed tracks. Without this, removing the annotation
+     guide (v-if) shifts editor-grid into the first `auto` row; tall pane content then pushes
+     the bottom panel below overflow:hidden and it looks "unable to open". */
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'guide'
+    'editor'
+    'bottom';
   overflow: hidden;
   background: #ffffff;
 }
 
 .editor-grid {
+  grid-area: editor;
   display: grid;
   min-width: 0;
   min-height: 0;
@@ -1957,6 +1977,7 @@ watch(activeBottomPanel, (tab) => {
 }
 
 .bottom-panel {
+  grid-area: bottom;
   position: relative;
   display: grid;
   height: clamp(230px, 32vh, 340px);

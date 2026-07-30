@@ -1,15 +1,17 @@
 export type TraceStatus = 'proposed' | 'accepted' | 'rejected' | 'stale'
 
+/** Mirrors the backend `TraceRelationType` enum (`schemas/traces.py`) exactly. */
 export type TraceRelationType =
   | 'implements'
-  | 'describes'
-  | 'motivates'
-  | 'evaluates'
-  | 'defines'
   | 'computes'
-  | 'calls'
+  | 'defines'
+  | 'constrains'
+  | 'updates'
+  | 'configures'
+  | 'invokes'
+  // Retained for backward compatibility with legacy/manual links.
   | 'tests'
-  | 'related'
+  | 'mentions'
 
 export interface WorkspaceTraceRow {
   paper_ref: string

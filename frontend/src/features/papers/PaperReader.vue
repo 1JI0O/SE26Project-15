@@ -56,7 +56,7 @@
       <div v-show="viewMode === 'markdown'" ref="scrollRef" class="paper-scroll">
         <article
           ref="markdownRef"
-          :class="['markdown-body', { 'annotation-mode': annotation.annotationMode }]"
+          :class="['markdown-body', { 'annotation-picking': annotation.pickingPaper }]"
           :style="{ fontSize: `${zoom}%` }"
           aria-label="只读论文 Markdown"
           v-html="renderedMarkdown"
@@ -72,6 +72,7 @@
 <script setup lang="ts">
 import 'katex/dist/katex.min.css'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import { getPaperAssetBlob, resolvePaperAssetUrl } from '@/api/paper-api'
 import { useAnnotationStore } from '@/stores/annotation'
@@ -359,22 +360,35 @@ function onTraceOut(event: MouseEvent): void {
 }
 
 function onTraceClick(event: MouseEvent): void {
-  // Annotation mode: resolve whatever the user picked to a real MinerU block id.
-  if (annotation.annotationMode) {
+  // Guided annotation, paper step only: resolve the pick to a real MinerU block id.
+  if (annotation.pickingPaper) {
     const root = markdownRef.value
     const selection = window.getSelection()
+    const dragged = Boolean(selection && !selection.isCollapsed && selection.toString().trim())
     // Prefer the selection's own container: a drag that ends outside the paragraph (a common
     // way to select a whole block) would otherwise resolve against the wrong element.
-    const origin =
-      selection && !selection.isCollapsed && selection.toString().trim()
-        ? selection.getRangeAt(0).commonAncestorContainer
-        : (event.target as Node | null)
+    const origin = dragged
+      ? selection!.getRangeAt(0).commonAncestorContainer
+      : (event.target as Node | null)
     const blockId = root ? resolveBlockIdAt(root, origin) : null
     if (blockId) {
-      annotation.selectPaperBlock(blockId)
+      // Show back the whole block, not just the dragged span: the relation is stored against
+      // the block, so previewing the drag would promise finer granularity than exists.
+      const anchor = root?.querySelector<HTMLElement>(
+        `[data-paper-block-id="${CSS.escape(blockId)}"]`,
+      )
+      const block = anchor?.matches('span') ? resolveVisualBlock(anchor) : anchor
+      const blockText = (block?.textContent ?? '').replace(/\s+/g, ' ').trim()
+      annotation.pickPaper({
+        ref: blockId,
+        preview: blockText.slice(0, 400),
+      })
       selection?.removeAllRanges()
       return
     }
+    // Nothing resolvable under the pointer: say so instead of leaving the user guessing.
+    ElMessage.warning('这里没有可锚定的论文块，请选择正文段落、公式或图表')
+    return
   }
 
   // Normal mode: pin trace target
@@ -504,22 +518,23 @@ watch(
   { deep: true },
 )
 
-// Annotation mode: highlight selected paper block
+// Mark the block picked for the guided flow. It stays marked past the confirm step so the user
+// keeps seeing their paper choice while selecting code and filling the form.
 watch(
-  () => annotation.selectedPaperRef,
-  (selectedRef) => {
+  () => annotation.paperPick?.ref ?? null,
+  (pickedRef) => {
     const root = markdownRef.value
     if (!root) return
 
     root.querySelectorAll('.annotation-selected').forEach((el) => {
       el.classList.remove('annotation-selected')
     })
-    if (!selectedRef) return
+    if (!pickedRef) return
 
     // The id lives on a zero-width injected span, so mark the visual block it belongs to —
     // styling the span itself would be invisible.
     const anchor = root.querySelector<HTMLElement>(
-      `[data-paper-block-id="${CSS.escape(selectedRef)}"]`,
+      `[data-paper-block-id="${CSS.escape(pickedRef)}"]`,
     )
     if (!anchor) return
     const block = anchor.matches('span') ? resolveVisualBlock(anchor) : anchor
@@ -893,32 +908,32 @@ defineExpose({ scrollToSection, scrollToBlock, unresolvedTargetIds })
 /* Annotation mode styles */
 /* Annotation mode. The block id sits on a zero-width injected span, so these target the
    rendered blocks themselves — styling the anchor span would be invisible. */
-.markdown-body.annotation-mode :deep(p),
-.markdown-body.annotation-mode :deep(li),
-.markdown-body.annotation-mode :deep(h1),
-.markdown-body.annotation-mode :deep(h2),
-.markdown-body.annotation-mode :deep(h3),
-.markdown-body.annotation-mode :deep(h4),
-.markdown-body.annotation-mode :deep(blockquote),
-.markdown-body.annotation-mode :deep(pre),
-.markdown-body.annotation-mode :deep(table),
-.markdown-body.annotation-mode :deep(.math-display) {
+.markdown-body.annotation-picking :deep(p),
+.markdown-body.annotation-picking :deep(li),
+.markdown-body.annotation-picking :deep(h1),
+.markdown-body.annotation-picking :deep(h2),
+.markdown-body.annotation-picking :deep(h3),
+.markdown-body.annotation-picking :deep(h4),
+.markdown-body.annotation-picking :deep(blockquote),
+.markdown-body.annotation-picking :deep(pre),
+.markdown-body.annotation-picking :deep(table),
+.markdown-body.annotation-picking :deep(.math-display) {
   cursor: text;
   transition: outline-color 0.15s ease, background 0.15s ease;
   outline: 2px dashed transparent;
   outline-offset: 2px;
 }
 
-.markdown-body.annotation-mode :deep(p:hover),
-.markdown-body.annotation-mode :deep(li:hover),
-.markdown-body.annotation-mode :deep(h1:hover),
-.markdown-body.annotation-mode :deep(h2:hover),
-.markdown-body.annotation-mode :deep(h3:hover),
-.markdown-body.annotation-mode :deep(h4:hover),
-.markdown-body.annotation-mode :deep(blockquote:hover),
-.markdown-body.annotation-mode :deep(pre:hover),
-.markdown-body.annotation-mode :deep(table:hover),
-.markdown-body.annotation-mode :deep(.math-display:hover) {
+.markdown-body.annotation-picking :deep(p:hover),
+.markdown-body.annotation-picking :deep(li:hover),
+.markdown-body.annotation-picking :deep(h1:hover),
+.markdown-body.annotation-picking :deep(h2:hover),
+.markdown-body.annotation-picking :deep(h3:hover),
+.markdown-body.annotation-picking :deep(h4:hover),
+.markdown-body.annotation-picking :deep(blockquote:hover),
+.markdown-body.annotation-picking :deep(pre:hover),
+.markdown-body.annotation-picking :deep(table:hover),
+.markdown-body.annotation-picking :deep(.math-display:hover) {
   outline-color: #409eff;
   background: rgba(64, 158, 255, 0.05);
 }
@@ -930,7 +945,7 @@ defineExpose({ scrollToSection, scrollToBlock, unresolvedTargetIds })
   background: rgba(103, 194, 58, 0.12) !important;
 }
 
-.markdown-body.annotation-mode :deep(::selection) {
+.markdown-body.annotation-picking :deep(::selection) {
   background: rgba(64, 158, 255, 0.3);
 }
 </style>

@@ -5,6 +5,15 @@
         <h2>双向追溯矩阵</h2>
         <p>论文段落、公式、图表与代码文件/符号的关联审阅队列。点击任意行选中该关系并两侧联动定位。</p>
       </div>
+      <el-button
+        type="primary"
+        plain
+        :icon="Plus"
+        :disabled="annotation.active"
+        @click="annotation.start()"
+      >
+        追加追溯关系
+      </el-button>
     </header>
 
     <el-alert
@@ -143,10 +152,14 @@
 </template>
 
 <script setup lang="ts">
+import { Plus } from '@element-plus/icons-vue'
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import type { TraceRowView } from '@/composables/useTrace'
 import type { TraceStatus } from '@/types/tracing'
+import { useAnnotationStore } from '@/stores/annotation'
 import { confidenceColor } from './confidence'
+
+const annotation = useAnnotationStore()
 
 const freshTraceIds = ref<Set<string>>(new Set())
 
