@@ -309,7 +309,7 @@ def update_trace_link(
         project,
         "trace_link",
         link.public_id,
-        trace_payload(project, link),
+        trace_payload(project, link, session=session),
         base_version=link.version - 1,
     )
     session.commit()
@@ -346,7 +346,7 @@ def delete_trace_link(
         project,
         "trace_link",
         link.public_id,
-        trace_payload(project, link),
+        trace_payload(project, link, session=session),
         base_version=link.version - 1,
     )
     session.commit()
