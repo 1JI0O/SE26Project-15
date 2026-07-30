@@ -39,7 +39,8 @@ templates = Jinja2Templates(directory=str(Path(__file__).with_name("templates"))
 
 def _same_origin(request: Request) -> bool:
     origin = request.headers.get("origin")
-    if not origin:
+    # Allow missing or null origin (same-origin requests or privacy mode)
+    if not origin or origin == "null":
         return True
     expected = urlparse(settings.public_origin)
     supplied = urlparse(origin)
@@ -93,6 +94,8 @@ def login(
     session: Session = Depends(get_session),
 ) -> Response:
     if not _same_origin(request):
+        origin = request.headers.get("origin", "none")
+        print(f"[DEBUG] Origin check failed: origin={origin}, public_origin={settings.public_origin}")
         raise HTTPException(status_code=403, detail="Untrusted origin")
     try:
         normalized = normalize_email(email)
