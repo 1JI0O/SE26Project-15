@@ -21,6 +21,10 @@ def test_local_project_never_enters_outbox_before_explicit_enable() -> None:
         project = client.post(
             "/api/v1/projects", json={"name": "offline first", "description": "local"}
         ).json()
+        project = client.patch(
+            f"/api/v1/projects/{project['id']}",
+            json={"agent_deep_thinking": True},
+        ).json()
         before = client.get("/api/v1/local-sync/outbox", params={"workspace_id": workspace_id})
         enabled = client.post(
             f"/api/v1/projects/{project['id']}/sync/enable",
@@ -37,6 +41,7 @@ def test_local_project_never_enters_outbox_before_explicit_enable() -> None:
     assert enabled.status_code == 200
     assert len(after.json()["operations"]) == 1
     assert after.json()["operations"][0]["entity_type"] == "project"
+    assert after.json()["operations"][0]["payload"]["agent_deep_thinking"] is True
 
 
 def test_paused_project_is_device_local_and_suppresses_outbox() -> None:
@@ -113,6 +118,7 @@ def test_remote_project_metadata_does_not_resume_paused_desktop() -> None:
                             "name": "changed on web",
                             "sync_mode": "cloud_enabled",
                             "agent_history_sync": True,
+                            "agent_deep_thinking": True,
                         },
                     }
                 ],
@@ -123,6 +129,7 @@ def test_remote_project_metadata_does_not_resume_paused_desktop() -> None:
     assert applied.status_code == 204
     assert persisted["name"] == "changed on web"
     assert persisted["sync_mode"] == "cloud_paused"
+    assert persisted["agent_deep_thinking"] is True
 
 
 def test_detach_restores_local_only_without_deleting_local_project() -> None:

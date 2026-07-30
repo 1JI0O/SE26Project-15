@@ -92,6 +92,7 @@ def import_cloud_project(
             version=payload.version,
             sync_mode="cloud_enabled",
             agent_history_sync=payload.agent_history_sync,
+            agent_deep_thinking=payload.agent_deep_thinking,
         )
     else:
         project.cloud_workspace_id = payload.workspace_id
@@ -100,6 +101,7 @@ def import_cloud_project(
         project.version = payload.version
         project.sync_mode = "cloud_enabled"
         project.agent_history_sync = payload.agent_history_sync
+        project.agent_deep_thinking = payload.agent_deep_thinking
     session.add(state)
     session.add(project)
     session.commit()
@@ -876,6 +878,9 @@ def _apply_remote_conflict_value(
             entity.agent_history_sync = bool(
                 remote.get("agent_history_sync", entity.agent_history_sync)
             )
+            entity.agent_deep_thinking = bool(
+                remote.get("agent_deep_thinking", entity.agent_deep_thinking)
+            )
             entity.version = version
             entity.updated_at = utc_now()
             session.add(entity)
@@ -1504,6 +1509,9 @@ def apply_remote_events(payload: RemoteSyncEvents, session: Session = Depends(ge
                     # second-device metadata event must not resume this device.
                     project.agent_history_sync = bool(
                         event.payload.get("agent_history_sync", project.agent_history_sync)
+                    )
+                    project.agent_deep_thinking = bool(
+                        event.payload.get("agent_deep_thinking", project.agent_deep_thinking)
                     )
                 project.version = event.entity_version
                 project.updated_at = utc_now()

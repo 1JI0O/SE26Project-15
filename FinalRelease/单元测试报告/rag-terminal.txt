@@ -20,4 +20,4 @@ TOTAL                              438      0  100.00%
 Coverage HTML written to dir ../FinalRelease/单元测试报告/rag-htmlcov
 Coverage XML written to file ../FinalRelease/单元测试报告/rag-coverage.xml
 Required test coverage of 100% reached. Total coverage: 100.00%
-74 passed, 1 warning in 5.95s
+74 passed, 1 warning in 8.53s

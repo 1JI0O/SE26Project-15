@@ -5,6 +5,7 @@
     width="620px"
     :close-on-click-modal="false"
     :close-on-press-escape="!annotation.submitting"
+    :show-close="!annotation.submitting"
     @close="annotation.cancel()"
   >
     <div class="annotation-dialog">
@@ -58,8 +59,10 @@
     </div>
 
     <template #footer>
-      <el-button text @click="annotation.backToCode()">上一步</el-button>
-      <el-button @click="annotation.cancel()">取消</el-button>
+      <el-button text :disabled="annotation.submitting" @click="annotation.backToCode()">
+        上一步
+      </el-button>
+      <el-button :disabled="annotation.submitting" @click="annotation.cancel()">取消</el-button>
       <el-button type="primary" :loading="annotation.submitting" @click="create">创建</el-button>
     </template>
   </el-dialog>
@@ -102,7 +105,9 @@ const form = ref<FormData>({ relationType: 'implements', confidence: 80, rationa
 // is free-form prose that no downstream consumer parses.
 const rules: FormRules<FormData> = {
   relationType: [{ required: true, message: '请选择关系类型', trigger: 'change' }],
-  rationale: [{ required: true, message: '请填写描述', trigger: 'blur' }],
+  rationale: [
+    { required: true, whitespace: true, message: '请填写描述', trigger: 'blur' },
+  ],
 }
 
 watch(

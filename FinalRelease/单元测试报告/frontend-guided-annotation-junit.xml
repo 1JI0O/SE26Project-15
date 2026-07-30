@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="10" failures="0" errors="0" time="1.108">
+    <testsuite name="src/stores/annotation.spec.ts" timestamp="2026-07-30T09:37:01.936Z" hostname="LAPTOP-SNLLGVHI" tests="6" failures="0" errors="0" skipped="0" time="0.0101189">
+        <testcase classname="src/stores/annotation.spec.ts" name="guided annotation store &gt; enforces paper-confirm-code-confirm-form order and supports retry/back" time="0.0043901">
+        </testcase>
+        <testcase classname="src/stores/annotation.spec.ts" name="guided annotation store &gt; clears all project-scoped picks when cancelled or reset" time="0.0007139">
+        </testcase>
+        <testcase classname="src/stores/annotation.spec.ts" name="guided annotation store &gt; submits the normalized payload and resets after success" time="0.0019143">
+        </testcase>
+        <testcase classname="src/stores/annotation.spec.ts" name="guided annotation store &gt; locks navigation during submit and preserves the form after failure" time="0.0013399">
+        </testcase>
+        <testcase classname="src/stores/annotation.spec.ts" name="guided annotation store &gt; does not let an old request completion reset a newly opened project" time="0.0004188">
+        </testcase>
+        <testcase classname="src/stores/annotation.spec.ts" name="guided annotation store &gt; rejects incomplete and invalid-project submissions" time="0.0004104">
+        </testcase>
+    </testsuite>
+    <testsuite name="src/features/tracing/annotation-selection.spec.ts" timestamp="2026-07-30T09:37:01.937Z" hostname="LAPTOP-SNLLGVHI" tests="4" failures="0" errors="0" skipped="0" time="0.0028926">
+        <testcase classname="src/features/tracing/annotation-selection.spec.ts" name="annotation selection boundaries &gt; keeps an exclusive next-line offset on the previous line" time="0.0011541">
+        </testcase>
+        <testcase classname="src/features/tracing/annotation-selection.spec.ts" name="annotation selection boundaries &gt; handles ordinary single-line and multi-line selections" time="0.00029">
+        </testcase>
+        <testcase classname="src/features/tracing/annotation-selection.spec.ts" name="annotation selection boundaries &gt; accepts a paper drag only when both ends resolve to the same block" time="0.0006027">
+        </testcase>
+        <testcase classname="src/features/tracing/annotation-selection.spec.ts" name="annotation selection boundaries &gt; rejects cross-block and unresolved paper drags" time="0.0001007">
+        </testcase>
+    </testsuite>
+</testsuites>

@@ -40,6 +40,7 @@ def _read(item: CloudProject) -> CloudProjectRead:
         version=item.version,
         sync_mode=item.sync_mode,
         agent_history_sync=item.agent_history_sync,
+        agent_deep_thinking=item.agent_deep_thinking,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -128,6 +129,7 @@ def create_project(
                 "name": payload.name,
                 "description": payload.description,
                 "agent_history_sync": payload.agent_history_sync,
+                "agent_deep_thinking": payload.agent_deep_thinking,
             },
         ),
         require_project_binding=False,

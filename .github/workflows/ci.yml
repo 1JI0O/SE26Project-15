@@ -22,7 +22,8 @@ jobs:
             tests/test_code_analyzer.py \
             tests/repositories/test_analysis.py \
             tests/repositories/test_file_access.py \
-            "../FinalRelease/单元测试代码" \
+            "../FinalRelease/单元测试代码/test_code_analysis_boundaries.py" \
+            "../FinalRelease/单元测试代码/test_code_analysis_extended.py" \
             --cov=app.services.code_analysis \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
@@ -36,6 +37,21 @@ jobs:
             --cov-report=html:rag-htmlcov \
             --junitxml=rag-junit.xml \
             --cov-fail-under=90.01
+          uv run pytest -q \
+            tests/tracing/test_annotation_mode.py \
+            tests/agent/test_confidence_boundaries.py \
+            tests/projects/test_project_confidence_api.py \
+            tests/test_confidence_migration.py \
+            --cov=app.services.tracing.manual_anchors \
+            --cov=app.services.agent.confidence \
+            --cov=app.api.routes.projects \
+            --cov=app.schemas.projects \
+            --cov=app.db.migrations.versions.0014_project_deep_thinking \
+            --cov-report=term-missing \
+            --cov-report=xml:trace-authoring-coverage.xml \
+            --cov-report=html:trace-authoring-htmlcov \
+            --junitxml=trace-authoring-junit.xml \
+            --cov-fail-under=90.01
       - name: Upload local backend test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -48,6 +64,9 @@ jobs:
             backend/rag-coverage.xml
             backend/rag-htmlcov/
             backend/rag-junit.xml
+            backend/trace-authoring-coverage.xml
+            backend/trace-authoring-htmlcov/
+            backend/trace-authoring-junit.xml
 
   vscode-core:
     runs-on: ubuntu-latest
@@ -120,8 +139,18 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
+          pnpm exec vitest run \
+            --reporter=default \
+            --reporter=junit \
+            --outputFile.junit=frontend-unit-junit.xml
           pnpm typecheck
           pnpm build
+      - name: Upload frontend unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-unit-test-report
+          path: frontend/frontend-unit-junit.xml
 
   vscode-extension:
     runs-on: ubuntu-latest

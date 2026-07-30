@@ -97,6 +97,7 @@ def project_payload(project: Project) -> dict[str, Any]:
         "name": project.name,
         "description": project.description,
         "agent_history_sync": project.agent_history_sync,
+        "agent_deep_thinking": project.agent_deep_thinking,
     }
 
 

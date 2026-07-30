@@ -27,8 +27,8 @@
           <button
             type="button"
             :class="{ active: viewMode === 'pdf' }"
-            :disabled="!pdfUrl"
-            :title="pdfUrl ? '在原始 PDF 上查看高亮' : '原始 PDF 不可用，请重新上传论文'"
+            :disabled="!pdfUrl || annotation.pickingPaper"
+            :title="pdfViewTitle"
             @click="viewMode = 'pdf'"
           >
             PDF 原件
@@ -87,6 +87,7 @@ import {
   type PaperMark,
 } from './trace-decorations'
 import type { WorkspacePaperBlock } from '@/types/papers'
+import { resolveSinglePaperBlock } from '@/features/tracing/annotation-selection'
 
 const annotation = useAnnotationStore()
 
@@ -121,6 +122,10 @@ const pdfReaderRef = ref<InstanceType<typeof PdfReader> | null>(null)
 const zoom = ref(100)
 type ViewMode = 'markdown' | 'pdf'
 const viewMode = ref<ViewMode>('markdown')
+const pdfViewTitle = computed(() => {
+  if (annotation.pickingPaper) return '完成论文内容选择后可切换 PDF 原件'
+  return props.pdfUrl ? '在原始 PDF 上查看高亮' : '原始 PDF 不可用，请重新上传论文'
+})
 
 const desktopRuntime = '__TAURI_INTERNALS__' in window
 const imageObjectUrls = new Set<string>()
@@ -365,12 +370,14 @@ function onTraceClick(event: MouseEvent): void {
     const root = markdownRef.value
     const selection = window.getSelection()
     const dragged = Boolean(selection && !selection.isCollapsed && selection.toString().trim())
-    // Prefer the selection's own container: a drag that ends outside the paragraph (a common
-    // way to select a whole block) would otherwise resolve against the wrong element.
-    const origin = dragged
-      ? selection!.getRangeAt(0).commonAncestorContainer
-      : (event.target as Node | null)
-    const blockId = root ? resolveBlockIdAt(root, origin) : null
+    const range = dragged ? selection!.getRangeAt(0) : null
+    const blockId = root
+      ? range
+        ? resolveSinglePaperBlock(range.startContainer, range.endContainer, (container) =>
+            resolveBlockIdAt(root, container),
+          )
+        : resolveBlockIdAt(root, event.target as Node | null)
+      : null
     if (blockId) {
       // Show back the whole block, not just the dragged span: the relation is stored against
       // the block, so previewing the drag would promise finer granularity than exists.
@@ -450,6 +457,13 @@ watch(
   () => props.pdfUrl,
   (url) => {
     if (!url && viewMode.value === 'pdf') viewMode.value = 'markdown'
+  },
+)
+
+watch(
+  () => annotation.pickingPaper,
+  (picking) => {
+    if (picking) viewMode.value = 'markdown'
   },
 )
 

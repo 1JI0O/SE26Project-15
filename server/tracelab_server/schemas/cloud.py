@@ -113,6 +113,7 @@ class CloudProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     description: str = ""
     agent_history_sync: bool = True
+    agent_deep_thinking: bool = False
 
 
 class CloudProjectPatch(BaseModel):
@@ -120,6 +121,7 @@ class CloudProjectPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     description: str | None = None
     agent_history_sync: bool | None = None
+    agent_deep_thinking: bool | None = None
 
 
 class CloudProjectRead(BaseModel):
@@ -130,6 +132,7 @@ class CloudProjectRead(BaseModel):
     version: int
     sync_mode: str
     agent_history_sync: bool
+    agent_deep_thinking: bool
     created_at: datetime
     updated_at: datetime
 

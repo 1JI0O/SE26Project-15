@@ -947,6 +947,7 @@ function handleTraceLinkCreated(): void {
 }
 
 onUnmounted(() => {
+  annotation.resetForProject()
   window.removeEventListener('resize', onWindowResize)
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('trace-link-created', handleTraceLinkCreated)

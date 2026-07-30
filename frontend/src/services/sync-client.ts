@@ -425,6 +425,7 @@ export async function downloadCloudProjectToLocal(
     description: project.description,
     version: project.version,
     agent_history_sync: project.agent_history_sync,
+    agent_deep_thinking: project.agent_deep_thinking,
   })
   const projectId = imported.data.id
   const priority = IMPORT_PRIORITY
