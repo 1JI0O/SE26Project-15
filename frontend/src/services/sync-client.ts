@@ -272,6 +272,10 @@ async function backfillIncompleteSyncOnce(workspaceId: string): Promise<void> {
   if (localStorage.getItem(marker)) return
   try {
     await localHttp.post('/local-sync/backfill', null, { params: { workspace_id: workspaceId } })
+    // Repairs the receiving side: papers imported before the import path used the real
+    // parser are stuck on fallback text and never re-import on their own, because
+    // import_cloud_file skips any version that is not newer.
+    await localHttp.post('/local-sync/repair-imported-papers')
     localStorage.setItem(marker, new Date().toISOString())
   } catch {
     // Leave the marker unset so the next sync retries.

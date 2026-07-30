@@ -1021,6 +1021,40 @@ def backfill_incomplete_sync(
     return counts
 
 
+@router.post("/local-sync/repair-imported-papers")
+def repair_imported_papers(session: Session = Depends(get_session)) -> dict:
+    """Re-parse papers that were imported before the import path used the real parser.
+
+    ``import_cloud_file`` returns early when the incoming version is not newer, so a paper
+    already on disk is never re-imported and never re-parsed — it would stay stamped
+    ``parser="cloud-import"`` with an empty ``content_hash`` forever, permanently serving
+    fallback markdown even after this device gained a working MinerU configuration.
+
+    Identified by the old marker rather than by an empty ``content_hash`` alone, so a paper
+    still mid-parse (``pending-import``, hash not written yet) is not restarted.
+    """
+
+    broken = session.exec(
+        select(PaperDocument).where(PaperDocument.parser == "cloud-import")
+    ).all()
+    scheduled = []
+    for document in broken:
+        if not Path(document.storage_path).exists():
+            # The PDF is gone; a re-parse has nothing to read. Re-downloading is the
+            # cloud-import path's job, not this repair's.
+            continue
+        document.parse_status = "running"
+        document.parser = "pending-import"
+        document.parser_version = "placeholder"
+        document.content_hash = ""
+        session.add(document)
+        scheduled.append((document.project_id, document.public_id))
+    session.commit()
+    for project_id, public_id in scheduled:
+        schedule_paper_reparse(project_id, public_id)
+    return {"found": len(broken), "scheduled": len(scheduled)}
+
+
 @router.get("/local-sync/state")
 def read_sync_state(workspace_id: str, session: Session = Depends(get_session)) -> dict:
     state = session.get(LocalSyncState, workspace_id)

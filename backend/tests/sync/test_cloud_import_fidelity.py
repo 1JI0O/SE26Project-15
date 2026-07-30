@@ -14,8 +14,10 @@ against an earlier version of the domain and was never extended as features land
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import get_args, get_type_hints
 
+from app.core.config import settings
 from app.models.entities import Project, TraceLink
 from app.schemas.local_sync import LocalCloudEntityImport
 from app.services import local_sync
@@ -214,3 +216,54 @@ def test_machine_derived_types_do_not_raise_human_conflicts() -> None:
 
     assert MACHINE_DERIVED_TYPES == {"paper_target", "code_target"}
     assert "trace_link" not in MACHINE_DERIVED_TYPES
+
+
+def test_repair_rescues_papers_imported_by_the_old_broken_path() -> None:
+    """Already-imported papers do not heal on their own.
+
+    ``import_cloud_file`` skips any incoming version that is not newer, so a paper written by
+    the old path stays stamped ``parser="cloud-import"`` with an empty ``content_hash`` — and
+    therefore stuck on fallback markdown — even after the device gains a working MinerU
+    configuration. Only an explicit repair can re-derive it.
+    """
+
+    from fastapi.testclient import TestClient
+    from sqlmodel import select as sql_select
+
+    from app.db.session import get_session
+    from app.main import app
+    from app.models.entities import PaperDocument as Doc
+
+    with TestClient(app) as client:
+        project = client.post("/api/v1/projects", json={"name": "legacy import"}).json()
+        session = next(iter(app.dependency_overrides[get_session]()))
+        # Simulate a paper written by the old import path, with its PDF present on disk.
+        storage = Path(settings.upload_root) / f"project-{project['id']}" / "legacy.pdf"
+        storage.parent.mkdir(parents=True, exist_ok=True)
+        storage.write_bytes(b"%PDF-1.4\ntrailer<</Root 1 0 R>>\n%%EOF\n")
+        session.add(
+            Doc(
+                public_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                project_id=project["id"],
+                filename="legacy.pdf",
+                storage_path=str(storage),
+                parser="cloud-import",
+                parser_version="pypdf-compat-v1",
+                content_hash="",
+                sections_json=[],
+                paragraphs_json=[],
+                pages_json=[],
+            )
+        )
+        session.commit()
+
+        repaired = client.post("/api/v1/local-sync/repair-imported-papers").json()
+        after = session.exec(
+            sql_select(Doc).where(Doc.public_id == "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+        ).first()
+        session.refresh(after)
+
+    assert repaired["found"] == 1
+    assert repaired["scheduled"] == 1
+    # The stale marker must be cleared, otherwise a repeat repair would re-find the same row.
+    assert after.parser != "cloud-import"
