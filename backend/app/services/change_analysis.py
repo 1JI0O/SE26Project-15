@@ -4,6 +4,7 @@ import copy
 import difflib
 import hashlib
 import json
+import re
 from typing import Any
 
 from sqlmodel import Session, select
@@ -18,6 +19,7 @@ from app.models.entities import (
 )
 from app.services.analysis_jobs import analysis_is_current, repository_edits_root
 from app.services.code_analysis.editor import FileAccessError, read_repository_file
+from app.services.paper_evidence import build_evidence_spans, search_paper_blocks
 
 
 def _sha256(content: str) -> str:
@@ -343,6 +345,60 @@ def _minimal_paper_context(block: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_PAPER_HINT_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
+_PAPER_HINT_STOPWORDS = {
+    "after",
+    "before",
+    "class",
+    "const",
+    "false",
+    "from",
+    "import",
+    "none",
+    "return",
+    "self",
+    "true",
+}
+
+
+def _paper_search_hints(
+    changes: list[dict[str, Any]],
+    impacts: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Derive deterministic navigation terms without making a semantic paper claim."""
+
+    ranked: list[str] = []
+
+    def add(value: object) -> None:
+        for raw in _PAPER_HINT_TOKEN.findall(str(value or "")):
+            parts = [
+                part
+                for chunk in raw.split("_")
+                for part in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+", chunk)
+            ] or [raw]
+            for part in parts:
+                normalized = part.casefold()[:64]
+                if (
+                    normalized not in _PAPER_HINT_STOPWORDS
+                    and len(normalized) >= 3
+                    and normalized not in ranked
+                    and sum(len(item) + 1 for item in ranked) + len(normalized) <= 600
+                ):
+                    ranked.append(normalized)
+
+    for change in changes:
+        add(change.get("path"))
+        impact = impacts.get(str(change.get("path") or ""), {})
+        for symbol in impact.get("affected_symbols", [])[:12]:
+            add(symbol.get("name"))
+            add(symbol.get("qualified_name"))
+            add(symbol.get("id"))
+        for hunk in change.get("hunks", [])[:8]:
+            add(str(hunk.get("before_quote") or "")[:1500])
+            add(str(hunk.get("after_quote") or "")[:1500])
+    return ranked[:32]
+
+
 def build_conflict_context(
     session: Session,
     repository: CodeRepository,
@@ -400,9 +456,20 @@ def build_conflict_context(
         {
             **copy.deepcopy(block_map[block_id]),
             "trace_ids": list(dict.fromkeys(trace_ids)),
+            "evidence_spans": build_evidence_spans(block_map[block_id]),
         }
         for block_id, trace_ids in trace_ids_by_block.items()
     ]
+    paper_search_hints = _paper_search_hints(ordered_changes, impacts)
+    inferred_paper_candidates = (
+        search_paper_blocks(
+            list(block_map.values()),
+            " ".join(paper_search_hints),
+            limit=3,
+        )
+        if not ordered_traces and block_map and paper_search_hints
+        else []
+    )
     full_files = [
         {
             **copy.deepcopy(change),
@@ -415,6 +482,7 @@ def build_conflict_context(
         "changed_line_count": changes["changed_line_count"],
         "affected_trace_count": len(ordered_traces),
         "paper_block_count": len(paper_blocks),
+        "paper_candidate_count": len(inferred_paper_candidates),
     }
     full_context = {
         "schema_version": "conflict-context-v1",
@@ -424,6 +492,8 @@ def build_conflict_context(
         "files": full_files,
         "affected_traces": copy.deepcopy(ordered_traces),
         "paper_blocks": paper_blocks,
+        "paper_search_hints": paper_search_hints,
+        "inferred_paper_candidates": inferred_paper_candidates,
         "coverage": {
             "complete": True,
             "included_file_count": len(full_files),
@@ -435,11 +505,14 @@ def build_conflict_context(
             "included_paper_block_count": len(paper_blocks),
             "complete_paper_block_count": len(paper_blocks),
             "total_paper_block_count": len(paper_blocks),
+            "included_paper_candidate_count": len(inferred_paper_candidates),
+            "total_paper_candidate_count": len(inferred_paper_candidates),
             "truncated_sections": [],
             "truncated_paths": [],
             "omitted_paths": [],
             "omitted_trace_ids": [],
             "omitted_paper_block_ids": [],
+            "omitted_paper_candidate_ids": [],
         },
     }
     max_chars = max(1000, max_chars)
@@ -454,6 +527,8 @@ def build_conflict_context(
         "files": [],
         "affected_traces": [],
         "paper_blocks": [],
+        "paper_search_hints": paper_search_hints,
+        "inferred_paper_candidates": [],
         "coverage": {
             "complete": False,
             "included_file_count": 0,
@@ -465,11 +540,14 @@ def build_conflict_context(
             "included_paper_block_count": 0,
             "complete_paper_block_count": 0,
             "total_paper_block_count": len(paper_blocks),
+            "included_paper_candidate_count": 0,
+            "total_paper_candidate_count": len(inferred_paper_candidates),
             "truncated_sections": [],
             "truncated_paths": [],
             "omitted_paths": [],
             "omitted_trace_ids": [],
             "omitted_paper_block_ids": [],
+            "omitted_paper_candidate_ids": [],
         },
     }
 
@@ -515,6 +593,12 @@ def build_conflict_context(
         else:
             omitted_block_ids.append(block_id)
 
+    omitted_candidate_ids: list[str] = []
+    for candidate in inferred_paper_candidates:
+        block_id = str(candidate.get("block_id") or "")
+        if not append_if_fits("inferred_paper_candidates", copy.deepcopy(candidate)):
+            omitted_candidate_ids.append(block_id)
+
     coverage = bounded["coverage"]
     coverage.update(
         {
@@ -524,6 +608,7 @@ def build_conflict_context(
             "complete_trace_count": len(complete_trace_ids),
             "included_paper_block_count": len(bounded["paper_blocks"]),
             "complete_paper_block_count": len(complete_block_ids),
+            "included_paper_candidate_count": len(bounded["inferred_paper_candidates"]),
             "truncated_sections": [
                 section
                 for section, truncated in (
@@ -535,6 +620,11 @@ def build_conflict_context(
                         len(complete_trace_ids) < len(ordered_traces),
                     ),
                     ("paper_blocks", len(complete_block_ids) < len(paper_blocks)),
+                    (
+                        "inferred_paper_candidates",
+                        len(bounded["inferred_paper_candidates"])
+                        < len(inferred_paper_candidates),
+                    ),
                 )
                 if truncated
             ],
@@ -542,10 +632,16 @@ def build_conflict_context(
             "omitted_paths": omitted_paths[:100],
             "omitted_trace_ids": omitted_trace_ids[:100],
             "omitted_paper_block_ids": omitted_block_ids[:100],
+            "omitted_paper_candidate_ids": omitted_candidate_ids[:100],
         }
     )
     while _serialized_chars(bounded) > max_chars:
-        if bounded["paper_blocks"]:
+        if bounded["inferred_paper_candidates"]:
+            removed = bounded["inferred_paper_candidates"].pop()
+            block_id = str(removed.get("block_id") or "")
+            if block_id and block_id not in coverage["omitted_paper_candidate_ids"]:
+                coverage["omitted_paper_candidate_ids"].append(block_id)
+        elif bounded["paper_blocks"]:
             removed = bounded["paper_blocks"].pop()
             block_id = str(removed.get("id") or "")
             complete_block_ids.discard(block_id)
@@ -573,6 +669,7 @@ def build_conflict_context(
                         "omitted_paths",
                         "omitted_trace_ids",
                         "omitted_paper_block_ids",
+                        "omitted_paper_candidate_ids",
                         "truncated_paths",
                     )
                     if coverage[key]
@@ -590,6 +687,26 @@ def build_conflict_context(
             "complete_trace_count": len(complete_trace_ids),
             "included_paper_block_count": len(bounded["paper_blocks"]),
             "complete_paper_block_count": len(complete_block_ids),
+            "included_paper_candidate_count": len(bounded["inferred_paper_candidates"]),
+            "truncated_sections": [
+                section
+                for section, truncated in (
+                    ("files.diff", len(complete_paths) < len(full_files)),
+                    ("files.hunks", len(complete_paths) < len(full_files)),
+                    ("files.impact", len(complete_paths) < len(full_files)),
+                    (
+                        "affected_traces",
+                        len(complete_trace_ids) < len(ordered_traces),
+                    ),
+                    ("paper_blocks", len(complete_block_ids) < len(paper_blocks)),
+                    (
+                        "inferred_paper_candidates",
+                        len(bounded["inferred_paper_candidates"])
+                        < len(inferred_paper_candidates),
+                    ),
+                )
+                if truncated
+            ],
             "truncated_paths": truncated_paths[:100],
         }
     )

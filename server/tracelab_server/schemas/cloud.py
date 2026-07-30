@@ -160,6 +160,8 @@ SyncEntityType = Literal[
     "paper_document",
     "code_repository",
     "code_edit",
+    "paper_target",
+    "code_target",
     "trace_link",
     "agent_conversation",
     "agent_message",

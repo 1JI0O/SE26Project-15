@@ -63,6 +63,7 @@ function toolTitle(toolName: string): string {
     get_change_impact: '分析代码影响范围',
     list_affected_traces: '查找受影响追溯',
     list_paper_blocks: '浏览论文结构',
+    search_paper_blocks: '定向检索论文证据',
     get_paper_block: '读取论文证据',
     list_repository_files: '浏览代码文件',
     list_code_symbols: '枚举代码符号',
@@ -89,7 +90,8 @@ function toolFailureSummary(code: string, details = ''): string {
     invalid_tool_arguments: '参数未通过校验，Agent 将修正后重试',
     conflict_output_must_be_chinese: '报告语言未通过校验，Agent 将改写后重试',
     conflict_code_evidence_quote_invalid: '代码引文无法定位，Agent 将重新取证',
-    conflict_paper_evidence_quote_invalid: '论文引文无法定位，Agent 将重新取证',
+    conflict_paper_evidence_quote_invalid: '论文引文与解析原文不一致，正在重新读取指定证据',
+    conflict_paper_evidence_ref_invalid: '论文证据块已变化，正在重新定位指定证据',
     repository_revision_changed: '代码版本已变化，本次分析无法继续',
   }
   return labels[code] ?? '本步骤未通过校验，Agent 将调整后重试'
@@ -113,7 +115,12 @@ export function useInsights(projectId: () => number) {
 
   function upsertAnalysisStep(step: ConflictAnalysisStep): void {
     const existing = analysisSteps.value.findIndex(
-      (item) => item.step === step.step && item.tool_name === step.tool_name,
+      (item) =>
+        item.tool_name === step.tool_name
+        && (
+          item.step === step.step
+          || step.tool_name === 'publish_conflict_report'
+        ),
     )
     if (existing >= 0) {
       analysisSteps.value[existing] = step

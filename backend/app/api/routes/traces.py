@@ -19,8 +19,10 @@ from app.schemas.traces import (
     TraceBatchStatusUpdate,
     TraceClearResult,
     TraceClearScope,
+    TraceEvidence,
     TraceLinkCreate,
     TraceLinkRead,
+    TraceLinkUpdate,
     TraceStatus,
     TraceStatusUpdate,
     TraceSuggestionRequest,
@@ -29,6 +31,10 @@ from app.schemas.traces import (
 )
 from app.services import workspace_service
 from app.services.local_sync import record_local_operation, trace_payload
+from app.services.tracing.manual_anchors import (
+    UnresolvableAnchorError,
+    build_reference_evidence,
+)
 from app.services.tracing.service import suggest_and_persist, trace_to_read
 from app.services.workspace_placeholder import workspace_payload
 
@@ -48,6 +54,28 @@ def _invalidate_trace_index(session: Session, project_id: int) -> None:
 
     invalidate(session, project_id, "trace")
 
+
+def _autofill_evidence(
+    session: Session,
+    project_id: int,
+    paper: PaperDocument,
+    code: CodeRepository,
+    payload: TraceLinkCreate,
+) -> list[TraceEvidence]:
+    """Both evidence sides for a manual relation the client did not quote.
+
+    Annotation mode asks the user for a relation, not for quotes: the selection itself is the
+    evidence. Deriving it server-side keeps the stored link shaped like an Agent-authored one
+    (both sides present, real text, anchor ids) so the reader can decorate it — see
+    ``services/tracing/manual_anchors`` for why a missing anchor id silently kills highlighting.
+    """
+
+    return [
+        TraceEvidence.model_validate(item)
+        for item in build_reference_evidence(
+            session, project_id, paper, code, payload.paper_ref, payload.code_ref
+        )
+    ]
 
 def _latest_paper(session: Session, project_id: int) -> PaperDocument | None:
     return session.exec(
@@ -89,9 +117,6 @@ def create_trace_link(
     session: Session = Depends(get_session),
 ) -> TraceLinkRead:
     project = get_project_or_404(project_id, session)
-    sides = {evidence.side for evidence in payload.evidence}
-    if sides != {"paper", "code"}:
-        raise HTTPException(status_code=422, detail="Manual traces require paper and code evidence")
     paper = _latest_paper(session, project_id)
     code = _latest_code(session, project_id)
     if paper is None or code is None:
@@ -99,6 +124,24 @@ def create_trace_link(
             status_code=409,
             detail="Upload both paper and code before creating traces",
         )
+    evidence = list(payload.evidence)
+    if not evidence:
+        # Annotation mode sends the selection, not quotes: derive both sides server-side.
+        try:
+            evidence = _autofill_evidence(session, project_id, paper, code, payload)
+        except UnresolvableAnchorError as exc:
+            # Storing an unresolvable reference would produce a relation that lists in the
+            # matrix but can never be highlighted or quoted, so refuse it at the door.
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Cannot anchor the {exc.side} reference {exc.ref!r} in the current "
+                    "paper/repository. Re-select it, or re-run analysis if the artifact changed."
+                ),
+            ) from exc
+    sides = {item.side for item in evidence}
+    if sides != {"paper", "code"}:
+        raise HTTPException(status_code=422, detail="Manual traces require paper and code evidence")
     fingerprint = hashlib.sha256(
         f"manual\x00{paper.id}\x00{code.id}\x00{code.revision}\x00{payload.paper_ref}\x00"
         f"{payload.code_ref}\x00{payload.relation_type.value}".encode()
@@ -117,7 +160,7 @@ def create_trace_link(
         confidence=payload.confidence,
         static_confidence=payload.confidence,
         source="manual",
-        evidence_json=[item.model_dump() for item in payload.evidence],
+        evidence_json=[item.model_dump() for item in evidence],
         rationale=payload.rationale,
         uncertainty_json={"level": "medium", "reasons": ["manual_relation"]},
         fingerprint=fingerprint,
@@ -129,7 +172,7 @@ def create_trace_link(
         project,
         "trace_link",
         link.public_id,
-        trace_payload(project, link),
+        trace_payload(project, link, session=session),
         base_version=0,
     )
     session.commit()
@@ -222,6 +265,50 @@ def update_trace_status(
         project,
         "trace_link",
         link.public_id,
+        trace_payload(project, link, session=session),
+        base_version=link.version - 1,
+    )
+    session.commit()
+    session.refresh(link)
+    _invalidate_trace_index(session, project_id)
+    return trace_to_read(link)
+
+
+@router.patch("/{trace_id}", response_model=TraceLinkRead)
+def update_trace_link(
+    project_id: int,
+    trace_id: str,
+    payload: TraceLinkUpdate,
+    session: Session = Depends(get_session),
+) -> TraceLinkRead:
+    """Update trace link relation type, confidence, or rationale."""
+    project = get_project_or_404(project_id, session)
+    link = session.exec(
+        select(TraceLink).where(
+            TraceLink.project_id == project_id,
+            TraceLink.trace_id == trace_id,
+        )
+    ).first()
+    if link is None:
+        raise HTTPException(status_code=404, detail="Trace link not found")
+
+    # Update fields if provided
+    if payload.relation_type is not None:
+        link.relation_type = payload.relation_type.value
+    if payload.confidence is not None:
+        link.confidence = payload.confidence
+        link.static_confidence = payload.confidence
+    if payload.rationale is not None:
+        link.rationale = payload.rationale
+
+    link.updated_at = utc_now()
+    link.version += 1
+    session.add(link)
+    record_local_operation(
+        session,
+        project,
+        "trace_link",
+        link.public_id,
         trace_payload(project, link),
         base_version=link.version - 1,
     )
@@ -229,6 +316,42 @@ def update_trace_status(
     session.refresh(link)
     _invalidate_trace_index(session, project_id)
     return trace_to_read(link)
+
+
+@router.delete("/{trace_id}", status_code=status.HTTP_200_OK)
+def delete_trace_link(
+    project_id: int,
+    trace_id: str,
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
+    """Soft-delete trace link by setting status to rejected."""
+    project = get_project_or_404(project_id, session)
+    link = session.exec(
+        select(TraceLink).where(
+            TraceLink.project_id == project_id,
+            TraceLink.trace_id == trace_id,
+        )
+    ).first()
+    if link is None:
+        raise HTTPException(status_code=404, detail="Trace link not found")
+
+    # Soft delete: set status to rejected
+    link.status = TraceStatus.REJECTED.value
+    link.decided_at = utc_now()
+    link.updated_at = utc_now()
+    link.version += 1
+    session.add(link)
+    record_local_operation(
+        session,
+        project,
+        "trace_link",
+        link.public_id,
+        trace_payload(project, link),
+        base_version=link.version - 1,
+    )
+    session.commit()
+    _invalidate_trace_index(session, project_id)
+    return {"message": "Trace link deleted", "trace_id": trace_id}
 
 
 @router.post("/batch-status", response_model=TraceBatchStatusResult)
@@ -275,7 +398,7 @@ def batch_update_trace_status(
             project,
             "trace_link",
             link.public_id,
-            trace_payload(project, link),
+            trace_payload(project, link, session=session),
             base_version=link.version - 1,
         )
     session.commit()
@@ -351,7 +474,7 @@ def clear_trace_links(
             project,
             "trace_link",
             link.public_id,
-            trace_payload(project, link),
+            trace_payload(project, link, session=session),
             operation="delete",
             base_version=link.version,
         )

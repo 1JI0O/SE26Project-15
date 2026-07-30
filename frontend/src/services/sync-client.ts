@@ -118,20 +118,44 @@ async function importDiagramBlob(
   }
 }
 
+/**
+ * Import order. Anchors (paper_target/code_target) must land before trace_link: a relation
+ * resolves its target references through the target's public id, and an unresolved reference
+ * is dropped rather than retried. Anchors in turn need their paper/repository to exist first.
+ *
+ * Shared by the incremental pull and the first-time bootstrap download — these were separate
+ * copies, which is how the two paths drifted apart as new entity types were added.
+ */
+const IMPORT_PRIORITY: Record<string, number> = {
+  code_repository: 1,
+  paper_document: 1,
+  paper_target: 2,
+  code_target: 2,
+  agent_conversation: 3,
+  agent_run: 4,
+  agent_message: 5,
+  agent_run_event: 6,
+  agent_memory: 7,
+  trace_link: 8,
+  code_edit: 9,
+}
+
+/** Entity types imported as a JSON payload rather than a downloaded blob. */
+const PAYLOAD_ENTITY_TYPES = [
+  'paper_target',
+  'code_target',
+  'trace_link',
+  'agent_conversation',
+  'agent_message',
+  'agent_run',
+  'agent_run_event',
+  'agent_memory',
+]
+
 async function importRemoteSourceEvents(events: SyncEvent[]): Promise<void> {
   const projects = await localHttp.get<Array<{ id: number; public_id: string }>>('/projects')
   const localProjectIds = new Map(projects.data.map((project) => [project.public_id, project.id]))
-  const priority: Record<string, number> = {
-    code_repository: 1,
-    paper_document: 1,
-    agent_conversation: 2,
-    agent_run: 3,
-    agent_message: 4,
-    agent_run_event: 5,
-    agent_memory: 6,
-    trace_link: 7,
-    code_edit: 8,
-  }
+  const priority = IMPORT_PRIORITY
   for (const event of [...events].sort(
     (left, right) => (priority[left.entity_type] ?? 99) - (priority[right.entity_type] ?? 99),
   )) {
@@ -179,10 +203,7 @@ async function importRemoteSourceEvents(events: SyncEvent[]): Promise<void> {
           headers: { 'Content-Type': 'application/octet-stream' },
         },
       )
-    } else if (
-      ['trace_link', 'agent_conversation', 'agent_message', 'agent_run', 'agent_run_event', 'agent_memory']
-        .includes(event.entity_type)
-    ) {
+    } else if (PAYLOAD_ENTITY_TYPES.includes(event.entity_type)) {
       await localHttp.post(`/local-sync/projects/${projectId}/imports/entity`, {
         entity_type: event.entity_type,
         public_id: event.entity_public_id,
@@ -227,6 +248,37 @@ export async function setLocalProjectSyncMode(
   } catch {
     // Pausing/unbinding must remain possible while offline. A later login can
     // reconcile the stale server-side device binding without uploading data.
+  }
+}
+
+/**
+ * Marker key for the one-shot repair below. Bumping the suffix re-runs the backfill, which is
+ * what a future protocol extension should do rather than adding a second marker.
+ */
+const BACKFILL_MARKER = 'tracelab_sync_backfill_targets_v1'
+
+/**
+ * Repair projects enabled before the protocol covered anchors and the full trace payload.
+ *
+ * Nothing re-touches an unchanged entity, so an old project's missing paper_target/code_target
+ * and its truncated cloud trace_link copy would stay wrong forever. This re-enqueues them once
+ * per workspace per install; the marker keeps a normal sync from re-queuing the same history
+ * on every run.
+ *
+ * Failure is non-fatal: a workspace that cannot be repaired right now should still sync.
+ */
+async function backfillIncompleteSyncOnce(workspaceId: string): Promise<void> {
+  const marker = `${BACKFILL_MARKER}:${workspaceId}`
+  if (localStorage.getItem(marker)) return
+  try {
+    await localHttp.post('/local-sync/backfill', null, { params: { workspace_id: workspaceId } })
+    // Repairs the receiving side: papers imported before the import path used the real
+    // parser are stuck on fallback text and never re-import on their own, because
+    // import_cloud_file skips any version that is not newer.
+    await localHttp.post('/local-sync/repair-imported-papers')
+    localStorage.setItem(marker, new Date().toISOString())
+  } catch {
+    // Leave the marker unset so the next sync retries.
   }
 }
 
@@ -280,6 +332,7 @@ export async function synchronizeWorkspace(
     device_id: deviceId,
   })
   if (adopted.data.changed) await ensureDeviceBindings(workspaceId)
+  await backfillIncompleteSyncOnce(workspaceId)
   // Drain the outbox in batches. The local backend returns at most 100 pending
   // ops per read, so a project with a long history (e.g. hundreds of agent run
   // events) needs several rounds. Loop until nothing pending remains so a single
@@ -374,10 +427,7 @@ export async function downloadCloudProjectToLocal(
     agent_history_sync: project.agent_history_sync,
   })
   const projectId = imported.data.id
-  const priority: Record<string, number> = {
-    code_repository: 1, paper_document: 1, agent_conversation: 2, agent_run: 3,
-    agent_message: 4, agent_run_event: 5, agent_memory: 6, trace_link: 7, code_edit: 8,
-  }
+  const priority = IMPORT_PRIORITY
   for (const entity of [...bootstrapped.data.entities].sort(
     (left, right) => (priority[left.entity_type] ?? 99) - (priority[right.entity_type] ?? 99),
   )) {
@@ -420,7 +470,7 @@ export async function downloadCloudProjectToLocal(
           headers: { 'Content-Type': 'application/octet-stream' },
         },
       )
-    } else if (['trace_link', 'agent_conversation', 'agent_message', 'agent_run', 'agent_run_event', 'agent_memory'].includes(entity.entity_type)) {
+    } else if (PAYLOAD_ENTITY_TYPES.includes(entity.entity_type)) {
       await localHttp.post(`/local-sync/projects/${projectId}/imports/entity`, {
         entity_type: entity.entity_type,
         public_id: entity.public_id,

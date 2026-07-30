@@ -108,6 +108,12 @@ class TraceStatusUpdate(BaseModel):
     status: TraceStatus
 
 
+class TraceLinkUpdate(BaseModel):
+    relation_type: TraceRelationType | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    rationale: str | None = Field(default=None, min_length=1, max_length=5000)
+
+
 class TraceBatchStatusUpdate(BaseModel):
     status: TraceStatus
     # When omitted/empty, applies to every currently-proposed link in the project.

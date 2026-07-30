@@ -71,6 +71,8 @@ class LocalCloudProjectImport(BaseModel):
 
 class LocalCloudEntityImport(BaseModel):
     entity_type: Literal[
+        "paper_target",
+        "code_target",
         "trace_link",
         "agent_conversation",
         "agent_message",
