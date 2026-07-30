@@ -94,8 +94,6 @@ def login(
     session: Session = Depends(get_session),
 ) -> Response:
     if not _same_origin(request):
-        origin = request.headers.get("origin", "none")
-        print(f"[DEBUG] Origin check failed: origin={origin}, public_origin={settings.public_origin}")
         raise HTTPException(status_code=403, detail="Untrusted origin")
     try:
         normalized = normalize_email(email)
