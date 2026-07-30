@@ -6,11 +6,16 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlmodel import Session, select
 
 from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
+from app.schemas.traces import normalize_relation_type
 from app.services import workspace_service
+from app.services.tracing.manual_anchors import (
+    UnresolvableAnchorError,
+    build_reference_evidence,
+)
 
 MAX_TOOL_CONTENT_CHARS = 512_000
 READ_TOOLS = {
@@ -145,12 +150,24 @@ class CreateTraceArguments(StrictArguments):
     confidence: float = Field(ge=0, le=1)
     rationale: str = Field(min_length=1, max_length=4000)
 
+    @field_validator("relation_type", mode="before")
+    @classmethod
+    def _normalize_relation_type(cls, value: object) -> str:
+        return normalize_relation_type(value).value
+
 
 class UpdateTraceLinkArguments(StrictArguments):
     trace_id: str = Field(min_length=1, max_length=64)
     relation_type: str | None = Field(default=None, min_length=1, max_length=64)
     confidence: float | None = Field(default=None, ge=0, le=1)
     rationale: str | None = Field(default=None, min_length=1, max_length=4000)
+
+    @field_validator("relation_type", mode="before")
+    @classmethod
+    def _normalize_relation_type(cls, value: object) -> str | None:
+        if value is None or value == "":
+            return None
+        return normalize_relation_type(value).value
 
 
 class DeleteTraceLinkArguments(StrictArguments):
@@ -276,7 +293,12 @@ TOOL_DESCRIPTIONS = {
     "rerun_analysis": "Rerun repository analysis for selected paths; requires confirmation.",
     "update_trace_status": "Accept or reject a proposed trace; requires confirmation.",
     "create_trace_link": (
-        "Create a paper-code trace with evidence rationale; requires confirmation."
+        "Create a paper-code trace with evidence rationale; requires confirmation. "
+        "paper_ref must be a MinerU block id from the paper (e.g. p1-b6). "
+        "code_ref should be path:line_start-line_end (e.g. models/net.py:10-24) "
+        "or a stable symbol id from the repository index. "
+        "relation_type must be one of: implements, computes, defines, constrains, "
+        "updates, configures, invokes, tests, mentions."
     ),
 }
 
@@ -919,18 +941,25 @@ def prepare_write_request(
     if isinstance(validated, CreateTraceArguments):
         paper = latest_paper(session, project_id)
         code = latest_code(session, project_id)
-        if paper is None or not any(
-            str(paragraph.get("id")) == validated.paper_ref for paragraph in paper.paragraphs_json
-        ):
+        if paper is None:
             raise ValueError("paper_block_not_found")
         if code is None:
             raise ValueError("code_repository_not_found")
-        known_refs = {str(symbol.get("id")) for symbol in code.symbols_json if symbol.get("id")}
-        known_refs.update(
-            str(entry.get("path")) for entry in code.file_tree_json if entry.get("path")
-        )
-        if validated.code_ref not in known_refs:
-            raise ValueError("code_reference_not_found")
+        # Same anchor rules as execution / annotation mode: page blocks (then paragraphs)
+        # and path:start-end line ranges — not paragraphs-only + exact symbol/path equality.
+        try:
+            build_reference_evidence(
+                session,
+                project_id,
+                paper,
+                code,
+                validated.paper_ref,
+                validated.code_ref,
+            )
+        except UnresolvableAnchorError as exc:
+            if exc.side == "paper":
+                raise ValueError("paper_block_not_found") from exc
+            raise ValueError("code_reference_not_found") from exc
         return payload, {
             "paper_ref": validated.paper_ref,
             "code_ref": validated.code_ref,

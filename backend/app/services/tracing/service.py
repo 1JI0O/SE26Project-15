@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from pydantic import ValidationError
 from sqlmodel import Session
 
 from app.core.config import settings
 from app.models.entities import CodeRepository, PaperDocument, TraceLink
-from app.schemas.traces import TraceLinkRead
+from app.schemas.traces import TraceLinkRead, TraceModelInfo, normalize_relation_type
 from app.services.integration_settings import get_effective_integration_config
 from app.services.tracing.context import build_contexts
 from app.services.tracing.lifecycle import mark_noncurrent_traces_stale
@@ -23,6 +24,22 @@ PROMPT_VERSION = "trace-v1"
 UNCERTAINTY_PENALTY = {"low": 0.0, "medium": 0.05, "high": 0.15}
 
 
+def _safe_model_info(raw: Any) -> TraceModelInfo | None:
+    """Validate stored model_info; drop malformed rows so list endpoints never 500.
+
+    Chat-tool creates once wrote ``{source, confirmation_id}`` into ``model_info_json``.
+    ``TraceModelInfo`` requires ``provider``/``name``, so a single bad row broke
+    ``GET /trace-links`` for the whole project.
+    """
+
+    if raw is None:
+        return None
+    try:
+        return TraceModelInfo.model_validate(raw)
+    except ValidationError:
+        return None
+
+
 def trace_to_read(link: TraceLink) -> TraceLinkRead:
     return TraceLinkRead(
         id=link.trace_id,
@@ -32,7 +49,7 @@ def trace_to_read(link: TraceLink) -> TraceLinkRead:
         code_repository_id=link.code_repository_id,
         code_revision=link.code_revision,
         code_symbol_id=link.code_ref,
-        relation_type=link.relation_type,
+        relation_type=normalize_relation_type(link.relation_type),
         confidence=link.confidence,
         relevance=link.relevance,
         static_confidence=link.static_confidence,
@@ -43,7 +60,7 @@ def trace_to_read(link: TraceLink) -> TraceLinkRead:
         evidence=link.evidence_json,
         rationale=link.rationale,
         uncertainty=link.uncertainty_json,
-        model=link.model_info_json,
+        model=_safe_model_info(link.model_info_json),
         status=link.status,
         stale_reason=link.stale_reason,
         created_at=link.created_at,

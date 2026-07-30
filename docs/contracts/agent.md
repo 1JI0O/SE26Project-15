@@ -100,7 +100,7 @@ SSE 事件包括 `run.queued`、`run.started`、`reasoning.summary`、`message.d
 - `save_code_file`
 - `rerun_analysis`
 - `update_trace_status`
-- `create_trace_link`
+- `create_trace_link`：`paper_ref` 为 MinerU block id（如 `p1-b6`），`code_ref` 为 `path:line_start-line_end` 或稳定符号 id；`relation_type` 必须是契约枚举（implements/computes/defines/constrains/updates/configures/invokes/tests/mentions），模型常写的 `references` 等近义会在写入前归一成 `mentions`；确认执行后 `model_info_json` 必须含 `provider`/`name`/`prompt_version`（`chat-create-trace-v1`），`source`/`confirmation_id`/`run_id` 写入 `provenance_json`，否则 `GET /trace-links` 会因 schema 校验失败而 500。
 
 代码保存还有一层硬约束：同一 run 中必须先针对同一路径、当前基础 SHA-256 和目标内容成功执行 `propose_code_patch` 与 `analyze_change_risk`，否则 loop 只会收到 `write_preconditions_missing`，不会创建确认请求。静态分析缓存未就绪或期间文件发生变化时，风险证据失效并需重新分析。
 
