@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -429,6 +430,89 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
     # create_all below recreates them correctly (mirrors Alembic migration 0012).
     _drop_drifted_target_tables(engine)
     metadata.create_all(engine)
+    _repair_chat_agent_trace_rows(engine)
+
+
+def _parse_json_column(value: Any) -> Any:
+    if value is None or isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode()
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _repair_chat_agent_trace_rows(engine: Engine) -> None:
+    """Fix chat-tool rows that make GET /trace-links 500 (idempotent).
+
+    1. Misfiled ``model_info_json`` (``source``/``confirmation_id`` instead of provider/name).
+    2. Free-form ``relation_type`` values the LLM invented (e.g. ``references``) that are not
+       in ``TraceRelationType`` — coerce via ``normalize_relation_type``.
+    """
+
+    from app.schemas.traces import TraceRelationType, normalize_relation_type
+
+    tables = set(inspect(engine).get_table_names())
+    if "trace_link" not in tables:
+        return
+    columns = {column["name"] for column in inspect(engine).get_columns("trace_link")}
+    allowed = {item.value for item in TraceRelationType}
+
+    with engine.begin() as connection:
+        if "model_info_json" in columns and "provenance_json" in columns:
+            rows = connection.execute(
+                text("SELECT id, model_info_json, provenance_json FROM trace_link")
+            ).mappings()
+            for row in rows:
+                model = _parse_json_column(row["model_info_json"])
+                if not isinstance(model, dict):
+                    continue
+                if model.get("provider") and model.get("name"):
+                    continue
+                provenance = _parse_json_column(row["provenance_json"])
+                if not isinstance(provenance, dict):
+                    provenance = {}
+                for key in ("source", "confirmation_id", "run_id"):
+                    if key in model and key not in provenance:
+                        provenance[key] = model[key]
+                if "source" not in provenance and model.get("source"):
+                    provenance["source"] = model["source"]
+                fixed_model = {
+                    "provider": str(model.get("provider") or "agent_tool"),
+                    "name": str(model.get("name") or "unknown"),
+                    "prompt_version": str(
+                        model.get("prompt_version") or "chat-create-trace-v1"
+                    ),
+                }
+                connection.execute(
+                    text(
+                        "UPDATE trace_link SET model_info_json = :model_info, "
+                        "provenance_json = :provenance WHERE id = :id"
+                    ),
+                    {
+                        "id": row["id"],
+                        "model_info": json.dumps(fixed_model, ensure_ascii=False),
+                        "provenance": json.dumps(provenance, ensure_ascii=False),
+                    },
+                )
+
+        if "relation_type" in columns:
+            rows = connection.execute(
+                text("SELECT id, relation_type FROM trace_link")
+            ).mappings()
+            for row in rows:
+                current = str(row["relation_type"] or "")
+                if current in allowed:
+                    continue
+                fixed = normalize_relation_type(current).value
+                connection.execute(
+                    text("UPDATE trace_link SET relation_type = :relation WHERE id = :id"),
+                    {"id": row["id"], "relation": fixed},
+                )
 
 
 def upgrade_database(engine: Engine, metadata: Any) -> None:
@@ -440,3 +524,6 @@ def upgrade_database(engine: Engine, metadata: Any) -> None:
         _run_sqlite_compatibility_upgrade(engine, metadata)
         return
     _run_alembic(engine)
+    # Data repair (not a schema revision): keep after Alembic so Desktop DBs that already
+    # stamped head still get the chat-tool cleanup on next boot.
+    _repair_chat_agent_trace_rows(engine)

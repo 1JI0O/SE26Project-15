@@ -23,6 +23,8 @@ GET  /api/v1/projects/{project_id}/trace-links
 
 分析失败时不生成静态或规则降级候选。旧 revision 结果保留为 stale 供审计。Agent 新结果使用 `source: "agent"`、`static_confidence: 0`。
 
+对话 Agent 的 `create_trace_link`（人工确认后落库）与分析发布路径共用可读的 `model` 形状：`provider` / `name` / `prompt_version`；确认与 run 溯源放在 `provenance`（`source=agent_tool`、`confirmation_id`、可选 `run_id`）。列表读取对非法 `model_info` 降级为 `null`，避免单条脏数据拖垮整个矩阵。
+
 trace 分析任务内部可将区域取证并行派发给子代理（见 [agent 契约](agent.md) 的 `dispatch_trace_subagents`）；这只影响任务内部执行方式与 SSE 事件流的来源标注，`TraceLink` 数据形状与本契约的对外接口不变。
 
 ### 片段级锚点与评分（V1）
