@@ -93,3 +93,19 @@ Markdown 中的图片通过 `GET /api/v1/projects/{project_id}/paper/assets/{ass
 MinerU 原始 JSON/ZIP 和统一结构分别保存。MinerU 不可用或超时时任务进入 `failed`，
 不会导致 TraceLab 进程退出。第一迭代的 `POST /paper` 暂时保留兼容，新的前端应使用
 `paper-jobs` 接口。
+
+`PaperDocument.content_hash` 保存的就是这个缓存键，`workspace/paper-document` 依赖它定位
+MinerU markdown 与图片归档；为空时只能返回合成 markdown（`source="normalized-fallback"`）。
+
+## 云端同步导入的论文
+
+解析缓存是**设备本地**的：缓存键含 PDF 内容哈希与本机解析参数，缓存文件本身不进同步协议。
+因此从云端下载的论文必须在本机重新解析，不能沿用来源设备的解析结果。
+
+导入流程（`services/cloud_import.py`）：写入 PDF 后先用兼容解析器生成占位文本，标记
+`parse_status="running"`、`parser="pending-import"`、`content_hash=""`，随后按本机
+`TRACELAB_MINERU_*` 配置提交解析任务；完成后写入真实 `content_hash`、章节/段落/页块结构，
+并刷新 RAG paper 索引。相同 PDF 若本机已解析过，缓存命中会立即完成。
+
+本机未配置解析器或解析失败时保留占位文本，但 `parse_status="failed"` 且 `parser_version`
+追加失败原因——占位结果不会被当作解析成功，避免"同步下来的论文永远是回退解析"这类静默降级。

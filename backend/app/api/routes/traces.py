@@ -129,7 +129,7 @@ def create_trace_link(
         project,
         "trace_link",
         link.public_id,
-        trace_payload(project, link),
+        trace_payload(project, link, session=session),
         base_version=0,
     )
     session.commit()
@@ -222,7 +222,7 @@ def update_trace_status(
         project,
         "trace_link",
         link.public_id,
-        trace_payload(project, link),
+        trace_payload(project, link, session=session),
         base_version=link.version - 1,
     )
     session.commit()
@@ -275,7 +275,7 @@ def batch_update_trace_status(
             project,
             "trace_link",
             link.public_id,
-            trace_payload(project, link),
+            trace_payload(project, link, session=session),
             base_version=link.version - 1,
         )
     session.commit()
@@ -351,7 +351,7 @@ def clear_trace_links(
             project,
             "trace_link",
             link.public_id,
-            trace_payload(project, link),
+            trace_payload(project, link, session=session),
             operation="delete",
             base_version=link.version,
         )

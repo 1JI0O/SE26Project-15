@@ -18,8 +18,10 @@ from app.models.entities import (
     AgentRun,
     AgentRunEvent,
     CodeRepository,
+    CodeTarget,
     LocalArtifactVersion,
     PaperDocument,
+    PaperTarget,
     Project,
     TraceLink,
     utc_now,
@@ -42,11 +44,17 @@ from app.schemas.local_sync import (
     LocalSyncResults,
     RemoteSyncEvents,
 )
+from app.services.cloud_import import (
+    schedule_paper_reparse,
+    schedule_repository_analysis,
+)
 from app.services.code_analysis.analyzer import scan_code_archive
 from app.services.code_analyzer import save_repository_file
 from app.services.local_sync import (
     agent_event_payload,
+    code_target_payload,
     paper_payload,
+    paper_target_payload,
     project_payload,
     record_local_operation,
     repository_payload,
@@ -56,6 +64,10 @@ from app.services.local_sync import (
 from app.services.paper_parser import parse_pdf
 
 router = APIRouter(tags=["local-sync"])
+
+# Entities the analysis pipeline derives deterministically rather than a human authoring.
+# A push conflict on these is resolved by taking the server's copy, not by asking the user.
+MACHINE_DERIVED_TYPES = {"paper_target", "code_target"}
 
 
 @router.post("/local-sync/projects/import")
@@ -116,6 +128,8 @@ async def import_cloud_file(
     ).first()
     if existing is not None and version <= existing.version:
         return {"public_id": public_id, "status": "existing"}
+    reparse_paper = False
+    analyze_revision: int | None = None
     safe_filename = Path(filename).name
     destination = (
         Path(settings.upload_root)
@@ -160,7 +174,15 @@ async def import_cloud_file(
             row.is_current = False
             session.add(row)
     if entity_type == "paper_document":
-        parsed = parse_pdf(destination)
+        # ``parse_pdf`` is only a placeholder so the reader has text immediately. It reuses
+        # this device's parse cache when the same PDF was already parsed here, otherwise it
+        # falls back to pypdf. Either way the configured parser (MinerU) then runs in the
+        # background and overwrites this with the real structure + content_hash.
+        parsed = _placeholder_parse(destination)
+        # Named so it can never be mistaken for a finished parse in the UI or in support
+        # questions like "why does my synced paper say pypdf?".
+        placeholder_parser = str(parsed.get("parser", "pending-import"))
+        placeholder_version = str(parsed.get("parser_version", "placeholder"))
         entity = existing or PaperDocument(
             public_id=public_id,
             project_id=project_id,
@@ -168,8 +190,8 @@ async def import_cloud_file(
             storage_path=str(destination),
             title=str(parsed.get("title", "")),
             abstract=str(parsed.get("abstract", "")),
-            parser="cloud-import",
-            parser_version="pypdf-compat-v1",
+            parser=placeholder_parser,
+            parser_version=placeholder_version,
             content_hash="",
             sections_json=parsed.get("sections", []),
             paragraphs_json=parsed.get("paragraphs", []),
@@ -181,9 +203,19 @@ async def import_cloud_file(
         entity.storage_path = str(destination)
         entity.title = str(parsed.get("title", ""))
         entity.abstract = str(parsed.get("abstract", ""))
+        entity.parser = placeholder_parser
+        entity.parser_version = placeholder_version
+        # The real cache key is written by the background parse. Leaving it empty until
+        # then is what keeps markdown_for_cache from serving a stale archive.
+        entity.content_hash = ""
+        # "running" keeps the reader from treating the placeholder as the final answer and
+        # keeps the RAG paper index from pinning a generation we are about to replace
+        # (_source_key skips scopes whose parse_status is not "succeeded").
+        entity.parse_status = "running"
         entity.sections_json = parsed.get("sections", [])
         entity.paragraphs_json = parsed.get("paragraphs", [])
         entity.pages_json = parsed.get("pages", [])
+        reparse_paper = True
     else:
         analysis = scan_code_archive(destination)
         entity = existing or CodeRepository(
@@ -205,7 +237,9 @@ async def import_cloud_file(
         entity.storage_path = str(destination)
         entity.file_tree_json = analysis["file_tree"]
         entity.tensor_graph_json = analysis["tensor_graph"]
+        entity.analysis_status = "queued"
         entity.updated_at = utc_now()
+        analyze_revision = entity.revision
     session.add(entity)
     session.add(
         LocalArtifactVersion(
@@ -221,6 +255,11 @@ async def import_cloud_file(
         )
     )
     session.commit()
+    # Dispatched after commit so the background worker reads a persisted row.
+    if reparse_paper:
+        schedule_paper_reparse(project_id, public_id)
+    elif analyze_revision is not None:
+        schedule_repository_analysis(project_id, analyze_revision)
     return {"public_id": public_id, "status": "imported"}
 
 
@@ -344,6 +383,225 @@ def select_local_artifact_version(
     return {"public_id": public_id, "version_number": selected.version_number}
 
 
+def _placeholder_parse(destination: Path) -> dict:
+    """Best-effort immediate text for a downloaded PDF.
+
+    This only exists so the reader is not blank while the configured parser runs in the
+    background. pypdf raises on PDFs it cannot open (a malformed xref, an encrypted file),
+    and letting that propagate would fail the whole import — losing the downloaded bytes and
+    the sync event — over a preview we are about to discard anyway.
+    """
+
+    try:
+        return parse_pdf(destination)
+    except Exception:
+        return {}
+
+
+def _target_fingerprint(session: Session, model, data: dict, public_id: str) -> str:
+    """Same UNIQUE-constraint guard as _importable_fingerprint, for anchor tables."""
+
+    incoming = str(data.get("fingerprint", "") or "")
+    if not incoming:
+        return f"cloud-{public_id}"
+    clash = session.exec(select(model).where(model.fingerprint == incoming)).first()
+    if clash is None or clash.public_id == public_id:
+        return incoming
+    return f"cloud-{public_id}"
+
+
+def _import_paper_target(
+    session: Session, project_id: int, payload: LocalCloudEntityImport
+) -> None:
+    data = payload.payload
+    existing = session.exec(
+        select(PaperTarget).where(PaperTarget.public_id == payload.public_id)
+    ).first()
+    if existing is not None and payload.version <= existing.version:
+        return
+    document_id = _resolve_local_id(
+        session, PaperDocument, data.get("paper_document_public_id"), "id"
+    )
+    if document_id is None:
+        # The anchor is meaningless without the paper it points into. The frontend imports
+        # paper_document first, so this only happens when that download failed; skipping
+        # leaves the event to be retried rather than writing a dangling row.
+        return
+    target = existing or PaperTarget(
+        project_id=project_id,
+        public_id=payload.public_id,
+        paper_document_id=document_id,
+        # Opaque origin provenance: the artifact chain is not synced and SQLite does not
+        # enforce foreign keys, so this is carried for traceability only.
+        artifact_id=str(data.get("artifact_id", "") or f"cloud-{payload.public_id}")[:72],
+        target_type=str(data.get("target_type", "method_text"))[:32],
+        block_id=str(data.get("block_id", ""))[:255],
+        quote=str(data.get("quote", "")),
+        quote_hash=str(data.get("quote_hash", ""))[:64],
+        fingerprint=_target_fingerprint(session, PaperTarget, data, payload.public_id),
+    )
+    target.version = payload.version
+    target.paper_document_id = document_id
+    target.target_type = str(data.get("target_type", target.target_type))[:32]
+    target.block_id = str(data.get("block_id", target.block_id))[:255]
+    target.section_path_json = list(data.get("section_path", []) or [])
+    target.quote = str(data.get("quote", target.quote))
+    target.occurrence = int(data.get("occurrence", 1) or 1)
+    target.char_start = data.get("char_start")
+    target.char_end = data.get("char_end")
+    target.quote_hash = str(data.get("quote_hash", target.quote_hash))[:64]
+    bbox = data.get("bbox")
+    target.bbox_json = bbox if isinstance(bbox, list) else None
+    asset_path = data.get("asset_path")
+    target.asset_path = None if asset_path is None else str(asset_path)[:1000]
+    target.salience = float(data.get("salience", 0) or 0)
+    target.salience_reason = str(data.get("salience_reason", ""))
+    target.anchor_status = str(data.get("anchor_status", "validated"))[:32]
+    session.add(target)
+
+
+def _import_code_target(session: Session, project_id: int, payload: LocalCloudEntityImport) -> None:
+    data = payload.payload
+    existing = session.exec(
+        select(CodeTarget).where(CodeTarget.public_id == payload.public_id)
+    ).first()
+    if existing is not None and payload.version <= existing.version:
+        return
+    repository_id = _resolve_local_id(
+        session, CodeRepository, data.get("code_repository_public_id"), "id"
+    )
+    if repository_id is None:
+        return
+    line_start = max(int(data.get("line_start", 1) or 1), 1)
+    line_end = max(int(data.get("line_end", line_start) or line_start), line_start)
+    target = existing or CodeTarget(
+        project_id=project_id,
+        public_id=payload.public_id,
+        code_repository_id=repository_id,
+        artifact_id=str(data.get("artifact_id", "") or f"cloud-{payload.public_id}")[:72],
+        code_revision=int(data.get("code_revision", 1) or 1),
+        path=str(data.get("path", ""))[:1000],
+        line_start=line_start,
+        line_end=line_end,
+        quote=str(data.get("quote", "")),
+        code_quote_hash=str(data.get("code_quote_hash", ""))[:64],
+        role=str(data.get("role", "model_component"))[:64],
+        fingerprint=_target_fingerprint(session, CodeTarget, data, payload.public_id),
+    )
+    target.version = payload.version
+    target.code_repository_id = repository_id
+    target.code_revision = int(data.get("code_revision", target.code_revision) or 1)
+    target.path = str(data.get("path", target.path))[:1000]
+    symbol_id = data.get("symbol_id")
+    target.symbol_id = None if symbol_id is None else str(symbol_id)[:500]
+    target.line_start = line_start
+    target.line_end = line_end
+    target.column_start = data.get("column_start")
+    target.column_end = data.get("column_end")
+    target.quote = str(data.get("quote", target.quote))
+    target.occurrence = int(data.get("occurrence", 1) or 1)
+    target.code_quote_hash = str(data.get("code_quote_hash", target.code_quote_hash))[:64]
+    target.role = str(data.get("role", target.role))[:64]
+    target.salience = float(data.get("salience", 0) or 0)
+    target.salience_reason = str(data.get("salience_reason", ""))
+    target.anchor_status = str(data.get("anchor_status", "validated"))[:32]
+    session.add(target)
+
+
+def _importable_fingerprint(session: Session, data: dict, public_id: str) -> str:
+    """Keep the origin's fingerprint when it is free, otherwise mint a unique one.
+
+    ``trace_link.fingerprint`` is UNIQUE. Reusing the origin value preserves cross-device
+    dedup identity, but two devices can independently generate the same relation before
+    ever syncing — then the incoming fingerprint is already taken by a *different*
+    public_id and a plain insert would fail the constraint and abort the whole pull.
+    """
+
+    incoming = str(data.get("fingerprint", "") or "")
+    if not incoming:
+        return f"cloud-{public_id}"
+    clash = session.exec(select(TraceLink).where(TraceLink.fingerprint == incoming)).first()
+    if clash is None or clash.public_id == public_id:
+        return incoming
+    return f"cloud-{public_id}"
+
+
+def _resolve_local_id(session: Session, model, public_id: object, attribute: str) -> object | None:
+    """Map a synced public id back to this device's local primary key."""
+
+    if not isinstance(public_id, str) or not public_id:
+        return None
+    row = session.exec(select(model).where(model.public_id == public_id)).first()
+    return getattr(row, attribute) if row is not None else None
+
+
+def _apply_trace_fields(session: Session, link: TraceLink, data: dict) -> None:
+    """Copy the synced scoring/provenance fields onto a local TraceLink.
+
+    Only keys present in the payload are applied, so an operation pushed by an older
+    client does not reset fields it never knew about.
+    """
+
+    if "relation_type" in data:
+        link.relation_type = str(data["relation_type"])
+    if "confidence" in data:
+        link.confidence = float(data["confidence"])
+    if "evidence" in data:
+        link.evidence_json = data["evidence"] or []
+    if "rationale" in data:
+        link.rationale = str(data["rationale"])
+    if "status" in data:
+        link.status = str(data["status"])
+    if "relevance" in data:
+        link.relevance = float(data["relevance"] or 0)
+    if "source" in data:
+        link.source = str(data["source"])
+    if "static_confidence" in data:
+        link.static_confidence = float(data["static_confidence"] or 0)
+    if "llm_confidence" in data:
+        value = data["llm_confidence"]
+        link.llm_confidence = None if value is None else float(value)
+    if isinstance(data.get("uncertainty"), dict):
+        link.uncertainty_json = data["uncertainty"]
+    if "model_info" in data:
+        value = data["model_info"]
+        link.model_info_json = value if isinstance(value, dict) else None
+    if isinstance(data.get("score_basis"), dict):
+        link.score_basis_json = data["score_basis"]
+    if isinstance(data.get("provenance"), dict):
+        link.provenance_json = data["provenance"]
+    if "stale_reason" in data:
+        value = data["stale_reason"]
+        link.stale_reason = None if value is None else str(value)[:128]
+    if "supersedes_trace_id" in data:
+        value = data["supersedes_trace_id"]
+        link.supersedes_trace_id = None if value is None else str(value)[:64]
+    if "artifact_id" in data:
+        value = data["artifact_id"]
+        link.artifact_id = None if value is None else str(value)[:72]
+
+    paper_id = _resolve_local_id(
+        session, PaperDocument, data.get("paper_document_public_id"), "id"
+    )
+    if paper_id is not None:
+        link.paper_document_id = paper_id
+    repository_id = _resolve_local_id(
+        session, CodeRepository, data.get("code_repository_public_id"), "id"
+    )
+    if repository_id is not None:
+        link.code_repository_id = repository_id
+    paper_target = _resolve_local_id(
+        session, PaperTarget, data.get("paper_target_public_id"), "target_id"
+    )
+    if paper_target is not None:
+        link.paper_target_id = paper_target
+    code_target = _resolve_local_id(
+        session, CodeTarget, data.get("code_target_public_id"), "target_id"
+    )
+    if code_target is not None:
+        link.code_target_id = code_target
+
+
 @router.post("/local-sync/projects/{project_id}/imports/entity", status_code=204)
 def import_cloud_entity(
     project_id: int,
@@ -371,33 +629,35 @@ def import_cloud_entity(
                 else None
             )
             if unresolved is None and payload.version > existing_trace.version:
-                existing_trace.relation_type = str(
-                    data.get("relation_type", existing_trace.relation_type)
-                )
-                existing_trace.confidence = float(data.get("confidence", existing_trace.confidence))
-                existing_trace.evidence_json = data.get("evidence", existing_trace.evidence_json)
-                existing_trace.rationale = str(data.get("rationale", existing_trace.rationale))
-                existing_trace.status = str(data.get("status", existing_trace.status))
+                _apply_trace_fields(session, existing_trace, data)
                 existing_trace.version = payload.version
                 existing_trace.updated_at = utc_now()
                 session.add(existing_trace)
         else:
-            session.add(
-                TraceLink(
-                    public_id=payload.public_id,
-                    version=payload.version,
-                    project_id=project_id,
-                    trace_id=str(data.get("trace_id", f"trace-{uuid4().hex}")),
-                    paper_ref=str(data.get("paper_ref", "")),
-                    code_ref=str(data.get("code_ref", "")),
-                    code_revision=int(data.get("code_revision", 1)),
-                    relation_type=str(data.get("relation_type", "supports")),
-                    confidence=float(data.get("confidence", 0)),
-                    evidence_json=data.get("evidence", []),
-                    rationale=str(data.get("rationale", "")),
-                    status=str(data.get("status", "pending")),
-                )
+            link = TraceLink(
+                public_id=payload.public_id,
+                version=payload.version,
+                project_id=project_id,
+                trace_id=str(data.get("trace_id", f"trace-{uuid4().hex}")),
+                paper_ref=str(data.get("paper_ref", "")),
+                code_ref=str(data.get("code_ref", "")),
+                code_revision=int(data.get("code_revision", 1)),
+                relation_type=str(data.get("relation_type", "supports")),
+                confidence=float(data.get("confidence", 0)),
+                evidence_json=data.get("evidence", []),
+                rationale=str(data.get("rationale", "")),
+                # "proposed" is the contract's initial status (ALLOWED_TRACE_STATUSES);
+                # "pending" is only tolerated for legacy rows and is not a value the
+                # workbench filters on.
+                status=str(data.get("status", "proposed")),
+                fingerprint=_importable_fingerprint(session, data, payload.public_id),
             )
+            _apply_trace_fields(session, link, data)
+            session.add(link)
+    elif payload.entity_type == "paper_target":
+        _import_paper_target(session, project_id, payload)
+    elif payload.entity_type == "code_target":
+        _import_code_target(session, project_id, payload)
     elif payload.entity_type == "agent_conversation":
         data = payload.payload
         existing_conversation = session.exec(
@@ -683,6 +943,84 @@ def adopt_workspace_device(
     return {"changed": changed}
 
 
+@router.post("/local-sync/backfill")
+def backfill_incomplete_sync(
+    workspace_id: str,
+    session: Session = Depends(get_session),
+) -> dict:
+    """Repair projects that synced before the protocol covered the current domain.
+
+    Two things are wrong with any project enabled before this release, and neither heals on
+    its own because nothing re-touches an entity that has not changed:
+
+    * ``paper_target`` / ``code_target`` were never pushed — the cloud copy has no anchors.
+    * ``trace_link`` was pushed with 8 of its ~20 fields, so the cloud copy is missing
+      relevance, the confidence split, uncertainty, model info, score basis and provenance.
+      Any device downloading it gets ``relevance=0`` / ``source="static"``.
+
+    Re-enqueuing with the current payload builders fixes both. Anchors go in at
+    ``base_version=0`` (they are new to the cloud); trace_links go in at their current local
+    version, which is the cloud version for anything that previously pushed successfully
+    (``apply_push_results`` writes the server's version back), so the optimistic lock holds
+    instead of conflicting.
+
+    Idempotent in the sense that matters: running it twice enqueues the same upserts again,
+    and a duplicate upsert of identical content is a no-op server-side.
+    """
+
+    state = session.get(LocalSyncState, workspace_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Workspace has no local sync state")
+    projects = session.exec(
+        select(Project).where(
+            Project.cloud_workspace_id == workspace_id,
+            Project.sync_mode == "cloud_enabled",
+        )
+    ).all()
+
+    counts = {"projects": 0, "paper_target": 0, "code_target": 0, "trace_link": 0}
+    for project in projects:
+        counts["projects"] += 1
+        for paper_target in session.exec(
+            select(PaperTarget).where(PaperTarget.project_id == project.id)
+        ).all():
+            record_local_operation(
+                session,
+                project,
+                "paper_target",
+                paper_target.public_id,
+                paper_target_payload(project, paper_target, session=session),
+                base_version=0,
+            )
+            counts["paper_target"] += 1
+        for code_target in session.exec(
+            select(CodeTarget).where(CodeTarget.project_id == project.id)
+        ).all():
+            record_local_operation(
+                session,
+                project,
+                "code_target",
+                code_target.public_id,
+                code_target_payload(project, code_target, session=session),
+                base_version=0,
+            )
+            counts["code_target"] += 1
+        for link in session.exec(
+            select(TraceLink).where(TraceLink.project_id == project.id)
+        ).all():
+            record_local_operation(
+                session,
+                project,
+                "trace_link",
+                link.public_id,
+                trace_payload(project, link, session=session),
+                base_version=link.version,
+            )
+            counts["trace_link"] += 1
+    session.commit()
+    return counts
+
+
 @router.get("/local-sync/state")
 def read_sync_state(workspace_id: str, session: Session = Depends(get_session)) -> dict:
     state = session.get(LocalSyncState, workspace_id)
@@ -748,13 +1086,37 @@ def enable_project_sync(
             repository_payload(project, repository),
             base_version=0,
         )
+    # Anchors before relations: a trace_link's target references resolve through the
+    # target's public id, so the targets must already exist on the receiving device.
+    for paper_target in session.exec(
+        select(PaperTarget).where(PaperTarget.project_id == project.id)
+    ).all():
+        record_local_operation(
+            session,
+            project,
+            "paper_target",
+            paper_target.public_id,
+            paper_target_payload(project, paper_target, session=session),
+            base_version=0,
+        )
+    for code_target in session.exec(
+        select(CodeTarget).where(CodeTarget.project_id == project.id)
+    ).all():
+        record_local_operation(
+            session,
+            project,
+            "code_target",
+            code_target.public_id,
+            code_target_payload(project, code_target, session=session),
+            base_version=0,
+        )
     for link in session.exec(select(TraceLink).where(TraceLink.project_id == project.id)).all():
         record_local_operation(
             session,
             project,
             "trace_link",
             link.public_id,
-            trace_payload(project, link),
+            trace_payload(project, link, session=session),
             base_version=0,
         )
     if project.agent_history_sync:
@@ -998,6 +1360,8 @@ def apply_push_results(payload: LocalSyncResults, session: Session = Depends(get
                 "project": Project,
                 "paper_document": PaperDocument,
                 "code_repository": CodeRepository,
+                "paper_target": PaperTarget,
+                "code_target": CodeTarget,
                 "trace_link": TraceLink,
                 "agent_conversation": AgentConversation,
                 "agent_message": AgentMessage,
@@ -1013,6 +1377,12 @@ def apply_push_results(payload: LocalSyncResults, session: Session = Depends(get
                 if entity is not None:
                     entity.version = result.entity_version
                     session.add(entity)
+        elif item.entity_type in MACHINE_DERIVED_TYPES:
+            # Anchors are recomputed deterministically from the same artifact, so a version
+            # race between two devices has no human decision in it. Surfacing it in the
+            # conflict centre would bury the real ones (trace decisions, file versions)
+            # under noise. Drop our operation and let the next pull deliver the server's.
+            item.status = "superseded"
         else:
             item.status = "conflict"
             session.add(
@@ -1049,6 +1419,8 @@ def apply_remote_events(payload: RemoteSyncEvents, session: Session = Depends(ge
             model_by_type = {
                 "paper_document": PaperDocument,
                 "code_repository": CodeRepository,
+                "paper_target": PaperTarget,
+                "code_target": CodeTarget,
                 "trace_link": TraceLink,
                 "agent_message": AgentMessage,
                 "agent_run_event": AgentRunEvent,
@@ -1061,6 +1433,8 @@ def apply_remote_events(payload: RemoteSyncEvents, session: Session = Depends(ge
                 key_field = {
                     "paper_document": PaperDocument.public_id,
                     "code_repository": CodeRepository.public_id,
+                    "paper_target": PaperTarget.public_id,
+                    "code_target": CodeTarget.public_id,
                     "trace_link": TraceLink.public_id,
                     "agent_message": AgentMessage.public_id,
                     "agent_run_event": AgentRunEvent.public_id,

@@ -48,7 +48,7 @@ Browser 的 refresh token 是 Secure/HttpOnly/SameSite=Lax Cookie；Cookie 刷�
   "device_id": "uuid",
   "client_operation_id": "uuid",
   "supersedes_operation_id": null,
-  "entity_type": "project|paper_document|code_repository|code_edit|trace_link|agent_*",
+  "entity_type": "project|paper_document|code_repository|code_edit|paper_target|code_target|trace_link|agent_*",
   "entity_public_id": "public-id",
   "operation": "upsert|delete|select_version",
   "base_version": 1,
@@ -93,6 +93,36 @@ metadata、memory source 等任意运行时字段）若含上述键，会**阻�
 - AgentMessage `role` ∈ `{user, assistant, system, tool}`。
 - 必填字段见 `REQUIRED_UPSERT_FIELDS`（如 trace_link 需 `paper_ref/code_ref/status`，
   agent_message 需 `conversation_public_id/role`）。
+- PaperTarget 需 `quote/quote_hash/fingerprint`，CodeTarget 需 `path/quote/code_quote_hash/fingerprint`：
+  锚点的本地主键（`ptarget-<hex>`/`ctarget-<hex>`）不进入协议，接收端靠这些字段重新锚定。
+
+### 本地主键不上行（public id 翻译）
+
+`trace_link` 的 `paper_target_id`/`code_target_id`/`paper_document_id`/`code_repository_id` 都是
+设备本地主键，在另一台机器上无意义。payload 只携带对应的 `*_public_id`，由
+`local_sync._target_public_id` / `_row_public_id` 在出站时翻译，导入侧
+`_resolve_local_id` 反向映射。因此 **锚点必须先于关系导入**（前端 `IMPORT_PRIORITY`：
+paper_document/code_repository → paper_target/code_target → trace_link），未解析的引用会被丢弃
+而不是重试。
+
+### 旧项目修复（backfill）
+
+`POST /local-sync/backfill?workspace_id=<uuid>`
+
+协议扩展后，**已启用同步的旧项目不会自愈**：没有任何逻辑会重新触碰未变更的实体，所以旧项目的
+云端副本会永久缺少锚点，且 `trace_link` 只有早期的 8 个字段。该接口按当前 payload builder 重新
+入队：锚点以 `base_version=0` 入队（云端尚无该实体），`trace_link` 以本地当前 version 入队
+（成功推送过的项目其本地 version 即云端 version，乐观锁成立）。返回各类型入队计数；workspace
+无本地同步状态时 404。
+
+前端在 `synchronizeWorkspace` 中按 workspace 自动执行一次（`tracelab_sync_backfill_targets_v1`
+标记，失败不写标记以便下次重试）。后续再扩展协议时应提升该标记版本号，而不是新增第二个标记。
+
+### 机器派生实体的冲突语义
+
+`paper_target`/`code_target` 由分析流水线从同一 artifact 确定性重算（`MACHINE_DERIVED_TYPES`）。
+push 冲突不进冲突中心，本地 outbox 置为 `superseded`，改由下一次 pull 取服务端副本——否则重算
+产生的噪声会淹没真正需要人工决定的冲突（追溯决定、文件版本）。
 
 ## 同步数据分类
 
@@ -102,9 +132,25 @@ metadata、memory source 等任意运行时字段）若含上述键，会**阻�
 | 代码编辑版本 | 是 | 内容 Blob；事件不含完整源码 |
 | Agent 会话消息、Run Event、Memory | 默认是，可按项目关闭 | 小消息字段；大结果使用 Blob |
 | PDF、ZIP、派生分析 JSON | 不内嵌 | SHA-256 Blob 引用 |
+| 论文解析结构、MinerU markdown/图片 | 否 | 设备本地缓存，导入后由本机解析器重建 |
 | 分析缓存、UI 布局、临时任务 | 否 | 仅本地或可重建 |
 | MinerU、LLM、集成 API key | 永不 | 本地凭据或部署环境 |
 | SQLite 文件、服务器绝对路径 | 永不 | 不属于协议 |
+
+### 导入后的本地重建（派生数据不同步）
+
+解析结构与分析结果不进协议，接收端必须用**自己的**配置重新派生，否则同一份 PDF 在两台机器上
+呈现不同（这是"同学同步下来是 pypdf 而不是 MinerU"的根因）：
+
+- `paper_document` 导入后 `parse_status="running"`、`parser="pending-import"`、`content_hash=""`，
+  由 `cloud_import.schedule_paper_reparse` 用本机配置的解析器（MinerU local/official）重跑，成功后
+  写入真实 `content_hash` 并刷新 RAG paper 索引。`content_hash` 是解析缓存键，缺失会让
+  `markdown_for_cache` 未命中并退回合成 markdown。
+- `code_repository` 导入时只做 `scan_code_archive`（文件树），随后
+  `cloud_import.schedule_repository_analysis` 跑完整分析补齐 symbols/imports 与代码检索索引；
+  已同步的 diagram blob 仍会覆盖派生图。
+- 本机未配置解析器或解析失败时保留占位文本，但 `parse_status="failed"` 并在 `parser_version`
+  追加原因，不伪装成解析成功。
 
 `local_only` 不写 outbox；`cloud_enabled` push/pull；`cloud_paused` 仅影响当前 Desktop、只 pull；
 “解除本机绑定”把当前 Desktop 恢复为 `local_only`，不删除云端项目；owner 的独立“删除云端项目”
