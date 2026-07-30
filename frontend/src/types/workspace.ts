@@ -64,6 +64,10 @@ export interface ConflictCodeEvidence {
 export interface ConflictPaperEvidence {
   block_id: string
   quote: string
+  span_id?: string
+  char_start?: number
+  char_end?: number
+  quote_hash?: string
   page?: number | null
   association: 'trace' | 'inferred'
 }
