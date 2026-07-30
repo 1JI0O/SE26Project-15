@@ -23,7 +23,7 @@ from app.models.entities import (
 from app.schemas.agent import AgentAnalysisJobCreate
 from app.services.agent import analysis_jobs
 from app.services.agent.analysis_jobs import cancel_analysis_job, create_analysis_job
-from app.services.agent.analysis_tools import execute_tool
+from app.services.agent.analysis_tools import ConflictEvidenceError, execute_tool
 from app.services.agent.provider import AgentProviderStep
 from app.services.analysis_jobs import ANALYZER_VERSION, repository_edits_root
 from app.services.change_analysis import (
@@ -256,6 +256,92 @@ def test_get_conflict_context_tool_uses_single_change_snapshot(
     assert calls == 1
     assert context["repository_revision"] == 1
     assert context["files"][0]["path"] == "model.py"
+    assert context["summary"]["paper_candidate_count"] == 1
+    assert context["inferred_paper_candidates"][0]["block_id"] == "paper-method"
+
+
+def test_paper_tools_are_bounded_and_return_publishable_spans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _session() as session:
+        project, paper, code = _artifacts(session, tmp_path, monkeypatch)
+        monkeypatch.setattr(settings, "tracelab_llm_max_context_chars", 1200)
+        listed = execute_tool(
+            session,
+            project.id or 0,
+            code.id or 0,
+            paper.id,
+            2,
+            "list_paper_blocks",
+            {},
+        )
+        searched = execute_tool(
+            session,
+            project.id or 0,
+            code.id or 0,
+            paper.id,
+            2,
+            "search_paper_blocks",
+            {"query": "transform adds input"},
+        )
+        block = execute_tool(
+            session,
+            project.id or 0,
+            code.id or 0,
+            paper.id,
+            2,
+            "get_paper_block",
+            {"block_id": "paper-method"},
+        )
+
+    assert "text" not in listed["items"][0]
+    assert len(json.dumps(listed, ensure_ascii=False, separators=(",", ":"))) <= 1200
+    assert searched["items"][0]["block_id"] == "paper-method"
+    assert searched["items"][0]["evidence_span"]["span_id"]
+    assert block["evidence_spans"][0]["quote"] == "The transform adds one to the input."
+    assert block["truncated"] is False
+
+
+def test_oversized_paper_block_pages_exact_spans_within_context_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    long_text = " ".join(
+        f"Sentence {index} describes a deterministic rendering detail."
+        for index in range(160)
+    )
+    long_block = {
+        "id": "paper-long",
+        "kind": "paragraph",
+        "text": long_text,
+        "page_number": 4,
+        "section_path": ["Method"],
+    }
+    with _session() as session:
+        project, paper, code = _artifacts(session, tmp_path, monkeypatch)
+        paper.pages_json = [{"page_number": 4, "blocks": [long_block]}]
+        paper.paragraphs_json = [long_block]
+        session.add(paper)
+        session.commit()
+        monkeypatch.setattr(settings, "tracelab_llm_max_context_chars", 1000)
+        result = execute_tool(
+            session,
+            project.id or 0,
+            code.id or 0,
+            paper.id,
+            2,
+            "get_paper_block",
+            {"block_id": "paper-long", "span_limit": 10},
+        )
+
+    serialized = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    assert len(serialized) <= 1000
+    assert result["text_truncated"] is True
+    assert result["evidence_spans"]
+    assert result["next_span_cursor"] is not None
+    assert result["next_span_cursor"] > result["span_cursor"]
+    assert all(span["quote"] in long_text for span in result["evidence_spans"])
 
 
 def test_publish_conflict_report_validates_and_assigns_stable_id(
@@ -379,7 +465,131 @@ def test_publish_conflict_report_validates_and_assigns_stable_id(
     assert result["payload"]["items"][0]["id"].startswith("conflict-")
     assert result["payload"]["items"][0]["id"] != "model-generated-id"
     assert result["payload"]["items"][0]["affected_files"] == ["model.py"]
+    assert result["payload"]["items"][0]["paper_evidence"][0]["page"] == 2
+    assert result["payload"]["items"][0]["paper_evidence"][0]["span_id"].startswith(
+        "paper-span-"
+    )
+    assert result["payload"]["items"][0]["paper_evidence"][0]["char_start"] == 0
+    assert len(result["payload"]["items"][0]["paper_evidence"][0]["quote_hash"]) == 64
     assert result["payload"]["summary"]["high"] == 1
+
+
+def test_conflict_publish_accepts_span_and_normalizes_real_pdf_layout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_text = (
+        "Real images are captured from forward-facing cameras. "
+        "We hold out\\frac{1}{8}of these for the test set. "
+        "All images are1008 \\times 756pixels."
+    )
+    block = {
+        "id": "p10-b85",
+        "kind": "paragraph",
+        "text": raw_text,
+        "page_number": 10,
+        "section_path": ["Experiments"],
+    }
+    with _session() as session:
+        project, paper, code = _artifacts(session, tmp_path, monkeypatch)
+        paper.pages_json = [{"page_number": 10, "blocks": [block]}]
+        paper.paragraphs_json = [block]
+        session.add(paper)
+        session.commit()
+
+        base_item = {
+            "category": "paper_consistency",
+            "severity": "medium",
+            "confidence": 0.8,
+            "title": "数据划分说明可能受影响",
+            "description": "当前修改需要与论文中的测试集划分要求共同核对。",
+            "change_evidence": [
+                {
+                    "side": "after",
+                    "path": "model.py",
+                    "line_start": 2,
+                    "line_end": 2,
+                    "quote": "return x * 2",
+                }
+            ],
+            "paper_evidence": [
+                {
+                    "block_id": "p10-b85",
+                    "quote": (
+                        "We hold out 1/8 of these for the test set. "
+                        "All images are 1008 × 756 pixels."
+                    ),
+                    "association": "inferred",
+                    "page": 999,
+                }
+            ],
+            "recommendations": ["确认修改是否改变数据划分或图像尺寸。"],
+            "verification_steps": ["运行数据加载配置回归测试。"],
+        }
+        legacy = execute_tool(
+            session,
+            project.id or 0,
+            code.id or 0,
+            paper.id,
+            2,
+            "publish_conflict_report",
+            {"payload": {"repository_revision": 1, "items": [base_item]}},
+        )
+        evidence = legacy["payload"]["items"][0]["paper_evidence"][0]
+        span_item = {
+            **base_item,
+            "paper_evidence": [
+                {
+                    "block_id": "p10-b85",
+                    "span_id": evidence["span_id"],
+                    "association": "inferred",
+                }
+            ],
+        }
+        anchored = execute_tool(
+            session,
+            project.id or 0,
+            code.id or 0,
+            paper.id,
+            2,
+            "publish_conflict_report",
+            {"payload": {"repository_revision": 1, "items": [span_item]}},
+        )
+        invalid_item = {
+            **base_item,
+            "paper_evidence": [
+                {
+                    "block_id": "p10-b85",
+                    "quote": "We hold out 1/16 of these for the test set.",
+                    "association": "inferred",
+                }
+            ],
+        }
+        with pytest.raises(ConflictEvidenceError) as exc_info:
+            execute_tool(
+                session,
+                project.id or 0,
+                code.id or 0,
+                paper.id,
+                2,
+                "publish_conflict_report",
+                {"payload": {"repository_revision": 1, "items": [invalid_item]}},
+            )
+
+    assert evidence["page"] == 10
+    assert evidence["quote"] == (
+        "We hold out\\frac{1}{8}of these for the test set. "
+        "All images are1008 \\times 756pixels"
+    )
+    assert anchored["payload"]["items"][0]["paper_evidence"][0] == evidence
+    assert exc_info.value.code == "conflict_paper_evidence_quote_invalid"
+    assert exc_info.value.details() == {
+        "item_index": 0,
+        "evidence_index": 0,
+        "block_id": "p10-b85",
+        "reason": "paper_quote_not_found",
+        "retry_tool": "get_paper_block",
+    }
 
 
 def test_conflict_job_preconditions(
@@ -492,6 +702,27 @@ class _RepeatContextProvider(_ConflictProvider):
         return super().next_step(message, context, tool_results)
 
 
+class _EvidenceRetryProvider(_ConflictProvider):
+    def next_step(self, message, context, tool_results):  # noqa: ANN001, ANN201
+        step = super().next_step(message, context, tool_results)
+        paper_evidence = step.arguments["payload"]["items"][0]["paper_evidence"]
+        if self.calls == 1:
+            paper_evidence[0]["quote"] = "The transform subtracts one from the input."
+        else:
+            assert tool_results[-1]["evidence_error"] == {
+                "item_index": 0,
+                "evidence_index": 0,
+                "block_id": "paper-method",
+                "reason": "paper_quote_not_found",
+                "retry_tool": "get_paper_block",
+            }
+            prefetched = self.first_tool_results[0]["result"]
+            span = prefetched["inferred_paper_candidates"][0]["evidence_span"]
+            paper_evidence[0].pop("quote", None)
+            paper_evidence[0]["span_id"] = span["span_id"]
+        return step
+
+
 def test_conflict_worker_reuses_prefetched_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -538,6 +769,52 @@ def test_conflict_worker_reuses_prefetched_context(
     assert completed is not None and completed.status == "succeeded"
     assert provider.calls == 2
     assert context_calls == 1
+
+
+def test_conflict_worker_returns_targeted_structured_evidence_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'conflict-evidence-retry.db'}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        project, _paper, _code = _artifacts(session, tmp_path, monkeypatch)
+        project_id = project.id or 0
+        monkeypatch.setattr(analysis_jobs, "_submit", lambda _job_id: None)
+        job = create_analysis_job(
+            session,
+            project_id,
+            AgentAnalysisJobCreate(kind="conflict"),
+        )
+        job_id = job.job_id
+
+    provider = _EvidenceRetryProvider()
+    monkeypatch.setattr(analysis_jobs, "engine", engine)
+    monkeypatch.setattr(
+        analysis_jobs,
+        "_provider_from_settings",
+        lambda _session, for_analysis=False: (provider, None),
+    )
+    analysis_jobs._execute_job(job_id)
+
+    with Session(engine) as session:
+        completed = session.get(AgentAnalysisJob, job_id)
+        failures = session.exec(
+            select(AgentRunEvent).where(
+                AgentRunEvent.run_id == completed.agent_run_id,
+                AgentRunEvent.event_type == "analysis.tool.failed",
+            )
+        ).all()
+
+    assert completed is not None and completed.status == "succeeded"
+    assert provider.calls == 2
+    assert len(failures) == 1
+    assert failures[0].payload_json["code"] == "conflict_paper_evidence_quote_invalid"
+    assert failures[0].payload_json["evidence_error"]["item_index"] == 0
+    assert failures[0].payload_json["evidence_error"]["block_id"] == "paper-method"
 
 
 def test_conflict_worker_publishes_terminal_artifact(
@@ -595,7 +872,7 @@ def test_conflict_worker_publishes_terminal_artifact(
     assert prefetch_event.payload_json["step"] == 0
     assert prefetch_event.payload_json["coverage_complete"] is True
     assert publish_event is not None
-    assert publish_event.payload_json["budget"] == 32
+    assert publish_event.payload_json["budget"] == 100
     assert artifact.kind == "conflict"
     assert artifact.schema_version == "conflict-agent-v1"
     assert artifact.payload_json["summary"]["high"] == 1

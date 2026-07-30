@@ -30,6 +30,7 @@ from app.models.entities import (
 )
 from app.schemas.agent import AgentAnalysisJobCreate, AgentAnalysisJobRead
 from app.services.agent.analysis_tools import (
+    ConflictEvidenceError,
     DispatchSubagentsArguments,
     execute_tool,
     tool_definitions,
@@ -264,8 +265,9 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
             f"{job.code_revision}. Work in four stages inside this single run, publishing "
             f"candidates in batches as you confirm them. Aim to finish within about "
             f"{soft_target} tool steps.\n\n"
-            "STAGE 1 — SCOUT (paper focus). Read the abstract and section structure first "
-            "(list_paper_blocks, get_paper_block). Identify 3-8 core contributions / method "
+            "STAGE 1 — SCOUT (paper focus). Browse bounded paper metadata first with "
+            "list_paper_blocks, use search_paper_blocks for focused concepts, then read only "
+            "specific evidence with get_paper_block. Identify 3-8 core contributions / method "
             "components and the sections that implement them. Mark method-chapter formulas, "
             "algorithms/pseudocode, and figures as must-inspect. Deliberately EXCLUDE background, "
             "related work, and experiment/result tables from tracing.\n\n"
@@ -297,7 +299,8 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
             "Tooling rules: to read code, either call get_symbol_source with an exact id from "
             "list_code_symbols, or call read_source_lines(path, line_start, line_end) for any "
             "file window — do NOT guess symbol ids. code_symbol_id may be a file path plus a line "
-            "range. Copy every paper and code quote VERBATIM from get_paper_block / "
+            "range. Copy paper quotes from an exact evidence_span returned by "
+            "search_paper_blocks/get_paper_block, and copy code quotes VERBATIM from "
             "get_symbol_source / read_source_lines (exact characters) so it can be located; set "
             "occurrence when the quote repeats.\n"
             "Rules: never let keyword overlap be the verdict; read real code before publishing; if "
@@ -314,36 +317,44 @@ def _system_prompt(job: AgentAnalysisJob, soft_target: int = 40) -> tuple[str, s
         request = (
             f"Analyze saved modifications in repository revision {job.code_revision} against "
             "the immutable imported baseline. Produce a read-only conflict report.\n\n"
+            "Follow this order: inspect prefetched evidence; verify code impact; use trace-linked "
+            "paper spans when present; otherwise perform one focused paper search; check for "
+            "counter-evidence or missing context; publish the complete report.\n\n"
             "PREFETCHED EVIDENCE. Initial tool_results contain a prefetched "
             "get_conflict_context entry. Inspect it before calling any tool. If ok=false, use "
             "the granular change, impact, trace, and paper tools. If ok=true, its result contains "
-            "exact changes, code impact, affected traces, and trace-linked paper blocks. When "
+            "exact changes, code impact, affected traces, trace-linked paper blocks with stable "
+            "evidence_spans, and possibly inferred_paper_candidates. When "
             "coverage.complete=true, do not repeat list_changed_files, get_change_diff, "
             "get_change_impact, list_affected_traces, or get_paper_block for evidence already "
             "present. Read extra source only for a concrete ambiguity, then publish. When "
             "coverage.complete=false, use granular tools only for paths or sections named in "
             "coverage.truncated_sections, truncated_paths, or omitted references. A stale trace "
             "with previously_accepted=true was accepted before the edit and deserves extra "
-            "scrutiny. If no trace covers an important change and a paper is available, "
-            "search/read the paper and mark that paper evidence as association=inferred. If no "
+            "scrutiny. Prefer the shortest sufficient span from an existing TraceLink. If no "
+            "trace covers an important change, inspect inferred_paper_candidates first, then "
+            "call search_paper_blocks with a focused behavioral query only when needed. Read "
+            "only the highest-value blocks and mark such evidence association=inferred. Do not "
+            "page through the whole paper with list_paper_blocks. If no "
             "paper is available, perform code-only analysis and do not invent paper evidence.\n\n"
             "REPORT. Use only these categories: paper_consistency, "
             "behavior_regression, trace_invalidation, trace_coverage, configuration_risk. Every "
             "item must cite a verbatim non-empty before or after quote from get_change_diff with "
             "its real line range. For a pure insertion or deletion, include only the non-empty "
-            "side in change_evidence; never submit quote=\"\". Paper claims require verbatim "
-            "get_paper_block quotes. Separate "
+            "side in change_evidence; never submit quote=\"\". Paper claims should use "
+            "paper_evidence{block_id,span_id,association}; do not manually retype or reformat "
+            "the quote. A pure code risk does not require paper evidence. Separate "
             "severity from confidence and give concrete recommendations and verification steps. "
-            "OUTPUT LANGUAGE IS MANDATORY: set language=zh-CN and write every user-visible title, "
+            "Set language=zh-CN and write every user-visible title, "
             "description, recommendation, verification step, and unresolved item in Simplified "
-            "Chinese. Keep file paths, identifiers, symbol names, and verbatim code/paper quotes "
-            "in their original language. A report with English-only user-visible fields will be "
-            "rejected and must be rewritten. Submit payload with repository_revision, items, and "
+            "Chinese. Keep file paths, identifiers, symbol names, and evidence quotes "
+            "in their original language. Submit payload with repository_revision, items, and "
             "unresolved. Each item uses category, severity, confidence, title, description, "
             "change_evidence, affected_symbols, callers, graph_node_ids, trace_refs, "
             "paper_evidence, recommendations, and verification_steps. Code evidence uses side, "
             "path, line_start, line_end, quote; trace refs use trace_id; paper evidence uses "
-            "block_id, quote, page, association. Do NOT submit id, affected_files, summary, or "
+            "block_id, span_id, association (legacy quote is accepted). Do NOT submit page, id, "
+            "affected_files, summary, or "
             "risk counts because the server derives them. "
             "Uncertain observations go in unresolved, not as invented conflicts. Finally call "
             "publish_conflict_report exactly once, including repository_revision and all items; "
@@ -370,6 +381,8 @@ def _activity(tool_name: str, arguments: dict[str, Any]) -> str:
     match tool_name:
         case "list_paper_blocks":
             return "浏览论文结构"
+        case "search_paper_blocks":
+            return f"定向检索论文证据 “{args.get('query', '')}”"
         case "get_paper_block":
             return f"阅读论文片段 {args.get('block_id', '')}".strip()
         case "list_repository_files":
@@ -1030,17 +1043,9 @@ def _execute_job(job_id: str) -> None:
                 prefetched_conflict_context
                 and prefetched_conflict_context.get("coverage", {}).get("complete")
             )
-            budget = (
-                48
-                if job.kind == "architecture"
-                else 32
-                if job.kind == "conflict" and conflict_context_complete
-                else 64
-                if job.kind == "conflict"
-                else 100
-            )
+            budget = 48 if job.kind == "architecture" else 100
             if job.kind == "conflict":
-                soft_target = 12 if conflict_context_complete else 40
+                soft_target = 24 if conflict_context_complete else 48
             # Cache identical read results so the model does not burn steps/tokens re-reading the
             # same block or code window, and nudge it toward publishing once it has the evidence.
             seen_calls: dict[str, dict[str, Any]] = {}
@@ -1052,6 +1057,7 @@ def _execute_job(job_id: str) -> None:
                 "get_symbol_calls",
                 "read_source_lines",
                 "list_paper_blocks",
+                "search_paper_blocks",
                 "get_paper_block",
                 "get_analysis_artifact",
                 "get_conflict_context",
@@ -1413,6 +1419,43 @@ def _execute_job(job_id: str) -> None:
                             "tool_name": tool_name,
                             "code": error,
                             "details": details[:600],
+                            "step": step_number,
+                            "budget": budget,
+                        },
+                    )
+                    continue
+                except ConflictEvidenceError as exc:
+                    details = exc.details()
+                    location = (
+                        f"items.{exc.item_index}.paper_evidence.{exc.evidence_index}"
+                    )
+                    details_text = (
+                        f"{location}: block={exc.block_id}, reason={exc.reason}"
+                    )
+                    feedback = {
+                        "tool": tool_name,
+                        "ok": False,
+                        "error": exc.code,
+                        "details": details_text,
+                        "evidence_error": details,
+                        "instruction": (
+                            f"Repair only {location}. Reuse a span_id returned for block "
+                            f"{exc.block_id}. Call {exc.retry_tool} only if that block or its "
+                            "evidence_spans are not already present in cached tool results; do "
+                            "not re-read code or rebuild other report items. If no exact span "
+                            "supports the claim, remove that paper evidence or move the "
+                            "observation to unresolved, then retry the same complete report."
+                        ),
+                    }
+                    tool_results.append(feedback)
+                    _trace_step(run, {"type": "tool_result", **feedback}, trace_entries)
+                    emitter.emit(
+                        "analysis.tool.failed",
+                        {
+                            "tool_name": tool_name,
+                            "code": exc.code,
+                            "details": details_text,
+                            "evidence_error": details,
                             "step": step_number,
                             "budget": budget,
                         },

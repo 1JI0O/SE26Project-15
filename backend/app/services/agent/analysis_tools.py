@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -18,6 +26,12 @@ from app.services.change_analysis import (
     list_affected_traces,
 )
 from app.services.code_analysis.editor import FileAccessError, read_repository_file
+from app.services.paper_evidence import (
+    PaperEvidenceResolutionError,
+    build_evidence_spans,
+    resolve_paper_evidence,
+    search_paper_blocks,
+)
 from app.services.tracing.anchoring import AnchorError, locate_approximate_span, resolve_anchor
 
 
@@ -50,8 +64,14 @@ class SymbolArguments(StrictModel):
 
 
 class PaperBlocksArguments(PageArguments):
+    limit: int = Field(default=20, ge=1, le=50)
     section: str | None = Field(default=None, max_length=300)
     kind: str | None = Field(default=None, max_length=64)
+
+
+class SearchPaperBlocksArguments(StrictModel):
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=5, ge=1, le=10)
 
 
 class ReadSourceLinesArguments(StrictModel):
@@ -62,6 +82,8 @@ class ReadSourceLinesArguments(StrictModel):
 
 class PaperBlockArguments(StrictModel):
     block_id: str = Field(min_length=1, max_length=255)
+    span_cursor: int = Field(default=0, ge=0)
+    span_limit: int = Field(default=20, ge=1, le=50)
 
 
 class ArtifactArguments(StrictModel):
@@ -164,9 +186,16 @@ class ConflictCodeEvidence(TolerantConflictModel):
 
 class ConflictPaperEvidence(TolerantConflictModel):
     block_id: str = Field(min_length=1, max_length=255)
-    quote: str = Field(min_length=1, max_length=3000)
+    span_id: str | None = Field(default=None, min_length=1, max_length=72)
+    quote: str | None = Field(default=None, min_length=1, max_length=3000)
     page: int | None = Field(default=None, ge=1)
     association: Literal["trace", "inferred"] = "trace"
+
+    @model_validator(mode="after")
+    def _require_anchor(self) -> ConflictPaperEvidence:
+        if self.span_id is None and self.quote is None:
+            raise ValueError("paper evidence requires span_id or quote")
+        return self
 
     @field_validator("association", mode="before")
     @classmethod
@@ -249,6 +278,35 @@ class ConflictPayload(TolerantConflictModel):
 
 class PublishConflictArguments(TolerantConflictModel):
     payload: ConflictPayload
+
+
+class ConflictEvidenceError(ValueError):
+    def __init__(
+        self,
+        code: str,
+        *,
+        item_index: int,
+        evidence_index: int,
+        block_id: str,
+        reason: str,
+        retry_tool: str = "get_paper_block",
+    ) -> None:
+        super().__init__(code)
+        self.code = code
+        self.item_index = item_index
+        self.evidence_index = evidence_index
+        self.block_id = block_id
+        self.reason = reason
+        self.retry_tool = retry_tool
+
+    def details(self) -> dict[str, Any]:
+        return {
+            "item_index": self.item_index,
+            "evidence_index": self.evidence_index,
+            "block_id": self.block_id,
+            "reason": self.reason,
+            "retry_tool": self.retry_tool,
+        }
 
 
 class TolerantModel(BaseModel):
@@ -386,6 +444,7 @@ TOOL_MODELS: dict[str, type[StrictModel]] = {
     "get_symbol_calls": SymbolArguments,
     "read_source_lines": ReadSourceLinesArguments,
     "list_paper_blocks": PaperBlocksArguments,
+    "search_paper_blocks": SearchPaperBlocksArguments,
     "get_paper_block": PaperBlockArguments,
     "get_analysis_artifact": ArtifactArguments,
     "publish_architecture_graph": PublishArchitectureArguments,
@@ -420,9 +479,18 @@ TOOL_DESCRIPTIONS = {
         "Use this to read and quote code precisely when you only know a path and line range."
     ),
     "list_paper_blocks": (
-        "Page through structured paper blocks with stable IDs, page, kind, and section path."
+        "Browse bounded paper metadata and short snippets. Do not use this to copy evidence; "
+        "search for the relevant block, then select an exact evidence span."
     ),
-    "get_paper_block": "Read one exact paper block and its location metadata.",
+    "search_paper_blocks": (
+        "Search structured paper blocks with a focused behavior or experiment query. Returns "
+        "bounded candidates and exact evidence spans that can be passed to publish tools by "
+        "span_id; prefer this over paging through the whole paper."
+    ),
+    "get_paper_block": (
+        "Read one exact paper block and stable evidence spans. Prefer the shortest sufficient "
+        "span_id over copying or reformatting a long quote."
+    ),
     "get_analysis_artifact": (
         "Read the latest Agent-generated architecture or trace artifact for the current revision."
     ),
@@ -480,7 +548,9 @@ TOOL_DESCRIPTIONS = {
     ),
     "publish_conflict_report": (
         "Publish the final conflict-agent-v1 report exactly once. Every item must cite exact "
-        "before/after code copied from get_change_diff. Paper claims need exact block quotes; "
+        "before/after code copied from get_change_diff. Paper claims should cite block_id plus "
+        "an exact span_id returned by search_paper_blocks/get_paper_block; legacy verbatim quotes "
+        "remain accepted. "
         "For a pure insertion or deletion, cite only the non-empty side of the hunk; never send "
         "a change_evidence entry whose quote is empty. "
         "use association=inferred when no existing trace supports the paper association. Set "
@@ -511,6 +581,7 @@ def tool_definitions(kind: str, *, role: str = "parent") -> list[dict[str, Any]]
             "get_symbol_calls",
             "read_source_lines",
             "list_paper_blocks",
+            "search_paper_blocks",
             "get_paper_block",
             "get_analysis_artifact",
             "publish_trace_candidates",
@@ -530,6 +601,7 @@ def tool_definitions(kind: str, *, role: str = "parent") -> list[dict[str, Any]]
             "get_symbol_calls",
             "read_source_lines",
             "list_paper_blocks",
+            "search_paper_blocks",
             "get_paper_block",
             "get_analysis_artifact",
             "publish_conflict_report",
@@ -623,6 +695,86 @@ def _paper_blocks(paper: PaperDocument) -> list[dict[str, Any]]:
     return [dict(item) for item in paper.paragraphs_json]
 
 
+def _paper_block_metadata(block: dict[str, Any]) -> dict[str, Any]:
+    text = str(block.get("text") or "")
+    return {
+        "id": str(block.get("id") or ""),
+        "kind": block.get("kind"),
+        "page_number": block.get("page_number") or block.get("page"),
+        "section_path": [
+            str(section)[:80] for section in list(block.get("section_path") or [])[:4]
+        ],
+        "snippet": text[:200],
+    }
+
+
+def _serialized_chars(payload: dict[str, Any]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
+
+
+def _bounded_items_result(
+    items: list[dict[str, Any]],
+    *,
+    cursor: int,
+    total: int,
+) -> dict[str, Any]:
+    page = list(items)
+    result: dict[str, Any] = {
+        "items": page,
+        "next_cursor": cursor + len(page) if cursor + len(page) < total else None,
+        "total": total,
+        "truncated": False,
+    }
+    max_chars = max(1000, settings.tracelab_llm_max_context_chars)
+    while page and _serialized_chars(result) > max_chars:
+        page.pop()
+        result["next_cursor"] = cursor + len(page)
+        result["truncated"] = True
+    return result
+
+
+def _paper_block_result(block: dict[str, Any], arguments: PaperBlockArguments) -> dict[str, Any]:
+    spans = build_evidence_spans(block)
+    page = spans[arguments.span_cursor : arguments.span_cursor + arguments.span_limit]
+    result: dict[str, Any] = {
+        "found": True,
+        "ref": arguments.block_id,
+        "block": {
+            **_paper_block_metadata(block),
+            "text": str(block.get("text") or ""),
+        },
+        "evidence_spans": list(page),
+        "span_cursor": arguments.span_cursor,
+        "next_span_cursor": (
+            arguments.span_cursor + len(page)
+            if arguments.span_cursor + len(page) < len(spans)
+            else None
+        ),
+        "span_total": len(spans),
+        "truncated": arguments.span_cursor + len(page) < len(spans),
+        "text_truncated": False,
+    }
+    max_chars = max(1000, settings.tracelab_llm_max_context_chars)
+    if _serialized_chars(result) <= max_chars:
+        return result
+
+    # Extremely large parsed blocks cannot be returned verbatim within one model context.
+    # The spans are exact source substrings and provide deterministic pagination instead.
+    result["block"]["text"] = None
+    result["block"].pop("snippet", None)
+    result["text_truncated"] = True
+    result["truncated"] = True
+    while result["evidence_spans"] and _serialized_chars(result) > max_chars:
+        result["evidence_spans"].pop()
+    returned = len(result["evidence_spans"])
+    result["next_span_cursor"] = (
+        arguments.span_cursor + returned
+        if arguments.span_cursor + returned < len(spans)
+        else None
+    )
+    return result
+
+
 def _normalize(value: str) -> str:
     return " ".join(value.split())
 
@@ -667,16 +819,30 @@ def _offset_to_linecol(content: str, offset: int) -> tuple[int, int]:
     return line, col
 
 
-def _resolve_paper_anchor(block_text: str, evidence: TracePaperEvidence) -> dict[str, Any]:
+def _resolve_paper_anchor(
+    block: dict[str, Any], evidence: TracePaperEvidence
+) -> dict[str, Any]:
     try:
-        anchor = resolve_anchor(block_text, evidence.quote, evidence.occurrence)
-    except AnchorError as exc:
+        resolved = resolve_paper_evidence(
+            block,
+            quote=evidence.quote,
+            occurrence=evidence.occurrence,
+        )
+    except PaperEvidenceResolutionError as exc:
         raise ValueError(
             f"paper_evidence_quote_invalid: quote not found in block {evidence.block_id} "
             f"at occurrence {evidence.occurrence}; copy the quote verbatim from get_paper_block"
         ) from exc
-    anchor["target_type"] = evidence.target_type
-    return anchor
+    evidence.quote = str(resolved["quote"])
+    return {
+        "occurrence": evidence.occurrence,
+        "char_start": resolved["char_start"],
+        "char_end": resolved["char_end"],
+        "quote_hash": resolved["quote_hash"],
+        "exact": True,
+        "level": "exact",
+        "target_type": evidence.target_type,
+    }
 
 
 def _resolve_code_anchor(repository: CodeRepository, evidence: TraceCodeEvidence) -> dict[str, Any]:
@@ -763,7 +929,7 @@ def _validate_one_trace(
     block = blocks.get(candidate.paper_block_id)
     if block is None or candidate.paper_evidence.block_id != candidate.paper_block_id:
         raise ValueError("paper_evidence_ref_invalid")
-    paper_anchor = _resolve_paper_anchor(str(block.get("text", "")), candidate.paper_evidence)
+    paper_anchor = _resolve_paper_anchor(block, candidate.paper_evidence)
     # code_symbol_id may be an indexed symbol id, a repo path, or a path with a line-range
     # suffix like ``file.py:186-275`` — accept all three as long as the real file exists and
     # the code evidence quote resolves against it.
@@ -885,26 +1051,59 @@ def _execute_publish_conflict(
         for item in list_affected_traces(session, repository)
     }
     output_items: list[dict[str, Any]] = []
-    for item in payload.items:
+    for item_index, item in enumerate(payload.items):
         for evidence in item.change_evidence:
             _validate_conflict_code_evidence(repository, evidence)
-        for evidence in item.paper_evidence:
+        canonical_paper_evidence: list[dict[str, Any]] = []
+        for evidence_index, evidence in enumerate(item.paper_evidence):
             block = blocks.get(evidence.block_id)
             if block is None:
-                raise ValueError("conflict_paper_evidence_ref_invalid")
-            if _normalize(evidence.quote) not in _normalize(str(block.get("text", ""))):
-                raise ValueError("conflict_paper_evidence_quote_invalid")
+                raise ConflictEvidenceError(
+                    "conflict_paper_evidence_ref_invalid",
+                    item_index=item_index,
+                    evidence_index=evidence_index,
+                    block_id=evidence.block_id,
+                    reason="paper_block_not_found",
+                    retry_tool="search_paper_blocks",
+                )
+            try:
+                resolved = resolve_paper_evidence(
+                    block,
+                    span_id=evidence.span_id,
+                    quote=evidence.quote,
+                )
+            except PaperEvidenceResolutionError as exc:
+                raise ConflictEvidenceError(
+                    "conflict_paper_evidence_quote_invalid",
+                    item_index=item_index,
+                    evidence_index=evidence_index,
+                    block_id=evidence.block_id,
+                    reason=exc.reason,
+                ) from exc
             if evidence.association == "trace" and not any(
                 affected_trace_map.get(reference.trace_id, {}).get("paper_block_id")
                 == evidence.block_id
                 for reference in item.trace_refs
             ):
                 raise ValueError("conflict_paper_trace_association_invalid")
+            canonical_paper_evidence.append(
+                {
+                    "block_id": evidence.block_id,
+                    "span_id": resolved["span_id"],
+                    "quote": resolved["quote"],
+                    "page": resolved["page"],
+                    "char_start": resolved["char_start"],
+                    "char_end": resolved["char_end"],
+                    "quote_hash": resolved["quote_hash"],
+                    "association": evidence.association,
+                }
+            )
         for reference in item.trace_refs:
             if reference.trace_id not in affected_trace_map:
                 raise ValueError("conflict_trace_reference_invalid")
 
         item_dump = item.model_dump()
+        item_dump["paper_evidence"] = canonical_paper_evidence
         evidence_identity = [
             [
                 evidence.path,
@@ -1272,21 +1471,38 @@ def execute_tool(
                 in " / ".join(item.get("section_path", [])).casefold()
             )
         ]
-        page = items[validated.cursor : validated.cursor + validated.limit]
-        return {
-            "items": page,
-            "next_cursor": validated.cursor + len(page)
-            if validated.cursor + len(page) < len(items)
-            else None,
-            "total": len(items),
-        }
+        page = [
+            _paper_block_metadata(item)
+            for item in items[validated.cursor : validated.cursor + validated.limit]
+        ]
+        return _bounded_items_result(page, cursor=validated.cursor, total=len(items))
+    if isinstance(validated, SearchPaperBlocksArguments):
+        paper = _paper(session, project_id, paper_id)
+        results = search_paper_blocks(
+            _paper_blocks(paper),
+            validated.query,
+            limit=validated.limit,
+        )
+        return _bounded_items_result(results, cursor=0, total=len(results))
     if isinstance(validated, PaperBlockArguments):
         paper = _paper(session, project_id, paper_id)
         item = next(
             (item for item in _paper_blocks(paper) if str(item.get("id")) == validated.block_id),
             None,
         )
-        return {"found": item is not None, "ref": validated.block_id, "block": item}
+        if item is None:
+            return {
+                "found": False,
+                "ref": validated.block_id,
+                "block": None,
+                "evidence_spans": [],
+                "span_cursor": validated.span_cursor,
+                "next_span_cursor": None,
+                "span_total": 0,
+                "truncated": False,
+                "text_truncated": False,
+            }
+        return _paper_block_result(item, validated)
     if isinstance(validated, ArtifactArguments):
         artifact = session.exec(
             select(AgentAnalysisArtifact)
