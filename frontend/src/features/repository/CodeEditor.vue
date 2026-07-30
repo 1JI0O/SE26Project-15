@@ -19,7 +19,7 @@
     </div>
 
     <!-- CodeMirror editor -->
-    <div v-else ref="editorContainer" :class="['editor-body', { 'annotation-mode': annotation.annotationMode }]" />
+    <div v-else ref="editorContainer" :class="['editor-body', { 'annotation-picking': annotation.pickingCode }]" />
 
     <div v-if="file" class="editor-footer">
       <span>当前符号: {{ file.symbol }}</span>
@@ -379,8 +379,8 @@ const traceDomHandlers = EditorView.domEventHandlers({
         }
       }
     }
-    // Annotation mode owns the drag: let CodeMirror build the selection, then read it on mouseup.
-    if (annotation.annotationMode) return false
+    // The code step owns the drag: let CodeMirror build the selection, read it on mouseup.
+    if (annotation.pickingCode) return false
     // Normal mode: pin trace target
     const id = traceTargetFromEvent(event)
     if (id) emit('tracePin', id)
@@ -389,8 +389,9 @@ const traceDomHandlers = EditorView.domEventHandlers({
   // The range is only final once the drag ends, so the capture must happen here — a mousedown
   // handler always sees the pre-drag (empty) selection.
   mouseup: (_event, view) => {
-    if (!annotation.annotationMode || !props.file) return false
+    if (!annotation.pickingCode || !props.file) return false
     const selection = view.state.selection.main
+    // A bare click selects nothing; leave the step open rather than picking a zero-width range.
     if (selection.empty) return false
     const doc = view.state.doc
     const fromLine = doc.lineAt(selection.from)
@@ -398,7 +399,17 @@ const traceDomHandlers = EditorView.domEventHandlers({
     view.dispatch({
       effects: setAnnotationRange.of({ from: fromLine.from, to: toLine.from }),
     })
-    annotation.selectCodeSymbol(`${props.file.path}:${fromLine.number}-${toLine.number}`)
+    // Preview whole lines, matching what the stored relation will quote (the backend anchors
+    // the line range, not the character span).
+    const lines: string[] = []
+    for (let line = fromLine.number; line <= toLine.number && lines.length < 40; line += 1) {
+      lines.push(doc.line(line).text)
+    }
+    annotation.pickCode({
+      ref: `${props.file.path}:${fromLine.number}-${toLine.number}`,
+      preview: lines.join('\n'),
+      detail: `${props.file.path}:${fromLine.number}-${toLine.number}`,
+    })
     return false
   },
 })
@@ -699,9 +710,9 @@ function applyPendingReveal(): void {
   }, 1600)
 }
 
-// Annotation mode: highlight selected code symbol
+// Keep the picked line range marked for the rest of the guided flow.
 watch(
-  () => annotation.selectedCodeRef,
+  () => annotation.codePick?.ref ?? null,
   (selectedRef) => {
     if (!editorView) return
 
@@ -925,19 +936,19 @@ defineExpose({ getEditorContent, goToLine })
 }
 
 /* Annotation mode styles */
-.editor-body.annotation-mode :deep(.cm-content) {
+.editor-body.annotation-picking :deep(.cm-content) {
   cursor: text !important;
 }
 
-.editor-body.annotation-mode :deep(.cm-line) {
+.editor-body.annotation-picking :deep(.cm-line) {
   transition: background 0.15s ease;
 }
 
-.editor-body.annotation-mode :deep(.cm-line:hover) {
+.editor-body.annotation-picking :deep(.cm-line:hover) {
   background: rgba(64, 158, 255, 0.08) !important;
 }
 
-.editor-body.annotation-mode :deep(.cm-selectionBackground) {
+.editor-body.annotation-picking :deep(.cm-selectionBackground) {
   background: rgba(64, 158, 255, 0.3) !important;
 }
 
@@ -947,16 +958,16 @@ defineExpose({ getEditorContent, goToLine })
   box-shadow: inset 3px 0 0 #67c23a;
 }
 
-.editor-body.annotation-mode :deep([data-trace-target]) {
+.editor-body.annotation-picking :deep([data-trace-target]) {
   cursor: text !important;
 }
 
-.editor-body.annotation-mode :deep([data-trace-target]:hover) {
+.editor-body.annotation-picking :deep([data-trace-target]:hover) {
   background: rgba(64, 158, 255, 0.2) !important;
   box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.5) !important;
 }
 
-.editor-body.annotation-mode :deep([data-trace-target].annotation-selected) {
+.editor-body.annotation-picking :deep([data-trace-target].annotation-selected) {
   background: rgba(103, 194, 58, 0.25) !important;
   box-shadow: inset 0 -2px 0 #67c23a, 0 0 0 1px rgba(103, 194, 58, 0.6) !important;
 }
