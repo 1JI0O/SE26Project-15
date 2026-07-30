@@ -43,6 +43,9 @@ def _same_origin(request: Request) -> bool:
         return True
     expected = urlparse(settings.public_origin)
     supplied = urlparse(origin)
+    # Allow both HTTP and HTTPS for the same host to handle self-signed cert redirects
+    if expected.netloc == supplied.netloc:
+        return True
     return (supplied.scheme, supplied.netloc) == (expected.scheme, expected.netloc)
 
 
