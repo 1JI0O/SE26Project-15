@@ -300,6 +300,26 @@ _RELATION_TYPES = {
     "mentions",
 }
 
+# Multi-dimensional confidence formula weights (sum to 1.0).
+_CONFIDENCE_WEIGHTS = {
+    "change_directness": 0.20,
+    "causal_reachability": 0.25,
+    "requirement_support": 0.20,
+    "trace_support": 0.15,
+    "verification_support": 0.10,
+    "context_coverage": 0.10,
+}
+
+# Confidence penalty keys and their values.
+_CONFIDENCE_PENALTIES = {
+    "paper_association_inferred": -0.10,
+    "no_call_entry": -0.20,
+    "alternate_implementation": -0.20,
+    "config_or_caller_unread": -0.15,
+    "context_truncated": -0.15,
+    "runtime_condition_unverified": -0.15,
+}
+
 
 class TracePaperEvidence(TolerantModel):
     block_id: str = Field(min_length=1, max_length=255)
@@ -339,7 +359,7 @@ class TraceCandidate(TolerantModel):
     # Three independent scores (see architecture doc §8.2):
     #   salience   = how important the paper target is (target-level)
     #   relevance  = how much this code fragment implements the target (edge-level)
-    #   confidence = how sure the agent is the relation is correct (edge-level)
+    #   confidence = computed server-side from the 6-dimension breakdown below
     salience: float = Field(default=0.6, ge=0, le=1)
     relevance: float = Field(default=0.6, ge=0, le=1)
     confidence: float = Field(default=0.6, ge=0, le=1)
@@ -350,6 +370,17 @@ class TraceCandidate(TolerantModel):
     paper_evidence: TracePaperEvidence
     code_evidence: TraceCodeEvidence
     graph_node_ids: list[str] = Field(default_factory=list, max_length=20)
+    # --- Multi-dimensional confidence breakdown (each dimension in [0,1]) ---
+    # Server recomputes confidence from these; the model's raw confidence field is a fallback.
+    # Higher defaults (0.6-0.7) to avoid over-penalizing when model doesn't fill all dimensions.
+    change_directness: float = Field(default=0.7, ge=0, le=1)  # 20% weight
+    causal_reachability: float = Field(default=0.6, ge=0, le=1)  # 25% weight
+    requirement_support: float = Field(default=0.7, ge=0, le=1)  # 20% weight
+    trace_support: float = Field(default=0.5, ge=0, le=1)  # 15% weight
+    verification_support: float = Field(default=0.5, ge=0, le=1)  # 10% weight
+    context_coverage: float = Field(default=0.7, ge=0, le=1)  # 10% weight
+    # Penalty flags: each matching key reduces confidence by its penalty value
+    confidence_penalties: list[str] = Field(default_factory=list, max_length=10)
 
     @field_validator("relation_type", mode="before")
     @classmethod
@@ -364,8 +395,46 @@ class TraceCandidate(TolerantModel):
         return text if text in {"low", "medium", "high"} else "medium"
 
 
+def compute_trace_confidence(candidate: TraceCandidate) -> float:
+    """Compute confidence from the 6-dimension breakdown and penalty flags.
+
+    Formula: base_score = Σ(weight_i × dimension_i) + Σ(penalty_j)
+    Result is clamped to [0, 1] and rounded to 4 decimals.
+
+    If all dimensions are at their default values (model didn't fill them explicitly),
+    fall back to the model's raw confidence field to avoid over-complicating simple cases.
+    """
+    # Check if model explicitly filled dimension scores (any differs from default)
+    defaults = [0.7, 0.6, 0.7, 0.5, 0.5, 0.7]  # change, causal, req, trace, verif, context
+    values = [
+        candidate.change_directness,
+        candidate.causal_reachability,
+        candidate.requirement_support,
+        candidate.trace_support,
+        candidate.verification_support,
+        candidate.context_coverage,
+    ]
+    # If all dimensions are at defaults and no penalties, use raw confidence (backward compat)
+    all_defaults = all(abs(v - d) < 0.01 for v, d in zip(values, defaults, strict=True))
+    if all_defaults and not candidate.confidence_penalties:
+        return round(max(0.0, min(1.0, candidate.confidence)), 4)
+
+    base = (
+        _CONFIDENCE_WEIGHTS["change_directness"] * candidate.change_directness
+        + _CONFIDENCE_WEIGHTS["causal_reachability"] * candidate.causal_reachability
+        + _CONFIDENCE_WEIGHTS["requirement_support"] * candidate.requirement_support
+        + _CONFIDENCE_WEIGHTS["trace_support"] * candidate.trace_support
+        + _CONFIDENCE_WEIGHTS["verification_support"] * candidate.verification_support
+        + _CONFIDENCE_WEIGHTS["context_coverage"] * candidate.context_coverage
+    )
+    penalty = sum(
+        _CONFIDENCE_PENALTIES.get(flag, 0.0) for flag in candidate.confidence_penalties
+    )
+    return round(max(0.0, min(1.0, base + penalty)), 4)
+
+
 class TracePayload(TolerantModel):
-    schema_version: str = Field(default="trace-agent-v2", max_length=64)
+    schema_version: str = Field(default="trace-agent-v3", max_length=64)
     candidates: list[TraceCandidate] = Field(default_factory=list, max_length=100)
     unresolved: list[str] = Field(default_factory=list, max_length=100)
 
@@ -477,10 +546,17 @@ TOOL_DESCRIPTIONS = {
         "the user immediately. Each candidate needs: paper_evidence (block_id, exact quote, "
         "occurrence = which match inside the block when the quote repeats, target_type), "
         "code_evidence (path, line_start, line_end, exact quote, occurrence, role), a "
-        "relation_type, and three separate scores in [0,1]: salience (importance of the target), "
-        "relevance (how much this code implements it), confidence (certainty the relation is "
-        "correct). Quotes are re-verified against real content at the declared occurrence; a "
-        "mismatch is rejected. Never call it with an empty payload."
+        "relation_type, salience [0,1] (importance of the target), relevance [0,1] (how much this "
+        "code implements it), and confidence [0,1] (certainty). OPTIONALLY provide six dimension "
+        "scores for fine-grained control: change_directness (how directly paper→code, 1.0=unique "
+        "named formula), causal_reachability (traced call flow, 1.0=full chain read), "
+        "requirement_support (explicit in paper, 1.0=named equation), trace_support (precedent "
+        "exists, 1.0=accepted case), verification_support (tests exist, 1.0=test exercises this), "
+        "context_coverage (files read, 1.0=all relevant read). Add applicable penalties to "
+        "confidence_penalties: \"paper_association_inferred\", \"no_call_entry\", "
+        "\"alternate_implementation\", \"config_or_caller_unread\", \"context_truncated\", "
+        "\"runtime_condition_unverified\". Quotes are re-verified against real content at the "
+        "declared occurrence; a mismatch is rejected. Never call it with an empty payload."
     ),
     "finish_analysis": (
         "Call this exactly once when you have published every defensible trace candidate and "
@@ -1106,6 +1182,10 @@ def _execute_publish_trace(
             dropped.append(f"schema:{loc}:{first.get('msg', 'invalid')}"[:160])
     if raw_candidates and not schema_kept:
         raise ValueError("all_candidates_schema_invalid: " + "; ".join(dropped[:3]))
+
+    # Recompute confidence from the 6-dimension breakdown + penalties.
+    for candidate in schema_kept:
+        candidate.confidence = compute_trace_confidence(candidate)
 
     tp = TracePayload(candidates=schema_kept, unresolved=unresolved)
     paper = _paper(session, project_id, paper_id)

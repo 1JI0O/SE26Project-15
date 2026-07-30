@@ -346,10 +346,20 @@ def _system_prompt(
             "STAGE 4 — MERGE & SELF-CHECK. Keep only targets that matter: a core contribution, a "
             "must-inspect formula/algorithm, a defining variable/constraint, or something with a "
             "direct important implementation. Merge adjacent synonymous targets; do not stack "
-            "overlapping highlights. For every candidate give THREE separate scores: salience "
-            "(target importance), relevance (how much the code implements it), confidence "
-            "(certainty). Set paper_evidence.occurrence and code_evidence.occurrence correctly "
-            "when a quote repeats.\n\n"
+            "overlapping highlights. For every candidate give: salience (target importance), "
+            "relevance (how much the code implements it), and optionally six confidence-dimension "
+            "scores if you want finer control (otherwise set confidence directly). Set "
+            "paper_evidence.occurrence and code_evidence.occurrence correctly when a quote "
+            "repeats.\n\n"
+            "CONFIDENCE SCORING (optional fine-grained control; otherwise just set confidence):\n"
+            "Six dimensions [0,1]: change_directness (direct mapping 20%), causal_reachability "
+            "(traced call flow 25%), requirement_support (explicit in paper 20%), trace_support "
+            "(precedent exists 15%), verification_support (tests exist 10%), context_coverage "
+            "(files read 10%). Penalties (add to confidence_penalties list): "
+            "\"paper_association_inferred\" (-0.10), \"no_call_entry\" (-0.20), "
+            "\"alternate_implementation\" (-0.20), \"config_or_caller_unread\" (-0.15), "
+            "\"context_truncated\" (-0.15), \"runtime_condition_unverified\" (-0.15). "
+            "If omitted, defaults yield ~0.63 base score.\n\n"
             "Tooling rules: to read code, either call get_symbol_source with an exact id from "
             "list_code_symbols, or call read_source_lines(path, line_start, line_end) for any "
             "file window — do NOT guess symbol ids. code_symbol_id may be a file path plus a line "
@@ -690,17 +700,26 @@ def _persist_trace_links(
                 "relevance": candidate.get("relevance", 0.0),
                 "confidence": candidate["confidence"],
                 "salience_reason": candidate.get("salience_reason", ""),
+                "confidence_dimensions": {
+                    "change_directness": candidate.get("change_directness", 0.5),
+                    "causal_reachability": candidate.get("causal_reachability", 0.5),
+                    "requirement_support": candidate.get("requirement_support", 0.5),
+                    "trace_support": candidate.get("trace_support", 0.5),
+                    "verification_support": candidate.get("verification_support", 0.5),
+                    "context_coverage": candidate.get("context_coverage", 0.5),
+                },
+                "confidence_penalties": candidate.get("confidence_penalties", []),
             },
             "provenance_json": {
                 "job_id": job.job_id,
                 "run_id": artifact.agent_run_id,
                 "artifact_id": artifact.artifact_id,
-                "prompt_version": "trace-agent-v2",
+                "prompt_version": "trace-agent-v3",
                 "graph_node_ids": candidate.get("graph_node_ids", []),
             },
             "model_info_json": {
                 **artifact.model_info_json,
-                "prompt_version": "trace-agent-v2",
+                "prompt_version": "trace-agent-v3",
                 "run_id": artifact.agent_run_id,
                 "artifact_id": artifact.artifact_id,
             },
