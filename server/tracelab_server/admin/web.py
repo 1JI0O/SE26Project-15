@@ -39,10 +39,14 @@ templates = Jinja2Templates(directory=str(Path(__file__).with_name("templates"))
 
 def _same_origin(request: Request) -> bool:
     origin = request.headers.get("origin")
-    if not origin:
+    # Allow missing or null origin (same-origin requests or privacy mode)
+    if not origin or origin == "null":
         return True
     expected = urlparse(settings.public_origin)
     supplied = urlparse(origin)
+    # Allow both HTTP and HTTPS for the same host to handle self-signed cert redirects
+    if expected.netloc == supplied.netloc:
+        return True
     return (supplied.scheme, supplied.netloc) == (expected.scheme, expected.netloc)
 
 

@@ -264,7 +264,12 @@ def _current(
     if operation.entity_type == "project":
         item = session.get(CloudProject, operation.entity_public_id)
         if item is not None and item.workspace_id != operation.workspace_id:
-            item = None
+            # public_id is globally unique; never treat a foreign-tenant project
+            # as "missing" (that would attempt a conflicting create).
+            raise HTTPException(
+                status_code=409,
+                detail="Project public_id belongs to another workspace",
+            )
         return item, _project_snapshot(item) if item else None
     item = session.exec(
         select(CloudEntity).where(
