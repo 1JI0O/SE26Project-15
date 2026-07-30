@@ -19,7 +19,7 @@
     </div>
 
     <!-- CodeMirror editor -->
-    <div v-else ref="editorContainer" class="editor-body" />
+    <div v-else ref="editorContainer" :class="['editor-body', { 'annotation-mode': annotation.annotationMode }]" />
 
     <div v-if="file" class="editor-footer">
       <span>当前符号: {{ file.symbol }}</span>
@@ -55,8 +55,11 @@ import { tags } from '@lezer/highlight'
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import type { LSPClient } from '@codemirror/lsp-client'
 import { jumpToDefinition } from '@codemirror/lsp-client'
+import { useAnnotationStore } from '@/stores/annotation'
 import type { CodeFile } from '@/composables/useCode'
 import type { CodeTargetView } from '@/composables/useTraceIndex'
+
+const annotation = useAnnotationStore()
 import { checkoutFileUri } from '@/features/repository/lspTransport'
 
 const props = defineProps<{
@@ -119,6 +122,35 @@ const flashField = StateField.define<DecorationSet>({
       if (effect.is(setFlashLine)) {
         value =
           effect.value === null ? Decoration.none : Decoration.set([flashLineDeco.range(effect.value)])
+      }
+    }
+    return value
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
+
+// Persistent marker for the line range picked in annotation mode. CodeMirror dims its own
+// selection once the dialog takes focus, so the chosen rows need a decoration that survives blur.
+const annotationLineDeco = Decoration.line({ class: 'cm-annotation-range' })
+const setAnnotationRange = StateEffect.define<{ from: number; to: number } | null>()
+const annotationRangeField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes)
+    for (const effect of tr.effects) {
+      if (effect.is(setAnnotationRange)) {
+        if (effect.value === null) {
+          value = Decoration.none
+        } else {
+          const builder = new RangeSetBuilder<Decoration>()
+          const doc = tr.state.doc
+          const startLine = doc.lineAt(effect.value.from).number
+          const endLine = doc.lineAt(effect.value.to).number
+          for (let line = startLine; line <= endLine; line += 1) {
+            builder.add(doc.line(line).from, doc.line(line).from, annotationLineDeco)
+          }
+          value = builder.finish()
+        }
       }
     }
     return value
@@ -347,8 +379,26 @@ const traceDomHandlers = EditorView.domEventHandlers({
         }
       }
     }
+    // Annotation mode owns the drag: let CodeMirror build the selection, then read it on mouseup.
+    if (annotation.annotationMode) return false
+    // Normal mode: pin trace target
     const id = traceTargetFromEvent(event)
     if (id) emit('tracePin', id)
+    return false
+  },
+  // The range is only final once the drag ends, so the capture must happen here — a mousedown
+  // handler always sees the pre-drag (empty) selection.
+  mouseup: (_event, view) => {
+    if (!annotation.annotationMode || !props.file) return false
+    const selection = view.state.selection.main
+    if (selection.empty) return false
+    const doc = view.state.doc
+    const fromLine = doc.lineAt(selection.from)
+    const toLine = doc.lineAt(selection.to)
+    view.dispatch({
+      effects: setAnnotationRange.of({ from: fromLine.from, to: toLine.from }),
+    })
+    annotation.selectCodeSymbol(`${props.file.path}:${fromLine.number}-${toLine.number}`)
     return false
   },
 })
@@ -468,6 +518,7 @@ function createExtensions(langExt: Extension): Extension[] {
     }),
     traceField,
     flashField,
+    annotationRangeField,
     gotoHoverField,
     traceDomHandlers,
     langExt,
@@ -648,6 +699,72 @@ function applyPendingReveal(): void {
   }, 1600)
 }
 
+// Annotation mode: highlight selected code symbol
+watch(
+  () => annotation.selectedCodeRef,
+  (selectedRef) => {
+    if (!editorView) return
+
+    // Remove previous selection highlight from DOM elements
+    if (editorContainer.value) {
+      editorContainer.value.querySelectorAll('[data-trace-target].annotation-selected').forEach((el) => {
+        el.classList.remove('annotation-selected')
+      })
+    }
+
+    // Selection cleared (dialog submitted or cancelled): drop the range marker.
+    if (!selectedRef) {
+      editorView.dispatch({ effects: setAnnotationRange.of(null) })
+      return
+    }
+
+    // Parse code_ref for line-based selection (e.g., "file.py:10-15")
+    if (selectedRef && selectedRef.includes(':')) {
+      const parts = selectedRef.split(':')
+      if (parts.length >= 2) {
+        const lineRange = parts[parts.length - 1]
+        const match = lineRange.match(/^(\d+)(?:-(\d+))?$/)
+        if (match) {
+          const startLine = parseInt(match[1], 10)
+          const endLine = match[2] ? parseInt(match[2], 10) : startLine
+
+          // Highlight the line range in editor
+          const doc = editorView.state.doc
+          if (startLine > 0 && startLine <= doc.lines && endLine <= doc.lines) {
+            const from = doc.line(startLine).from
+            const to = doc.line(endLine).to
+            // The ref usually arrives FROM the user's own drag; re-dispatching it would fight
+            // their selection and yank the viewport. Only reveal a range they aren't already on.
+            const current = editorView.state.selection.main
+            const alreadyThere =
+              doc.lineAt(current.from).number === startLine
+              && doc.lineAt(current.to).number === endLine
+            if (alreadyThere) {
+              // Drag already painted the marker in the mouseup handler.
+            } else {
+              editorView.dispatch({
+                selection: { anchor: from, head: to },
+                effects: [
+                  setAnnotationRange.of({ from, to: doc.line(endLine).from }),
+                  EditorView.scrollIntoView(from, { y: 'center' }),
+                ],
+              })
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback: highlight DOM element for trace-target based refs
+    if (selectedRef && editorContainer.value) {
+      const selectedEl = editorContainer.value.querySelector(`[data-trace-target="${selectedRef}"]`)
+      if (selectedEl) {
+        selectedEl.classList.add('annotation-selected')
+      }
+    }
+  },
+)
+
 onBeforeUnmount(() => {
   window.clearTimeout(flashTimer)
   destroyEditor()
@@ -805,6 +922,43 @@ defineExpose({ getEditorContent, goToLine })
   text-decoration-color: #2563eb;
   text-underline-offset: 2px;
   cursor: pointer;
+}
+
+/* Annotation mode styles */
+.editor-body.annotation-mode :deep(.cm-content) {
+  cursor: text !important;
+}
+
+.editor-body.annotation-mode :deep(.cm-line) {
+  transition: background 0.15s ease;
+}
+
+.editor-body.annotation-mode :deep(.cm-line:hover) {
+  background: rgba(64, 158, 255, 0.08) !important;
+}
+
+.editor-body.annotation-mode :deep(.cm-selectionBackground) {
+  background: rgba(64, 158, 255, 0.3) !important;
+}
+
+/* Survives blur, so the picked rows stay visible while the dialog is open. */
+.editor-body :deep(.cm-annotation-range) {
+  background: rgba(103, 194, 58, 0.16);
+  box-shadow: inset 3px 0 0 #67c23a;
+}
+
+.editor-body.annotation-mode :deep([data-trace-target]) {
+  cursor: text !important;
+}
+
+.editor-body.annotation-mode :deep([data-trace-target]:hover) {
+  background: rgba(64, 158, 255, 0.2) !important;
+  box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.5) !important;
+}
+
+.editor-body.annotation-mode :deep([data-trace-target].annotation-selected) {
+  background: rgba(103, 194, 58, 0.25) !important;
+  box-shadow: inset 0 -2px 0 #67c23a, 0 0 0 1px rgba(103, 194, 58, 0.6) !important;
 }
 
 @media (max-width: 820px) {

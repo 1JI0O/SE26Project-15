@@ -27,6 +27,8 @@ READ_TOOLS = {
     "get_graph_node",
     "list_trace_links",
     "get_trace_detail",
+    "query_trace_links",
+    "get_trace_link",
     "recall_memory",
     "propose_code_patch",
     "analyze_change_risk",
@@ -39,6 +41,8 @@ WRITE_TOOLS = {
     "rerun_analysis",
     "update_trace_status",
     "create_trace_link",
+    "update_trace_link",
+    "delete_trace_link",
 }
 
 
@@ -142,6 +146,29 @@ class CreateTraceArguments(StrictArguments):
     rationale: str = Field(min_length=1, max_length=4000)
 
 
+class UpdateTraceLinkArguments(StrictArguments):
+    trace_id: str = Field(min_length=1, max_length=64)
+    relation_type: str | None = Field(default=None, min_length=1, max_length=64)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    rationale: str | None = Field(default=None, min_length=1, max_length=4000)
+
+
+class DeleteTraceLinkArguments(StrictArguments):
+    trace_id: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class QueryTraceLinksArguments(StrictArguments):
+    paper_ref: str | None = Field(default=None, max_length=255)
+    code_ref: str | None = Field(default=None, max_length=500)
+    status: Literal["proposed", "accepted", "rejected", "stale"] | None = None
+    source: str | None = Field(default=None, max_length=32)
+
+
+class GetTraceLinkArguments(StrictArguments):
+    trace_id: str = Field(min_length=1, max_length=64)
+
+
 class SemanticSearchPaperArguments(StrictArguments):
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(default=5, ge=1, le=15)
@@ -171,6 +198,10 @@ ARGUMENT_MODELS = {
     "get_graph_node": GraphNodeArguments,
     "list_trace_links": ListTraceArguments,
     "get_trace_detail": TraceDetailArguments,
+    "update_trace_link": UpdateTraceLinkArguments,
+    "delete_trace_link": DeleteTraceLinkArguments,
+    "query_trace_links": QueryTraceLinksArguments,
+    "get_trace_link": GetTraceLinkArguments,
     "recall_memory": RecallMemoryArguments,
     "propose_code_patch": PatchArguments,
     "analyze_change_risk": RiskAnalysisArguments,
@@ -212,6 +243,21 @@ TOOL_DESCRIPTIONS = {
     "get_graph_node": "Read one selected architecture or debug graph node.",
     "list_trace_links": "List paper-code trace links, optionally filtered by review status.",
     "get_trace_detail": "Read evidence, rationale, confidence, and uncertainty for one trace.",
+    "query_trace_links": (
+        "Find trace links by any combination of paper_ref, code_ref, status, and source. Use this "
+        "to answer questions about which relations exist before proposing a change to one."
+    ),
+    "get_trace_link": (
+        "Read one trace link in full by its id, including evidence quotes, scores, and timestamps."
+    ),
+    "update_trace_link": (
+        "Change the relation_type, confidence, or rationale of an existing trace link. Omitted "
+        "fields keep their stored value. Requires confirmation."
+    ),
+    "delete_trace_link": (
+        "Remove a trace link, giving the reason. This is a soft delete: the row is kept as "
+        "rejected so the review history survives. Requires confirmation."
+    ),
     "recall_memory": "Search project and cross-project Agent memory.",
     "propose_code_patch": (
         "Compare complete proposed file content against the current file without saving."
@@ -619,6 +665,63 @@ def execute_read_tool(
             "uncertainty": link.uncertainty_json,
             "stale_reason": link.stale_reason,
         }
+    if isinstance(validated, QueryTraceLinksArguments):
+        statement = select(TraceLink).where(TraceLink.project_id == project_id)
+        if validated.paper_ref:
+            statement = statement.where(TraceLink.paper_ref == validated.paper_ref)
+        if validated.code_ref:
+            statement = statement.where(TraceLink.code_ref == validated.code_ref)
+        if validated.status:
+            statement = statement.where(TraceLink.status == validated.status)
+        if validated.source:
+            statement = statement.where(TraceLink.source == validated.source)
+        links = session.exec(statement.order_by(TraceLink.id.desc()).limit(50)).all()
+        return {
+            "found": len(links) > 0,
+            "count": len(links),
+            "items": [
+                {
+                    "id": link.trace_id,
+                    "paper_ref": link.paper_ref,
+                    "code_ref": link.code_ref,
+                    "relation_type": link.relation_type,
+                    "confidence": link.confidence,
+                    "status": link.status,
+                    "source": link.source,
+                    "rationale": (
+                        (link.rationale[:200] + "...")
+                        if len(link.rationale) > 200
+                        else link.rationale
+                    ),
+                }
+                for link in links
+            ],
+        }
+    if isinstance(validated, GetTraceLinkArguments):
+        link = session.exec(
+            select(TraceLink).where(
+                TraceLink.project_id == project_id,
+                TraceLink.trace_id == validated.trace_id,
+            )
+        ).first()
+        if link is None:
+            return {"found": False, "trace_id": validated.trace_id}
+        return {
+            "found": True,
+            "id": link.trace_id,
+            "paper_ref": link.paper_ref,
+            "code_ref": link.code_ref,
+            "relation_type": link.relation_type,
+            "confidence": link.confidence,
+            "status": link.status,
+            "source": link.source,
+            "rationale": link.rationale,
+            "evidence": link.evidence_json,
+            "uncertainty": link.uncertainty_json,
+            "stale_reason": link.stale_reason,
+            "created_at": link.created_at.isoformat() if link.created_at else None,
+            "updated_at": link.updated_at.isoformat() if link.updated_at else None,
+        }
     if isinstance(validated, RecallMemoryArguments):
         from app.services.agent.memory import retrieve_memories
 
@@ -834,5 +937,37 @@ def prepare_write_request(
             "relation_type": validated.relation_type,
             "confidence": validated.confidence,
             "rationale": validated.rationale[:500],
+        }
+    if isinstance(validated, UpdateTraceLinkArguments):
+        link = session.exec(
+            select(TraceLink).where(
+                TraceLink.project_id == project_id,
+                TraceLink.trace_id == validated.trace_id,
+            )
+        ).first()
+        if link is None:
+            raise ValueError("trace_link_not_found")
+        summary = {"trace_id": validated.trace_id}
+        if validated.relation_type:
+            summary["relation_type"] = validated.relation_type
+        if validated.confidence is not None:
+            summary["confidence"] = validated.confidence
+        if validated.rationale:
+            summary["rationale"] = validated.rationale[:200]
+        return payload, summary
+    if isinstance(validated, DeleteTraceLinkArguments):
+        link = session.exec(
+            select(TraceLink).where(
+                TraceLink.project_id == project_id,
+                TraceLink.trace_id == validated.trace_id,
+            )
+        ).first()
+        if link is None:
+            raise ValueError("trace_link_not_found")
+        return payload, {
+            "trace_id": validated.trace_id,
+            "paper_ref": link.paper_ref,
+            "code_ref": link.code_ref,
+            "reason": validated.reason,
         }
     raise ValueError("read_tool_does_not_require_confirmation")

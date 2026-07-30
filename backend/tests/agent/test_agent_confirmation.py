@@ -4,7 +4,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel
+from sqlmodel import Session, SQLModel, select
 
 from app.core.config import settings
 from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink, utc_now
@@ -311,3 +311,57 @@ def test_agent_without_llm_degrades_without_confirmation(tmp_path: Path) -> None
     assert response.degraded
     assert response.degraded_reason == "llm_disabled"
     assert response.confirmation is None
+
+
+def test_agent_created_trace_carries_anchored_evidence(tmp_path: Path) -> None:
+    """A link the Agent creates by reference must still be decorable in both panes.
+
+    The reader's decoration index keys highlights by evidence target id and drops any link
+    whose id is null, so a link stored without evidence appears in the matrix and jumps
+    correctly while leaving the paper and code panes unhighlighted and unclickable.
+    """
+
+    with _session() as session:
+        project, _, _ = _fixture(session, tmp_path)
+        provider = StepProvider(
+            [
+                _write_step(
+                    "create_trace_link",
+                    {
+                        "paper_ref": "p1",
+                        "code_ref": "models/net.py::Net",
+                        "relation_type": "implements",
+                        "confidence": 0.9,
+                        "rationale": "Net implements the described network.",
+                    },
+                )
+            ]
+        )
+        response = query_agent(
+            session,
+            project.id or 0,
+            AgentQueryRequest(message="Link p1 to Net"),
+            provider=provider,
+        )
+        assert response.confirmation is not None
+        decided = decide_confirmation(
+            session,
+            project.id or 0,
+            response.confirmation.confirmation_id,
+            "accept",
+        )
+        assert decided is not None and decided.status == "executed", decided.error_summary
+        created = session.exec(
+            select(TraceLink).where(TraceLink.trace_id == decided.result_json["trace_id"])
+        ).one()
+
+        evidence = {item["side"]: item for item in created.evidence_json}
+        assert set(evidence) == {"paper", "code"}
+        assert evidence["paper"]["target_id"]
+        assert evidence["code"]["target_id"]
+        # Quotes come from the real block and the symbol's own lines.
+        assert "network implementation" in evidence["paper"]["quote"]
+        assert "class Net" in evidence["code"]["quote"]
+        # The code pane filters targets by path and needs a line window to place the mark.
+        assert evidence["code"]["path"] == "models/net.py"
+        assert evidence["code"]["line_start"] == 1
