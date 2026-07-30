@@ -1,0 +1,14 @@
+Already up to date
+Done in 302ms using pnpm v11.13.0
+
+ RUN  v2.1.9 D:/my_programs/Tracelab-add-comment/SE26Project-15/frontend
+
+ ✓ src/features/tracing/annotation-selection.spec.ts (4 tests) 3ms
+ ✓ src/stores/annotation.spec.ts (6 tests) 10ms
+
+ Test Files  2 passed (2)
+      Tests  10 passed (10)
+   Start at  17:37:00
+   Duration  1.11s (transform 80ms, setup 0ms, collect 205ms, tests 13ms, environment 0ms, prepare 187ms)
+
+JUNIT report written to D:/my_programs/Tracelab-add-comment/SE26Project-15/FinalRelease/单元测试报告/frontend-guided-annotation-junit.xml

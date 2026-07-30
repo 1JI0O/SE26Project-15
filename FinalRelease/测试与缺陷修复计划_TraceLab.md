@@ -12,13 +12,13 @@
 
 ## 2. 当前基线与关键判断
 
-计划编制基线日期为 2026-07-28，当前执行快照更新于 2026-07-30，HEAD 为 `b8e6b11`。仓库当前由 Vue 3/Tauri 前端、本地 FastAPI 后端 `backend`、VS Code 扩展与 `tracelab_core`、可选云端同步服务 `server` 组成。
+计划编制基线日期为 2026-07-28，当前执行快照更新于 2026-07-30，测试基线为 `5e842e0` 加当前测试/修复工作树。仓库当前由 Vue 3/Tauri 前端、本地 FastAPI 后端 `backend`、VS Code 扩展与 `tracelab_core`、可选云端同步服务 `server` 组成。
 
 | 项目 | 当前情况 | 对计划的影响 |
 |---|---|---|
 | 自动化测试 | 当前已归档四个 pytest 定向测试集、完整 `backend` 回归和 VS Code 扩展纯函数测试；CI 同时执行 Ruff、Server、前端类型检查和构建。 | 功能继续变化或 RC 冻结后必须重跑同一套检查，旧结果不能沿用为新版本证据。 |
 | 覆盖率 | 仓库静态分析 389/389、RAG 438/438、VS Code 无头核心 275/275、追溯创作与置信度 188/188，四个选定范围当前均为 100%；严格门禁为 90.01。 | 报告必须逐项披露纳入/排除模块；1290/1290 只代表四个边界明确的范围，不代表整个 `backend` 或整个 `tracelab_core`，最终 RC 仍须重建报告。 |
-| 前端测试 | 前端当前没有 Vitest/Jest 等单测框架。 | 本次不临时扩大到前端单测；前端以类型检查、生产构建和系统测试保障。 |
+| 前端测试 | 已接入 Vitest，引导式标注状态机与选区边界共 10 条测试。 | 后续新增前端状态机和纯函数继续纳入 Vitest；组件集成与真实浏览器交互仍由系统测试保障。 |
 | 系统用例 | 参考工作簿原有 44 条，Markdown 当前扩展为 74 条：功能 59、易用性 7、兼容性 7、可靠性 1。 | 当前真实状态为 3 条通过、1 条阻塞、70 条未执行；执行前按最终实现重新评审适用性，自动化子检查不得推断整条系统用例通过。 |
 | 未完成能力 | README 明确“报告文件导出”当前仍是稳定 UI/接口占位；仓库仍在实现新功能。 | 报告导出在完成前标记“未就绪”，实现冻结后补充基本流和备选流用例，不得提前判定通过。 |
 | 可选范围 | 构造迭代计划已将云同步增强冻结为可选项。参考表中的 TC-F-029 至 TC-F-036 依赖云端、邮件、双设备或管理员环境。 | 与本地核心验收结果分开汇总；具备 staging 环境才执行，否则标记“阻塞/不适用”并说明原因。 |
@@ -45,7 +45,7 @@
 
 > 2026-07-28 阶段性校准：全 `backend/app` 诊断覆盖率为 73.38%（6899/9402），仅作为后续补测输入；当时的仓库静态分析子系统覆盖率为 92.80%（361/389），184 条后端测试全部通过。由于仓库仍在开发，该数字只是计划基线，不是最终验收结果；当前也没有可用的正式归档报告，最终数字必须在冻结的 RC 提交上重新生成。
 
-> 2026-07-30 当前执行快照：仓库静态分析为 389/389（52 passed）、RAG 为 438/438（74 passed）、VS Code 无头核心为 275/275（46 passed）、追溯创作与置信度为 188/188（20 passed），四个范围合计 1290/1290、均为 100.00%；完整后端回归 362 passed，Server 42 passed、1 skipped，VS Code 扩展纯函数 3 passed 且 TypeScript 编译通过，前端 typecheck/build 通过。报告绑定到 `b8e6b11` 与当前未提交测试/修复工作树；最终 RC 冻结后仍须重跑。
+> 2026-07-30 当前执行快照：仓库静态分析为 389/389（52 passed）、RAG 为 438/438（74 passed）、VS Code 无头核心为 275/275（46 passed）、追溯创作与置信度为 188/188（20 passed），四个范围合计 1290/1290、均为 100.00%；完整后端正式源回归 326 passed，前端引导式标注 10 passed，Server 42 passed、1 skipped，VS Code 扩展纯函数 3 passed 且 TypeScript 编译通过，前端 typecheck/build 通过。报告绑定到 PR #61 当前合并候选工作树；最终 RC 冻结后仍须重跑。
 
 ### 3.2 系统测试范围
 
@@ -81,6 +81,11 @@
 ```powershell
 Set-Location backend
 uv run pytest `
+  tests/test_code_analyzer.py `
+  tests/repositories/test_analysis.py `
+  tests/repositories/test_file_access.py `
+  "../FinalRelease/单元测试代码/test_code_analysis_boundaries.py" `
+  "../FinalRelease/单元测试代码/test_code_analysis_extended.py" `
   --cov=app.services.code_analysis `
   --cov-report=term-missing `
   --cov-report=html:../FinalRelease/单元测试报告/htmlcov `

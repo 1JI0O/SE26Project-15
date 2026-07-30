@@ -11,20 +11,20 @@
 | VS Code 无头核心 `workspace/review/probe` | 46 passed | 275/275 = 100.00% | 通过 |
 | 追溯创作与置信度 `manual_anchors/confidence/projects/migration` | 20 passed | 188/188 = 100.00% | 通过 |
 
-四个正式范围合计 **1290/1290 条语句，100.00%**。完整 backend 回归为 **362 passed**；VS Code 扩展 TypeScript 编译通过，Node 纯函数测试 **3 passed**。这些数字只代表表中明确范围，不代表整个 backend 或整个 `tracelab_core` 达到 100%。
+四个正式范围合计 **1290/1290 条语句，100.00%**。完整 backend 正式源回归为 **326 passed**；引导式标注前端单元测试 **10 passed**；VS Code 扩展 TypeScript 编译通过，Node 纯函数测试 **3 passed**。这些数字只代表表中明确范围，不代表整个 backend、整个 frontend 或整个 `tracelab_core` 达到 100%。
 
 ## 2. 测试快照
 
 | 项目 | 值 |
 |---|---|
 | 执行日期 | 2026-07-30 |
-| Git 基线 | `b8e6b11`（当前 HEAD） |
+| Git 基线 | `5e842e0`（已合入最新 `origin/main`）+ 当前测试/修复工作树 |
 | 工作树 | 含本轮新增功能补测、缺陷修复、CI 与报告更新，尚未冻结 |
 | 操作系统 | Microsoft Windows 10.0.26200，x64 |
 | Python / pytest | 3.14.5 / 9.1.1 |
 | pytest-cov | 7.1.0 |
 | Node / pnpm | 22.16.0 / 11.13.0 |
-| 测试框架 | pytest xUnit + JUnit XML；Node `node:test` |
+| 测试框架 | pytest xUnit + JUnit XML；Vitest；Node `node:test` |
 
 仓库仍在开发。本报告是当前执行快照；最终 RC 冻结后必须在同一提交上重新生成全部报告。
 
@@ -91,13 +91,14 @@
 | RAG 定向测试 / 覆盖率 | 74 passed；438/438 | 通过 |
 | VS Code core 定向测试 / 覆盖率 | 46 passed；275/275 | 通过 |
 | 追溯创作与置信度定向测试 / 覆盖率 | 20 passed；188/188 | 通过 |
-| 完整 backend 回归 | 362 passed | 通过 |
+| 完整 backend 正式源回归 | 326 passed | 通过 |
+| 前端引导式标注状态机与选区边界 | 10 passed | 通过 |
 | VS Code 扩展编译 / 工具函数 | 通过；3 passed | 通过 |
 | backend / core Ruff | 0 项问题 | 通过 |
-| 前端 typecheck / build | 通过；1889 modules transformed | 通过 |
+| 前端 typecheck / build | 通过；1893 modules transformed | 通过 |
 | 云服务回归 | 42 passed，1 skipped | 通过（真实 PostgreSQL 项按环境跳过） |
 
-完整 backend 首轮曾出现论文任务状态文件读取与并发替换竞争，修复后相关定向测试 4 passed；当前完整回归 362 passed。
+完整 backend 默认收集现在只包含 `backend/tests` 正式源，归档副本不重复计数；当前完整回归 326 passed。此前 362 条结果包含 `FinalRelease` 中 40 条归档副本，已废止该虚高口径；首次消除重复收集时的 322 条是合入最新 Agent 修复前的历史快照。
 
 ## 5. 本轮补测与缺陷修复
 
@@ -112,6 +113,7 @@
 - `BUG-20260730-004`：运行中切换六维设置会改变后续 publish/持久化口径。现任务启动时冻结评分模式并传递给父代理、子代理和持久化。
 - `BUG-20260730-005`：项目六维设置未跨设备同步。现 Desktop/Server payload、bootstrap、冲突应用和 0002 Server 迁移均支持该字段。
 - `BUG-20260730-006`：取消标注遗留选择且校验错误可能误报 API 失败。现关闭时清空选择并拆分校验与请求错误处理。
+- `BUG-20260730-009`：Agent 工具创建的追溯曾把来源信息写入不符合读取 schema 的 `model_info_json`，导致矩阵刷新时列表接口 500；现模型元数据与 provenance 分开存储，并兼容旧错误数据和关系类型别名。
 
 ## 6. 复现命令
 
@@ -121,7 +123,7 @@ uv run pytest -q tests/rag --cov=app.services.rag --cov-report=term-missing --co
 
 uv run pytest -q tests/tracing/test_annotation_mode.py tests/agent/test_confidence_boundaries.py tests/projects/test_project_confidence_api.py tests/test_confidence_migration.py --cov=app.services.tracing.manual_anchors --cov=app.services.agent.confidence --cov=app.api.routes.projects --cov=app.schemas.projects --cov=app.db.migrations.versions.0014_project_deep_thinking --cov-report=term-missing --cov-fail-under=100
 
-uv run pytest -q tests/test_code_analyzer.py tests/repositories/test_analysis.py tests/repositories/test_file_access.py "../FinalRelease/单元测试代码" --cov=app.services.code_analysis --cov-report=term-missing --cov-fail-under=100
+uv run pytest -q tests/test_code_analyzer.py tests/repositories/test_analysis.py tests/repositories/test_file_access.py "../FinalRelease/单元测试代码/test_code_analysis_boundaries.py" "../FinalRelease/单元测试代码/test_code_analysis_extended.py" --cov=app.services.code_analysis --cov-report=term-missing --cov-fail-under=100
 
 uv run pytest -q
 
@@ -130,6 +132,9 @@ uv run --extra dev pytest -q
 
 Set-Location ../../vscode-extension
 npm test
+
+Set-Location ../frontend
+pnpm test:unit
 ~~~
 
 ## 7. 报告与证据
@@ -139,7 +144,8 @@ npm test
 - `tracelab-core-coverage.xml`、`tracelab-core-junit.xml`、`tracelab-core-htmlcov/index.html`、`tracelab-core-terminal.txt`：VS Code core 子系统。
 - `trace-authoring-coverage.xml`、`trace-authoring-junit.xml`、`trace-authoring-htmlcov/index.html`、`trace-authoring-terminal.txt`：追溯创作与置信度子系统。
 - `backend-regression-junit.xml`、`backend-regression-terminal.txt`：完整 backend 回归。
+- `frontend-guided-annotation-junit.xml`、`frontend-guided-annotation-terminal.txt`：引导式标注状态机与选区边界前端单元测试。
 - `FinalRelease/单元测试代码/rag`：本轮 RAG 测试代码交付归档；正式执行源为 `backend/tests/rag`。
 - `FinalRelease/单元测试代码/trace-authoring`：本轮标注、置信度、项目 API/迁移和 Agent CRUD 测试交付归档。
 
-CI 已包含四套 Python 覆盖率门禁、完整 backend 回归、VS Code 扩展编译/单元测试、云服务和前端构建，并归档机器可读报告。
+CI 已包含四套 Python 覆盖率门禁、完整 backend 回归、前端 Vitest、VS Code 扩展编译/单元测试、云服务和前端构建，并归档机器可读报告。

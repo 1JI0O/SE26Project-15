@@ -56,6 +56,7 @@ import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import type { LSPClient } from '@codemirror/lsp-client'
 import { jumpToDefinition } from '@codemirror/lsp-client'
 import { useAnnotationStore } from '@/stores/annotation'
+import { selectedLineRange } from '@/features/tracing/annotation-selection'
 import type { CodeFile } from '@/composables/useCode'
 import type { CodeTargetView } from '@/composables/useTraceIndex'
 
@@ -394,8 +395,10 @@ const traceDomHandlers = EditorView.domEventHandlers({
     // A bare click selects nothing; leave the step open rather than picking a zero-width range.
     if (selection.empty) return false
     const doc = view.state.doc
-    const fromLine = doc.lineAt(selection.from)
-    const toLine = doc.lineAt(selection.to)
+    const selectedLines = selectedLineRange(doc, selection.from, selection.to)
+    if (!selectedLines) return false
+    const fromLine = doc.line(selectedLines.startLine)
+    const toLine = doc.line(selectedLines.endLine)
     view.dispatch({
       effects: setAnnotationRange.of({ from: fromLine.from, to: toLine.from }),
     })

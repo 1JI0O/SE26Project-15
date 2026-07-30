@@ -1,8 +1,3 @@
 Already up to date
-Done in 316ms using pnpm v11.13.0
-node.exe : $ vue-tsc --noEmit
-At D:\npm-global\pnpm.ps1:24 char:5
-+     & "node$exe"  "$basedir/node_modules/pnpm/bin/pnpm.mjs" $args
-+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: ($ vue-tsc --noEmit:String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
+Done in 302ms using pnpm v11.13.0
+$ vue-tsc --noEmit

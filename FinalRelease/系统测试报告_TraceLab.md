@@ -2,7 +2,7 @@
 
 ## 1. 当前结论
 
-本轮已针对当前 HEAD `b8e6b11` 的手工标注、Agent 追溯 CRUD、六维置信度和同步增强补测并修复缺陷，重建四套覆盖率与回归证据并重跑浏览器子流程，但**尚不能宣称全部系统测试完成或全系统通过**。自动化 100% 只代表报告列明的四个子系统范围，不能替代真实 PDF、代码、Agent、双设备、Safari 和桌面安装包的完整系统执行。
+本轮已针对测试基线 `5e842e0` 加当前工作树的手工标注、Agent 追溯 CRUD、Agent 创建后矩阵加载、六维置信度和同步增强补测并修复缺陷，重建四套覆盖率与回归证据并复跑浏览器矩阵。当前**尚不能宣称全部系统测试完成或全系统通过**。自动化 100% 只代表报告列明的四个子系统范围，不能替代真实 PDF、代码、Agent、双设备、Safari 和桌面安装包的完整系统执行。
 
 截至 2026-07-30：
 
@@ -30,7 +30,7 @@
 
 | 项目 | 值 |
 |---|---|
-| 当前仓库基线 | `b8e6b11` + 当前测试/修复工作树（尚未冻结） |
+| 当前仓库基线 | `5e842e0` + 当前测试/修复工作树（尚未冻结） |
 | 基线解释 | 当前自动化证据已重建；未执行的完整流程不得据此标记通过 |
 | 操作系统 | Microsoft Windows 10.0.26200，x64 |
 | Node / pnpm | 22.16.0 / 11.13.0 |
@@ -44,20 +44,21 @@
 
 Playwright 在 Chrome、Edge、Firefox 和两个桌面视口中重复执行：空名称/全空格备选流、创建项目、自动进入工作台、返回列表并重开同一项目、横向溢出检查、非预期 HTTP/控制台错误检查和测试数据清理。
 
-当前版本完整复测为 **6 passed / 0 failed，59.1 秒**。这直接支持 TC-F-001、TC-F-002、TC-F-003；TC-C-001 仍因 Safari 以及 PDF/ZIP、追溯、标注、RAG 和设置完整流程缺失而保持阻塞。
+当前版本完整复测为 **6 passed / 0 failed，50.6 秒**。这直接支持 TC-F-001、TC-F-002、TC-F-003；TC-C-001 仍因 Safari 以及 PDF/ZIP、追溯、标注、RAG 和设置完整流程缺失而保持阻塞。
 
 ### 3.2 后端、RAG 与构建子证据
 
 | 检查 | 结果 | 证据 |
 |---|---:|---|
-| 本地后端完整 pytest | 362 passed | `单元测试报告/backend-regression-junit.xml` |
+| 本地后端正式源完整 pytest | 326 passed | `单元测试报告/backend-regression-junit.xml` |
 | RAG 定向 pytest / 覆盖率 | 74 passed；438/438 = 100.00% | `单元测试报告/rag-junit.xml`、`rag-coverage.xml` |
 | 静态分析定向覆盖率 | 52 passed；389/389 = 100.00% | `单元测试报告/junit.xml`、`coverage.xml` |
 | VS Code core 定向覆盖率 | 46 passed；275/275 = 100.00% | `单元测试报告/tracelab-core-junit.xml`、`tracelab-core-coverage.xml` |
 | 追溯创作与置信度定向覆盖率 | 20 passed；188/188 = 100.00% | `单元测试报告/trace-authoring-junit.xml`、`trace-authoring-coverage.xml` |
 | VS Code 扩展编译/纯函数测试 | 编译通过；3 passed | `单元测试报告/vscode-extension-terminal.txt` |
 | 云服务 pytest | 42 passed，1 skipped | `系统测试证据/构建与环境/server-junit.xml` |
-| 前端类型检查 / 生产构建 | 通过；1889 modules transformed | `系统测试证据/构建与环境/frontend-typecheck.txt`、`frontend-build.txt` |
+| 前端引导式标注单元测试 | 10 passed | `单元测试报告/frontend-guided-annotation-junit.xml` |
+| 前端类型检查 / 生产构建 | 通过；1893 modules transformed | `系统测试证据/构建与环境/frontend-typecheck.txt`、`frontend-build.txt` |
 
 云服务跳过项仍为未配置真实 PostgreSQL 集成环境的用例；SQLite/in-process 结果不能替代 staging、SMTP 或双设备验证。
 
@@ -85,7 +86,7 @@ Playwright 在 Chrome、Edge、Firefox 和两个桌面视口中重复执行：�
 | 功能 | 用例 | 当前状态 | 完整执行仍缺少的证据 |
 |---|---|---|---|
 | 手工标注基本流和异常恢复 | TC-F-055、TC-F-056 | 未执行 | 真实论文/代码选择、弹窗、高亮、重复与服务失败 UI 流程 |
-| Agent 追溯 CRUD | TC-F-057 | 未执行 | 可控 Agent 的查询、确认接受/拒绝和跨项目完整对话 |
+| Agent 追溯 CRUD | TC-F-057 | 未执行 | 可控 Agent 的查询、确认接受/拒绝、创建后矩阵刷新、旧错误元数据兼容和跨项目完整对话 |
 | 六维置信度 | TC-F-058 | 未执行 | 可控 Agent 完整运行、运行中切换和 UI 保存失败恢复 |
 | 双设备同步 | TC-F-059 | 未执行 | staging、两个真实客户端、冲突、离线和 backfill |
 | 标注易用性 | TC-U-007 | 未执行 | 三名独立用户 |
@@ -105,6 +106,10 @@ Playwright 在 Chrome、Edge、Firefox 和两个桌面视口中重复执行：�
 - `BUG-20260730-004`：运行中切换六维开关会造成提示词、计算和落库口径不一致；现评分模式在任务启动时冻结并传给父/子代理和持久化。
 - `BUG-20260730-005`：agent_deep_thinking 未进入云同步；现 Desktop、Server、bootstrap、冲突应用和数据库迁移全链路支持。
 - `BUG-20260730-006`：取消标注遗留旧选择，表单失败可能误报创建失败；现关闭时清空选择并拆分校验/API 错误处理。
+- `BUG-20260730-007`：提交中导航和跨项目切换会造成引导状态串扰；现增加提交锁、项目重置和 generation 隔离。
+- `BUG-20260730-008`：跨段论文选择及代码行首边界可能锚定错误内容；现要求同一论文块并按最后实际字符计算代码结束行。
+- `BUG-20260730-009`：Agent 创建追溯时模型元数据形状错误可导致矩阵列表接口 500；现分离模型元数据与 provenance、统一锚点/关系类型规则，并兼容旧错误记录。
+- `TEST-20260730-001`：pytest 重复收集 FinalRelease 归档副本导致 Linux CI 失败和 362 条虚高计数；消除重复后曾为 322 条，合入最新 4 条 Agent 回归后当前为 326 条正式源测试。
 
 历史缺陷和详细回归证据见 `缺陷清单_TraceLab.md`。
 
@@ -118,4 +123,4 @@ Playwright 在 Chrome、Edge、Firefox 和两个桌面视口中重复执行：�
 - 在 Safari/macOS、最终 Tauri/VSIX 包和真实离线/远程 Provider 环境执行 TC-C-001 至 TC-C-007。
 - 在同一冻结提交上重跑四套覆盖率门禁、完整后端、VS Code 扩展、云服务、前端构建和浏览器矩阵。
 
-当前材料能证明四个选定子系统均为 100% 语句覆盖率（合计 1290/1290）、完整后端 362 passed、构建通过以及 6 组浏览器子流程通过；不能证明其余 70 条未执行用例或 1 条阻塞用例已完成最终验收。
+当前材料能证明四个选定子系统均为 100% 语句覆盖率（合计 1290/1290）、完整后端正式源 326 passed、引导式标注前端单测 10 passed、前端 typecheck/build 通过，以及最新合并候选上的 6 组浏览器子流程通过；不能证明其余 70 条未执行用例或 1 条阻塞用例已完成最终验收。

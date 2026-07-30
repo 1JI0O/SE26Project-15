@@ -376,6 +376,15 @@ def test_agent_created_trace_carries_anchored_evidence(tmp_path: Path) -> None:
         # The code pane filters targets by path and needs a line window to place the mark.
         assert evidence["code"]["path"] == "models/net.py"
         assert evidence["code"]["line_start"] == 1
+        # List schema requires provider/name/prompt_version; provenance is stored separately.
+        assert created.model_info_json["provider"]
+        assert created.model_info_json["name"]
+        assert created.model_info_json["prompt_version"] == "chat-create-trace-v1"
+        assert created.provenance_json.get("source") == "agent_tool"
+        assert (
+            created.provenance_json.get("confirmation_id")
+            == response.confirmation.confirmation_id
+        )
 
 
 def test_agent_trace_crud_filters_validates_and_invalidates_dependents(
@@ -504,22 +513,293 @@ def test_agent_trace_crud_filters_validates_and_invalidates_dependents(
         ) == 2
 
 
-def test_agent_trace_mutation_schema_rejects_empty_patch_and_invalid_relation() -> None:
+def test_agent_trace_mutation_schema_rejects_empty_patch_and_normalizes_relation() -> None:
     with pytest.raises(ValidationError, match="at_least_one_trace_field_required"):
         validate_tool_arguments("update_trace_link", {"trace_id": "trace-1"})
-    with pytest.raises(ValidationError):
-        validate_tool_arguments(
-            "update_trace_link",
-            {"trace_id": "trace-1", "relation_type": "hallucinates"},
+
+    updated = validate_tool_arguments(
+        "update_trace_link",
+        {"trace_id": "trace-1", "relation_type": "hallucinates"},
+    )
+    assert updated.relation_type == "mentions"
+
+    created = validate_tool_arguments(
+        "create_trace_link",
+        {
+            "paper_ref": "p1",
+            "code_ref": "net.py:1",
+            "relation_type": "hallucinates",
+            "confidence": 0.8,
+            "rationale": "Unknown model label is normalized.",
+        },
+    )
+    assert created.relation_type == "mentions"
+
+
+def test_agent_created_trace_survives_list_endpoint(tmp_path: Path) -> None:
+    """After chat-tool create, GET /trace-links must return 200 (not schema-crash 500)."""
+
+    from fastapi.testclient import TestClient
+
+    from app.db.session import get_session
+    from app.main import app
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def session_override():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = session_override
+    try:
+        with Session(engine) as session:
+            project, _, _ = _fixture(session, tmp_path)
+            project_id = project.id or 0
+            provider = StepProvider(
+                [
+                    _write_step(
+                        "create_trace_link",
+                        {
+                            "paper_ref": "p1",
+                            "code_ref": "models/net.py::Net",
+                            "relation_type": "implements",
+                            "confidence": 0.9,
+                            "rationale": "Net implements the described network.",
+                        },
+                    )
+                ]
+            )
+            response = query_agent(
+                session,
+                project_id,
+                AgentQueryRequest(message="Link p1 to Net"),
+                provider=provider,
+            )
+            assert response.confirmation is not None
+            decided = decide_confirmation(
+                session,
+                project_id,
+                response.confirmation.confirmation_id,
+                "accept",
+            )
+            assert decided is not None and decided.status == "executed", decided.error_summary
+            created_id = decided.result_json["trace_id"]
+
+        with TestClient(app) as client:
+            listed = client.get(f"/api/v1/projects/{project_id}/trace-links")
+            assert listed.status_code == 200, listed.text
+            ids = {item["id"] for item in listed.json()}
+            assert created_id in ids
+            created = next(item for item in listed.json() if item["id"] == created_id)
+            assert created["model"]["provider"]
+            assert created["model"]["name"]
+            assert created["model"]["prompt_version"] == "chat-create-trace-v1"
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+
+def test_malformed_model_info_does_not_break_trace_list(tmp_path: Path) -> None:
+    """Legacy chat-tool rows that stuffed provenance into model_info must still list."""
+
+    from fastapi.testclient import TestClient
+
+    from app.db.session import get_session
+    from app.main import app
+    from app.services.tracing.service import trace_to_read
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        project, code, _ = _fixture(session, tmp_path)
+        paper = session.exec(
+            select(PaperDocument).where(PaperDocument.project_id == project.id)
+        ).one()
+        bad = TraceLink(
+            project_id=project.id or 0,
+            paper_document_id=paper.id,
+            paper_ref="p1",
+            code_repository_id=code.id,
+            code_ref="models/net.py::Net",
+            relation_type="implements",
+            confidence=0.8,
+            static_confidence=0,
+            source="agent",
+            rationale="legacy bad shape",
+            model_info_json={
+                "source": "agent_tool",
+                "confirmation_id": "confirm-deadbeef",
+            },
+            provenance_json={},
+            evidence_json=[
+                {"side": "paper", "ref": "p1", "quote": "A network implementation."},
+                {"side": "code", "ref": "models/net.py:1", "quote": "class Net"},
+            ],
+            fingerprint="legacy-bad-model-info",
+            status="accepted",
         )
-    with pytest.raises(ValidationError):
-        validate_tool_arguments(
+        session.add(bad)
+        session.commit()
+        session.refresh(bad)
+        bad_id = bad.trace_id
+        project_id = project.id or 0
+
+        # Read-side defense: never raise; drop invalid model.
+        read = trace_to_read(bad)
+        assert read.model is None
+
+    def session_override():
+        with Session(engine) as scoped:
+            yield scoped
+
+    app.dependency_overrides[get_session] = session_override
+    try:
+        with TestClient(app) as client:
+            listed = client.get(f"/api/v1/projects/{project_id}/trace-links")
+            assert listed.status_code == 200, listed.text
+            assert any(item["id"] == bad_id for item in listed.json())
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+
+def test_prepare_write_accepts_page_block_and_line_range(tmp_path: Path) -> None:
+    """Confirmation prep must accept the same refs execution / annotation mode use."""
+
+    from app.services.agent.tools import prepare_write_request
+
+    archive_path = tmp_path / "repo.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("repo/models/net.py", "class Net:\n    pass\n")
+
+    with _session() as session:
+        project = Project(name="Anchor prep fixture")
+        session.add(project)
+        session.commit()
+        session.refresh(project)
+        block = {
+            "id": "p1-b6",
+            "kind": "paragraph",
+            "page": 1,
+            "text": "We explore a new class of diffusion models.",
+        }
+        session.add(
+            PaperDocument(
+                project_id=project.id or 0,
+                filename="paper.pdf",
+                storage_path="paper.pdf",
+                sections_json=[],
+                paragraphs_json=[],  # Intentionally empty: only pages carry the block id.
+                pages_json=[{"page_number": 1, "blocks": [block]}],
+            )
+        )
+        session.add(
+            CodeRepository(
+                project_id=project.id or 0,
+                filename="repo.zip",
+                storage_path=str(archive_path),
+                file_tree_json=[{"path": "models/net.py", "language": "python"}],
+                symbols_json=[],
+                imports_json=[],
+                pytorch_candidates_json=[],
+            )
+        )
+        session.commit()
+
+        payload, summary = prepare_write_request(
+            session,
+            project.id or 0,
             "create_trace_link",
             {
-                "paper_ref": "p1",
-                "code_ref": "net.py:1",
-                "relation_type": "hallucinates",
-                "confidence": 0.8,
-                "rationale": "Invalid relation type.",
+                "paper_ref": "p1-b6",
+                "code_ref": "models/net.py:1-2",
+                "relation_type": "implements",
+                "confidence": 0.85,
+                "rationale": "Abstract maps to the Net class lines.",
             },
         )
+        assert payload["paper_ref"] == "p1-b6"
+        assert payload["code_ref"] == "models/net.py:1-2"
+        assert summary["paper_ref"] == "p1-b6"
+
+
+def test_create_trace_coerces_llm_relation_aliases(tmp_path: Path) -> None:
+    """LLM often invents 'references'; store/list must use a schema enum value."""
+
+    from fastapi.testclient import TestClient
+
+    from app.db.session import get_session
+    from app.main import app
+    from app.schemas.traces import normalize_relation_type
+    from app.services.agent.tools import CreateTraceArguments
+
+    assert normalize_relation_type("references").value == "mentions"
+    args = CreateTraceArguments(
+        paper_ref="p1",
+        code_ref="models/net.py::Net",
+        relation_type="references",
+        confidence=0.8,
+        rationale="Abstract references the Net class.",
+    )
+    assert args.relation_type == "mentions"
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        project, code, _ = _fixture(session, tmp_path)
+        paper = session.exec(
+            select(PaperDocument).where(PaperDocument.project_id == project.id)
+        ).one()
+        bad = TraceLink(
+            project_id=project.id or 0,
+            paper_document_id=paper.id,
+            paper_ref="p1",
+            code_repository_id=code.id,
+            code_ref="models/net.py::Net",
+            relation_type="references",
+            confidence=0.8,
+            static_confidence=0,
+            source="agent",
+            rationale="alias",
+            model_info_json={
+                "provider": "openai-compatible",
+                "name": "fake",
+                "prompt_version": "chat-create-trace-v1",
+            },
+            evidence_json=[
+                {"side": "paper", "ref": "p1", "quote": "A network implementation."},
+                {"side": "code", "ref": "models/net.py:1", "quote": "class Net"},
+            ],
+            fingerprint="alias-relation-type",
+            status="accepted",
+        )
+        session.add(bad)
+        session.commit()
+        session.refresh(bad)
+        bad_id = bad.trace_id
+        project_id = project.id or 0
+
+    def session_override():
+        with Session(engine) as scoped:
+            yield scoped
+
+    app.dependency_overrides[get_session] = session_override
+    try:
+        with TestClient(app) as client:
+            listed = client.get(f"/api/v1/projects/{project_id}/trace-links")
+            assert listed.status_code == 200, listed.text
+            created = next(item for item in listed.json() if item["id"] == bad_id)
+            assert created["relation_type"] == "mentions"
+    finally:
+        app.dependency_overrides.pop(get_session, None)

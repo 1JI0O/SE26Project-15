@@ -22,7 +22,8 @@ jobs:
             tests/test_code_analyzer.py \
             tests/repositories/test_analysis.py \
             tests/repositories/test_file_access.py \
-            "../FinalRelease/单元测试代码" \
+            "../FinalRelease/单元测试代码/test_code_analysis_boundaries.py" \
+            "../FinalRelease/单元测试代码/test_code_analysis_extended.py" \
             --cov=app.services.code_analysis \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
@@ -138,8 +139,18 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
+          pnpm exec vitest run \
+            --reporter=default \
+            --reporter=junit \
+            --outputFile.junit=frontend-unit-junit.xml
           pnpm typecheck
           pnpm build
+      - name: Upload frontend unit test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-unit-test-report
+          path: frontend/frontend-unit-junit.xml
 
   vscode-extension:
     runs-on: ubuntu-latest

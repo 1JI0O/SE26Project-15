@@ -34,6 +34,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
   const paperPick = ref<AnnotationPick | null>(null)
   const codePick = ref<AnnotationPick | null>(null)
   const submitting = ref(false)
+  let generation = 0
 
   /** True whenever the guided flow owns the panes (selection handlers, cursors, overlays). */
   const active = computed(() => step.value !== 'idle')
@@ -49,16 +50,30 @@ export const useAnnotationStore = defineStore('annotation', () => {
   )
   const formVisible = computed(() => step.value === 'form')
 
-  function start(): void {
+  function clearFlow(): void {
     paperPick.value = null
     codePick.value = null
+    step.value = 'idle'
+  }
+
+  function start(): void {
+    if (submitting.value) return
+    generation += 1
+    clearFlow()
     step.value = 'select-paper'
   }
 
   function cancel(): void {
-    paperPick.value = null
-    codePick.value = null
-    step.value = 'idle'
+    if (submitting.value) return
+    generation += 1
+    clearFlow()
+  }
+
+  /** Drop project-scoped state and invalidate any request completing after navigation. */
+  function resetForProject(): void {
+    generation += 1
+    clearFlow()
+    submitting.value = false
   }
 
   /** Toggle used by the toolbar button. */
@@ -68,12 +83,14 @@ export const useAnnotationStore = defineStore('annotation', () => {
   }
 
   function pickPaper(pick: AnnotationPick): void {
+    if (submitting.value) return
     if (step.value !== 'select-paper') return
     paperPick.value = pick
     step.value = 'confirm-paper'
   }
 
   function pickCode(pick: AnnotationPick): void {
+    if (submitting.value) return
     if (step.value !== 'select-code') return
     codePick.value = pick
     step.value = 'confirm-code'
@@ -81,12 +98,14 @@ export const useAnnotationStore = defineStore('annotation', () => {
 
   /** Accept the pending pick and advance; from confirm-code this opens the form. */
   function confirmPick(): void {
+    if (submitting.value) return
     if (step.value === 'confirm-paper') step.value = 'select-code'
     else if (step.value === 'confirm-code') step.value = 'form'
   }
 
   /** Discard the pending pick and stay on the same side. */
   function retryPick(): void {
+    if (submitting.value) return
     if (step.value === 'confirm-paper') {
       paperPick.value = null
       step.value = 'select-paper'
@@ -98,6 +117,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
 
   /** From the form, go back to re-pick the code side. */
   function backToCode(): void {
+    if (submitting.value) return
     if (step.value !== 'form') return
     codePick.value = null
     step.value = 'select-code'
@@ -112,6 +132,9 @@ export const useAnnotationStore = defineStore('annotation', () => {
     },
   ): Promise<string> {
     if (!paperPick.value || !codePick.value) throw new Error('annotation_incomplete')
+    if (!Number.isInteger(projectId) || projectId <= 0) throw new Error('annotation_project_invalid')
+    if (submitting.value) throw new Error('annotation_submitting')
+    const submissionGeneration = generation
     submitting.value = true
     try {
       const created = await createTraceLink(projectId, {
@@ -124,10 +147,10 @@ export const useAnnotationStore = defineStore('annotation', () => {
         // Empty: the backend derives both quotes and anchor ids from the two refs.
         evidence: [],
       })
-      cancel()
+      if (generation === submissionGeneration) clearFlow()
       return created.id
     } finally {
-      submitting.value = false
+      if (generation === submissionGeneration) submitting.value = false
     }
   }
 
@@ -144,6 +167,7 @@ export const useAnnotationStore = defineStore('annotation', () => {
     formVisible,
     start,
     cancel,
+    resetForProject,
     toggle,
     pickPaper,
     pickCode,
