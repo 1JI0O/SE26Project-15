@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
@@ -26,6 +27,8 @@ from tracelab_server.models.cloud_entities import (
 from tracelab_server.models.entities import utc_now
 from tracelab_server.schemas.cloud import SyncOperation, SyncOperationResult
 from tracelab_server.services.sync_validation import validate_domain_operation
+
+logger = logging.getLogger(__name__)
 
 APPEND_ONLY_TYPES = {"agent_message", "agent_run_event"}
 ARTIFACT_TYPES = {"paper_document", "code_repository", "code_edit", "artifact_version"}
@@ -62,16 +65,22 @@ def _project_blob_usage(session: Session, workspace_id: str, project_id: str) ->
     )
 
 
-def _validate_sync_payload(value: object) -> None:
+def _find_forbidden_key(value: object) -> str | None:
+    """Return the first forbidden key found (name only), or None. Never returns values."""
     if isinstance(value, dict):
         for key, child in value.items():
             normalized = str(key).casefold()
             if normalized in FORBIDDEN_SYNC_KEYS or normalized.endswith("_api_key"):
-                raise HTTPException(status_code=422, detail="Payload contains a forbidden field")
-            _validate_sync_payload(child)
+                return str(key)
+            nested = _find_forbidden_key(child)
+            if nested is not None:
+                return nested
     elif isinstance(value, list):
         for child in value:
-            _validate_sync_payload(child)
+            nested = _find_forbidden_key(child)
+            if nested is not None:
+                return nested
+    return None
 
 
 def _apply_blob_reference_change(
@@ -356,7 +365,17 @@ def apply_operation(
         raise HTTPException(
             status_code=413, detail="Sync payload is too large; use a blob reference"
         )
-    _validate_sync_payload(operation.payload)
+    forbidden_key = _find_forbidden_key(operation.payload)
+    if forbidden_key is not None:
+        # Log the key NAME only (never its value — the value may be the secret
+        # itself) so operators can trace which client op is being rejected.
+        logger.warning(
+            "sync push rejected: forbidden field %r in %s op (client_operation_id=%s)",
+            forbidden_key,
+            operation.entity_type,
+            operation.client_operation_id,
+        )
+        raise HTTPException(status_code=422, detail="Payload contains a forbidden field")
     validate_domain_operation(operation)
 
     try:
