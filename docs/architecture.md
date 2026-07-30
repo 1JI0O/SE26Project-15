@@ -200,6 +200,8 @@ TraceLab/
 │   │       │   ├── ignore_rules.py    # .gitignore/macOS 元数据过滤
 │   │       │   └── constants.py       # 安全阈值
 │   │       ├── analysis_jobs.py       # 大仓库后台分析、缓存、恢复
+│   │       ├── local_sync.py         # outbox/payload 构造、禁用字段剥离、public id 翻译
+│   │       ├── cloud_import.py       # 导入后用本机解析器/分析器重建派生数据
 │   │       ├── tensor_flow/
 │   │       │   ├── semantic.py        # 张量语义图
 │   │       │   ├── architecture.py    # 模型架构图与下钻
@@ -648,7 +650,16 @@ token 短期有效，refresh token 旋转且只保存哈希；Browser 使用 Htt
 
 同步不传输 SQLite 文件，通过 `sync_event`、`sync_receipt`、设备 cursor 和 tombstone 实现版本化
 push/pull；只有 `cloud_enabled` 项目进入 outbox。项目/TraceLink 使用乐观锁，消息追加，文件使用
-不可变 SHA-256 Blob 版本。详细约束见[账号与同步架构](cloud-sync-architecture.md)。
+不可变 SHA-256 Blob 版本。
+
+同步实体类型：`project`、`paper_document`、`code_repository`、`code_edit`、`paper_target`、
+`code_target`、`trace_link`、`agent_*`（客户端 `LocalCloudEntityImport` 与服务端
+`SyncEntityType` 必须一致，`tests/sync/test_cloud_import_fidelity.py` 有防漂移测试）。
+
+**派生数据一律不同步，由接收端本机重建**：解析结构、MinerU markdown/图片缓存、代码符号表都是
+设备本地产物。`services/cloud_import.py` 在导入后用本机配置的解析器/分析器重新派生
+（`schedule_paper_reparse`、`schedule_repository_analysis`），并在完成后刷新对应 RAG 索引。
+详细约束见[账号与同步架构](cloud-sync-architecture.md)与[同步契约](contracts/cloud-sync.md)。
 
 ## 14. 当前实现边界
 

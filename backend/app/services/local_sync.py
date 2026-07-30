@@ -5,7 +5,14 @@ from typing import Any
 
 from sqlmodel import Session
 
-from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
+from app.models.entities import (
+    CodeRepository,
+    CodeTarget,
+    PaperDocument,
+    PaperTarget,
+    Project,
+    TraceLink,
+)
 from app.models.sync import LocalSyncOutbox, LocalSyncState
 
 # Canonical mirror of the cloud server's cloud_sync.FORBIDDEN_SYNC_KEYS
@@ -127,7 +134,20 @@ def repository_payload(project: Project, repository: CodeRepository) -> dict[str
     }
 
 
-def trace_payload(project: Project, link: TraceLink) -> dict[str, Any]:
+def trace_payload(project: Project, link: TraceLink, *, session: Session) -> dict[str, Any]:
+    """Serialize a TraceLink for sync, including its scoring and provenance.
+
+    The original payload carried only the eight fields the first sync release knew about.
+    Everything the agentic deep-tracing work added — relevance, the confidence split,
+    uncertainty, model info, score basis and provenance — was silently dropped, so a
+    downloaded relation arrived with ``relevance=0`` and ``source="static"`` and the
+    workbench ranked and labelled it wrong.
+
+    Target references travel as **public ids**: ``paper_target_id`` / ``code_target_id``
+    hold device-local primary keys (``ptarget-<hex>``) that mean nothing on another
+    install. The importer maps them back through the target's public id.
+    """
+
     return {
         "project_public_id": project.public_id,
         "trace_id": link.trace_id,
@@ -139,6 +159,104 @@ def trace_payload(project: Project, link: TraceLink) -> dict[str, Any]:
         "evidence": link.evidence_json,
         "rationale": link.rationale,
         "status": link.status,
+        "relevance": link.relevance,
+        "source": link.source,
+        "static_confidence": link.static_confidence,
+        "llm_confidence": link.llm_confidence,
+        "uncertainty": link.uncertainty_json,
+        "model_info": link.model_info_json,
+        "score_basis": link.score_basis_json,
+        "provenance": link.provenance_json,
+        "stale_reason": link.stale_reason,
+        "supersedes_trace_id": link.supersedes_trace_id,
+        "fingerprint": link.fingerprint,
+        # Opaque origin provenance. The artifact chain (job/run/artifact) is not synced, and
+        # SQLite foreign keys are not enforced, so this is carried for traceability only —
+        # nothing joins on it.
+        "artifact_id": link.artifact_id,
+        "paper_target_public_id": _target_public_id(session, PaperTarget, link.paper_target_id),
+        "code_target_public_id": _target_public_id(session, CodeTarget, link.code_target_id),
+        # Which paper/repository this relation belongs to. Without these the importer left
+        # both foreign keys null and could only guess "the latest one in the project".
+        "paper_document_public_id": _row_public_id(session, PaperDocument, link.paper_document_id),
+        "code_repository_public_id": _row_public_id(
+            session, CodeRepository, link.code_repository_id
+        ),
+    }
+
+
+def _row_public_id(session: Session, model: Any, row_id: int | None) -> str | None:
+    if row_id is None:
+        return None
+    row = session.get(model, row_id)
+    return row.public_id if row is not None else None
+
+
+def _target_public_id(session: Session, model: Any, target_id: str | None) -> str | None:
+    if not target_id:
+        return None
+    row = session.get(model, target_id)
+    return row.public_id if row is not None else None
+
+
+def paper_target_payload(
+    project: Project, target: PaperTarget, *, session: Session
+) -> dict[str, Any]:
+    """Serialize a paper anchor. Identity is the fingerprint, not the local target_id.
+
+    ``block_id`` is only a navigation hint (MinerU block ids drift across re-parses), so the
+    importer re-anchors on section_path + quote + occurrence + quote_hash.
+    """
+
+    return {
+        "project_public_id": project.public_id,
+        "paper_document_public_id": _row_public_id(
+            session, PaperDocument, target.paper_document_id
+        ),
+        "target_type": target.target_type,
+        "block_id": target.block_id,
+        "section_path": target.section_path_json,
+        "quote": target.quote,
+        "occurrence": target.occurrence,
+        "char_start": target.char_start,
+        "char_end": target.char_end,
+        "quote_hash": target.quote_hash,
+        "bbox": target.bbox_json,
+        "asset_path": target.asset_path,
+        "salience": target.salience,
+        "salience_reason": target.salience_reason,
+        "anchor_status": target.anchor_status,
+        "fingerprint": target.fingerprint,
+        "artifact_id": target.artifact_id,
+    }
+
+
+def code_target_payload(
+    project: Project, target: CodeTarget, *, session: Session
+) -> dict[str, Any]:
+    """Serialize a code anchor. Line numbers are a search window, not identity."""
+
+    return {
+        "project_public_id": project.public_id,
+        "code_repository_public_id": _row_public_id(
+            session, CodeRepository, target.code_repository_id
+        ),
+        "code_revision": target.code_revision,
+        "path": target.path,
+        "symbol_id": target.symbol_id,
+        "line_start": target.line_start,
+        "line_end": target.line_end,
+        "column_start": target.column_start,
+        "column_end": target.column_end,
+        "quote": target.quote,
+        "occurrence": target.occurrence,
+        "code_quote_hash": target.code_quote_hash,
+        "role": target.role,
+        "salience": target.salience,
+        "salience_reason": target.salience_reason,
+        "anchor_status": target.anchor_status,
+        "fingerprint": target.fingerprint,
+        "artifact_id": target.artifact_id,
     }
 
 

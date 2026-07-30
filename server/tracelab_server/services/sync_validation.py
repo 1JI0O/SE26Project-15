@@ -13,6 +13,10 @@ REQUIRED_UPSERT_FIELDS = {
     "paper_document": {"filename"},
     "code_repository": {"filename"},
     "code_edit": {"path", "repository_public_id", "blob_id"},
+    # Anchors into the paper/repository. ``quote`` + ``quote_hash`` are the re-anchoring
+    # identity on the receiving device; the local target_id never travels.
+    "paper_target": {"quote", "quote_hash", "fingerprint"},
+    "code_target": {"path", "quote", "code_quote_hash", "fingerprint"},
     "trace_link": {"paper_ref", "code_ref", "status"},
     "agent_conversation": {"title"},
     "agent_message": {"conversation_public_id", "role"},

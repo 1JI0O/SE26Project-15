@@ -24,6 +24,7 @@ from app.models.entities import (
     CodeTarget,
     PaperDocument,
     PaperTarget,
+    Project,
     TraceLink,
     as_utc,
     utc_now,
@@ -536,13 +537,56 @@ def _upsert_paper_target(
     }
     if target is None:
         target = PaperTarget(project_id=job.project_id, fingerprint=fingerprint, **values)
+        base_version = 0
     else:
         for key, value in values.items():
             setattr(target, key, value)
         target.version += 1
+        base_version = target.version - 1
     session.add(target)
     session.flush()
+    _record_target_operation(session, job.project_id, "paper_target", target, base_version)
     return target
+
+
+def _record_target_operation(
+    session: Session,
+    project_id: int,
+    entity_type: str,
+    target: PaperTarget | CodeTarget,
+    base_version: int,
+) -> None:
+    """Mirror a paper/code anchor into the sync outbox.
+
+    Anchors are what the workbench hovers and highlights. They used to stay device-local,
+    so a downloaded project rebuilt its target views from ``trace_link.evidence`` alone and
+    lost bbox geometry, salience reasons and anchor_status.
+
+    ``record_local_operation`` is a no-op for projects that are not ``cloud_enabled``, so
+    this is safe to call unconditionally from the analysis pipeline.
+    """
+
+    from app.services.local_sync import (
+        code_target_payload,
+        paper_target_payload,
+        record_local_operation,
+    )
+
+    project = session.get(Project, project_id)
+    if project is None:
+        return
+    if isinstance(target, PaperTarget):
+        payload = paper_target_payload(project, target, session=session)
+    else:
+        payload = code_target_payload(project, target, session=session)
+    record_local_operation(
+        session,
+        project,
+        entity_type,
+        target.public_id,
+        payload,
+        base_version=base_version,
+    )
 
 
 def _upsert_code_target(
@@ -586,12 +630,15 @@ def _upsert_code_target(
     }
     if target is None:
         target = CodeTarget(project_id=job.project_id, fingerprint=fingerprint, **values)
+        base_version = 0
     else:
         for key, value in values.items():
             setattr(target, key, value)
         target.version += 1
+        base_version = target.version - 1
     session.add(target)
     session.flush()
+    _record_target_operation(session, job.project_id, "code_target", target, base_version)
     return target
 
 
