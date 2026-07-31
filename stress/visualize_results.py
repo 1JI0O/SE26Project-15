@@ -44,97 +44,103 @@ def chart_spike_recovery():
     df = load_history('s10_spike')
 
     # 找到并发量变化的转折点
-    # 0-10s: 10→200, 保持到约120s, 然后回落
     spike_start = df[df['User Count'] >= 190].iloc[0]['time'] if len(df[df['User Count'] >= 190]) > 0 else None
-    recovery_start = df.iloc[-60:].iloc[0]['time'] if len(df) > 60 else None  # 最后60秒
+    recovery_start = df.iloc[-60:].iloc[0]['time'] if len(df) > 60 else None
 
-    fig, (ax1, ax_table) = plt.subplots(2, 1, figsize=(12, 8),
-                                         gridspec_kw={'height_ratios': [3, 1]},
-                                         facecolor=COLORS['bg'])
+    fig = plt.figure(figsize=(16, 10), facecolor=COLORS['bg'])
+    gs = fig.add_gridspec(3, 1, height_ratios=[2.5, 1, 0.8], hspace=0.3)
+
+    ax1 = fig.add_subplot(gs[0])
+    ax_table = fig.add_subplot(gs[1])
+    ax_desc = fig.add_subplot(gs[2])
 
     # === 时序图 ===
     ax1.set_facecolor(COLORS['bg'])
-
-    # 左轴: 吞吐 + 失败
     ax1_twin = ax1.twinx()
 
     line1 = ax1.plot(df['time'], df['Requests/s'],
-                     color=COLORS['throughput'], linewidth=1.8, label='吞吐 (rps)')
+                     color=COLORS['throughput'], linewidth=2.5, label='吞吐 (rps)', alpha=0.9)
     line2 = ax1.plot(df['time'], df['Failures/s'],
-                     color=COLORS['failures'], linewidth=1.8, label='失败/s')
+                     color=COLORS['failures'], linewidth=2.5, label='失败/s', alpha=0.9)
 
     # 右轴: p95 延迟
     line3 = ax1_twin.plot(df['time'], df['95%'],
-                          color=COLORS['latency'], linewidth=1.8, alpha=0.7, label='p95 延迟 (ms)')
+                          color=COLORS['latency'], linewidth=2.5, alpha=0.7, label='p95 延迟 (ms)')
 
     # 标注区域
     if spike_start:
-        ax1.axvline(spike_start, color='#d4a574', linestyle='--', linewidth=1, alpha=0.6)
-        ax1.text(spike_start, ax1.get_ylim()[1] * 0.9, ' 冲击开始',
-                fontsize=9, color='#8b6f47', va='top')
+        ax1.axvline(spike_start, color='#d4a574', linestyle='--', linewidth=2, alpha=0.7)
+        ax1.text(spike_start, ax1.get_ylim()[1] * 0.95, '  冲击开始 →',
+                fontsize=11, color='#8b6f47', va='top', weight='bold')
     if recovery_start:
-        ax1.axvline(recovery_start, color='#7ba36f', linestyle='--', linewidth=1, alpha=0.6)
-        ax1.text(recovery_start, ax1.get_ylim()[1] * 0.9, ' 回落',
-                fontsize=9, color='#4a6b3e', va='top')
+        ax1.axvline(recovery_start, color='#7ba36f', linestyle='--', linewidth=2, alpha=0.7)
+        ax1.text(recovery_start, ax1.get_ylim()[1] * 0.95, '  ← 回落',
+                fontsize=11, color='#4a6b3e', va='top', weight='bold')
 
-    ax1.set_xlabel('时间', fontsize=11)
-    ax1.set_ylabel('请求速率', fontsize=11, color=COLORS['throughput'])
-    ax1_twin.set_ylabel('p95 延迟 (ms)', fontsize=11, color=COLORS['latency'])
-    ax1.tick_params(axis='y', labelcolor=COLORS['throughput'])
-    ax1_twin.tick_params(axis='y', labelcolor=COLORS['latency'])
-    ax1.grid(axis='y', alpha=0.2, color='#8b7355')
+    ax1.set_xlabel('时间', fontsize=13, weight='bold')
+    ax1.set_ylabel('请求速率 (次/秒)', fontsize=13, weight='bold', color=COLORS['throughput'])
+    ax1_twin.set_ylabel('p95 延迟 (ms)', fontsize=13, weight='bold', color=COLORS['latency'])
+    ax1.tick_params(axis='y', labelcolor=COLORS['throughput'], labelsize=11)
+    ax1_twin.tick_params(axis='y', labelcolor=COLORS['latency'], labelsize=11)
+    ax1.tick_params(axis='x', labelsize=10)
+    ax1.grid(axis='both', alpha=0.25, color='#8b7355', linestyle=':')
+
+    # 格式化 x 轴时间显示
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+    fig.autofmt_xdate(rotation=30, ha='right')
 
     # 合并图例
     lines = line1 + line2 + line3
     labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='upper left', frameon=False, fontsize=10)
+    ax1.legend(lines, labels, loc='upper left', frameon=True, fontsize=11,
+              facecolor='#ebe5d9', edgecolor='#8b7355', framealpha=0.95)
 
     ax1.set_title('S10: 尖峰冲击与自愈 (10→200并发)',
-                  fontsize=14, pad=15, color='#5a4a3a')
+                  fontsize=16, pad=20, color='#3a2a1a', weight='bold')
 
     # === 摘要表 ===
     ax_table.axis('tight')
     ax_table.axis('off')
 
-    # 计算汇总数据
     spike_phase = df[df['User Count'] >= 190]
-    recovery_phase = df.iloc[-60:] if len(df) > 60 else df.iloc[-30:]
-
     total_requests = df['Total Request Count'].iloc[-1]
     total_failures = df['Total Failure Count'].iloc[-1]
     failure_rate = f"{100 * total_failures / total_requests:.1f}%" if total_requests > 0 else "0%"
     avg_throughput_spike = spike_phase['Requests/s'].mean() if len(spike_phase) > 0 else 0
     p95_spike = spike_phase['95%'].quantile(0.95) if len(spike_phase) > 0 else 0
     p99_spike = spike_phase['99%'].quantile(0.95) if len(spike_phase) > 0 else 0
-    recovery_time = "~75秒"  # 来自报告
 
     table_data = [
-        ['完整迭代次数', '峰值吞吐', 'p95响应时间', 'P99响应时间'],
-        [f'{total_requests}次', f'{avg_throughput_spike:.1f}次/s',
-         f'{p95_spike/1000:.1f}s', f'{p99_spike/1000:.1f}s']
+        ['完整迭代次数', '峰值吞吐', 'p95响应时间', 'p99响应时间', '错误率'],
+        [f'{total_requests}次', f'{avg_throughput_spike:.1f} rps',
+         f'{p95_spike/1000:.1f}s', f'{p99_spike/1000:.1f}s', failure_rate]
     ]
 
     table = ax_table.table(cellText=table_data, cellLoc='center', loc='center',
-                           bbox=[0.05, 0.2, 0.9, 0.6])
+                           bbox=[0.05, 0.1, 0.9, 0.8])
     table.auto_set_font_size(False)
-    table.set_fontsize(11)
+    table.set_fontsize(12)
 
-    for i in range(4):
-        table[(0, i)].set_facecolor('#d4c4a8')
-        table[(0, i)].set_text_props(weight='bold', color='#3a2a1a')
+    for i in range(5):
+        table[(0, i)].set_facecolor('#c4b49a')
+        table[(0, i)].set_text_props(weight='bold', color='#2a1a0a', fontsize=13)
         table[(1, i)].set_facecolor('#ebe5d9')
+        table[(1, i)].set_text_props(fontsize=12)
 
     for key, cell in table.get_celld().items():
-        cell.set_linewidth(1.5)
+        cell.set_linewidth(2)
         cell.set_edgecolor('#8b7355')
+        cell.set_height(0.35)
 
-    # 场景说明
-    ax_table.text(0.5, 0.05,
-                  '10→200 并发（10秒内拉起），保持 2 分钟后回落。失败率 3.9%，吞吐与延迟在回落后 75 秒内完全恢复。',
-                  ha='center', fontsize=10, color='#6a5a4a', style='italic',
-                  bbox=dict(boxstyle='round,pad=0.5', facecolor='#ebe5d9', edgecolor='#8b7355', linewidth=1))
+    # === 场景说明 ===
+    ax_desc.axis('off')
+    ax_desc.text(0.5, 0.5,
+                  '10→200 并发（10秒内拉起），保持 2 分钟后回落。\n'
+                  '失败率 3.9%，吞吐与延迟在回落后 75 秒内完全恢复，全程无需人工干预。',
+                  ha='center', va='center', fontsize=12, color='#5a4a3a',
+                  bbox=dict(boxstyle='round,pad=0.8', facecolor='#ebe5d9',
+                           edgecolor='#8b7355', linewidth=2))
 
-    plt.tight_layout()
     output_path = OUTPUT_DIR / 's10_spike_recovery.png'
     plt.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=COLORS['bg'])
     print(f"[OK] {output_path}")
