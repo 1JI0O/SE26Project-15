@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TraceLab 服务器管理</title>
+    <link rel="stylesheet" href="/admin-console/static/admin.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div><strong>TraceLab</strong><span>服务器管理</span></div>
+      <form method="post" action="/admin-console/logout">
+        <input type="hidden" name="csrf" value="{{ csrf }}" />
+        <span>{{ admin.email_normalized }}</span><button class="secondary">退出</button>
+      </form>
+    </header>
+    <nav>
+      <a href="#overview">概览</a><a href="#users">账号</a><a href="#workspaces">Workspace</a>
+      <a href="#projects">项目</a><a href="#jobs">维护任务</a><a href="#audit">审计</a>
+    </nav>
+    <main class="container">
+      <section id="overview">
+        <h1>运行概览</h1>
+        <div class="stats">
+          <article><b>{{ users|length }}</b><span>账号</span></article>
+          <article><b>{{ workspaces|length }}</b><span>Workspace</span></article>
+          <article><b>{{ projects|length }}</b><span>项目元数据</span></article>
+          <article><b>{{ jobs|selectattr('status', 'equalto', 'queued')|list|length }}</b><span>排队任务</span></article>
+          <article><b>{{ disk_percent }}%</b><span>Blob 磁盘使用率</span></article>
+        </div>
+        <p class="notice">该控制台只展示管理元数据，不提供 PDF、源码、TraceLink 正文或 Agent 内容读取入口。</p>
+      </section>
+      <section id="users">
+        <h2>账号</h2>
+        <div class="table-wrap"><table><thead><tr><th>邮箱</th><th>状态</th><th>验证</th><th>管理员</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
+          {% for item in users %}<tr><td>{{ item.email_normalized }}</td><td>{{ item.status }}</td><td>{{ '是' if item.email_verified_at else '否' }}</td><td>{{ '是' if item.is_platform_admin else '否' }}</td><td>{{ item.created_at }}</td><td class="actions">
+            <form method="post" action="/admin-console/users/{{ item.user_id }}/status"><input type="hidden" name="csrf" value="{{ csrf }}" /><input type="hidden" name="status" value="{{ 'disabled' if item.status == 'active' else 'active' }}" /><button class="secondary">{{ '停用' if item.status == 'active' else '启用' }}</button></form>
+            <form method="post" action="/admin-console/users/{{ item.user_id }}/force-logout"><input type="hidden" name="csrf" value="{{ csrf }}" /><button class="danger" data-confirm="确定强制退出该账号的全部设备？">强制下线</button></form>
+          </td></tr>{% endfor %}
+        </tbody></table></div>
+      </section>
+      <section id="workspaces">
+        <h2>Workspace 与配额</h2>
+        <div class="table-wrap"><table><thead><tr><th>名称</th><th>所有者</th><th>成员</th><th>项目</th><th>Blob 用量</th><th>配额</th></tr></thead><tbody>
+          {% for item in workspaces %}<tr><td>{{ item.name }}<small>{{ item.workspace_id }}</small></td><td>{{ owners.get(item.created_by, item.created_by) }}</td><td>{{ member_counts.get(item.workspace_id, 0) }}</td><td>{{ project_counts.get(item.workspace_id, 0) }}</td><td>{{ blob_usage.get(item.workspace_id, 0) }}</td><td><form method="post" action="/admin-console/workspaces/{{ item.workspace_id }}/quota"><input type="hidden" name="csrf" value="{{ csrf }}" /><input class="quota" type="number" name="storage_limit_bytes" min="1" value="{{ item.storage_limit_bytes }}" /><button class="secondary">保存</button></form></td></tr>{% endfor %}
+        </tbody></table></div>
+      </section>
+      <section id="projects">
+        <h2>项目元数据</h2>
+        <div class="table-wrap"><table><thead><tr><th>名称 / UUID</th><th>Workspace</th><th>版本</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody>
+          {% for item in projects %}<tr><td>{{ item.name }}<small>{{ item.public_id }}</small></td><td>{{ item.workspace_id }}</td><td>{{ item.version }}</td><td>{{ '已软删除' if item.deleted_at else item.sync_mode }}</td><td>{{ item.updated_at }}</td><td><form method="post" action="/admin-console/projects/{{ item.public_id }}/lifecycle"><input type="hidden" name="csrf" value="{{ csrf }}" /><input type="hidden" name="operation" value="{{ 'restore' if item.deleted_at else 'soft_delete' }}" /><button class="{{ 'secondary' if item.deleted_at else 'danger' }}" data-confirm="确定执行该项目生命周期操作？">{{ '恢复' if item.deleted_at else '软删除' }}</button></form></td></tr>{% endfor %}
+        </tbody></table></div>
+      </section>
+      <section id="jobs">
+        <h2>维护任务</h2>
+        <div class="toolbar">
+          <form method="post" action="/admin-console/maintenance/gc_tombstones"><input type="hidden" name="csrf" value="{{ csrf }}" /><button data-confirm="确定排队执行 GC？">排队执行 GC</button></form>
+          <form method="post" action="/admin-console/maintenance/compact_sync_events"><input type="hidden" name="csrf" value="{{ csrf }}" /><button class="secondary">压缩同步事件</button></form>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>类型</th><th>状态</th><th>重试</th><th>错误</th><th>创建时间</th></tr></thead><tbody>
+          {% for item in jobs %}<tr><td>{{ item.job_type }}</td><td>{{ item.status }}</td><td>{{ item.attempt_count }}</td><td>{{ item.last_error or '' }}</td><td>{{ item.created_at }}</td></tr>{% endfor %}
+        </tbody></table></div>
+      </section>
+      <section id="audit">
+        <h2>最近审计</h2>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作</th><th>操作者</th><th>Workspace</th><th>目标</th></tr></thead><tbody>
+          {% for item in audits %}<tr><td>{{ item.created_at }}</td><td>{{ item.action }}</td><td>{{ item.actor_id or 'system' }}</td><td>{{ item.workspace_id or '' }}</td><td>{{ item.target }}</td></tr>{% endfor %}
+        </tbody></table></div>
+      </section>
+    </main>
+    <script src="/admin-console/static/admin.js" defer></script>
+  </body>
+</html>

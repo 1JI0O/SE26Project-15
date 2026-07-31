@@ -1,0 +1,198 @@
+{
+  "name": "tracelab-vscode",
+  "displayName": "TraceLab",
+  "description": "Paper-code trace workbench for VS Code workspaces",
+  "version": "0.5.0",
+  "publisher": "tracelab",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:tracelab.sidebar",
+    "workspaceContains:.tracelab"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tracelab",
+          "title": "TraceLab",
+          "icon": "media/tracelab.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "tracelab-panel",
+          "title": "TraceLab",
+          "icon": "media/tracelab.svg"
+        }
+      ]
+    },
+    "views": {
+      "tracelab": [
+        {
+          "type": "webview",
+          "id": "tracelab.sidebar",
+          "name": "工作台"
+        }
+      ],
+      "tracelab-panel": [
+        {
+          "type": "webview",
+          "id": "tracelab.matrix",
+          "name": "追溯矩阵"
+        },
+        {
+          "type": "webview",
+          "id": "tracelab.tensor",
+          "name": "张量流图"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "tracelab.init",
+        "title": "TraceLab: 初始化工作区"
+      },
+      {
+        "command": "tracelab.importPdf",
+        "title": "TraceLab: 导入论文"
+      },
+      {
+        "command": "tracelab.parsePaper",
+        "title": "TraceLab: 解析论文"
+      },
+      {
+        "command": "tracelab.analyzeCode",
+        "title": "TraceLab: 分析代码"
+      },
+      {
+        "command": "tracelab.generateTrace",
+        "title": "TraceLab: 生成追溯"
+      },
+      {
+        "command": "tracelab.openPaper",
+        "title": "TraceLab: 打开论文（Markdown / PDF）"
+      },
+      {
+        "command": "tracelab.openMatrix",
+        "title": "TraceLab: 打开追溯矩阵"
+      },
+      {
+        "command": "tracelab.openTensor",
+        "title": "TraceLab: 打开张量流图"
+      },
+      {
+        "command": "tracelab.configureMineru",
+        "title": "TraceLab: 配置 MinerU"
+      },
+      {
+        "command": "tracelab.configureLlm",
+        "title": "TraceLab: 配置 LLM"
+      },
+      {
+        "command": "tracelab.refresh",
+        "title": "TraceLab: 刷新",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "tracelab.showOutput",
+        "title": "TraceLab: 显示输出"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "tracelab.refresh",
+          "when": "view == tracelab.sidebar",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "TraceLab",
+      "properties": {
+        "tracelab.pythonPath": {
+          "type": "string",
+          "default": "uv",
+          "description": "Python runner used to invoke tracelab CLI (uv or python)."
+        },
+        "tracelab.mineru.provider": {
+          "type": "string",
+          "enum": [
+            "local",
+            "official"
+          ],
+          "default": "official"
+        },
+        "tracelab.mineru.baseUrl": {
+          "type": "string",
+          "default": "https://mineru.net/api/v4"
+        },
+        "tracelab.mineru.model": {
+          "type": "string",
+          "enum": [
+            "vlm",
+            "pipeline"
+          ],
+          "default": "vlm"
+        },
+        "tracelab.mineru.language": {
+          "type": "string",
+          "default": "en"
+        },
+        "tracelab.mineru.requestTimeoutSeconds": {
+          "type": "number",
+          "default": 120
+        },
+        "tracelab.mineru.taskTimeoutSeconds": {
+          "type": "number",
+          "default": 1800
+        },
+        "tracelab.llm.baseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com/v1"
+        },
+        "tracelab.llm.model": {
+          "type": "string",
+          "default": "deepseek-chat"
+        },
+        "tracelab.llm.thinkingMode": {
+          "type": "string",
+          "enum": [
+            "",
+            "enabled",
+            "disabled"
+          ],
+          "default": ""
+        },
+        "tracelab.llm.timeoutSeconds": {
+          "type": "number",
+          "default": 120
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "test": "npm run compile && node --test ../FinalRelease/单元测试代码/vscode-extension/*.test.cjs",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.2"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.12",
+    "katex": "^0.16.47",
+    "markdown-it": "^14.3.0",
+    "pdfjs-dist": "^4.10.38"
+  }
+}

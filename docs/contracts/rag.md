@@ -187,6 +187,12 @@ retrieval works on a fresh install) or `remote` (any OpenAI-compatible `POST {ba
 When `remote` is fully configured and the optional backend `rag` extra is installed, embeddings
 go through LangChain's `OpenAIEmbeddings`; otherwise the httpx client is used.
 
+Local Ollama is a supported remote host: pull an embedding model (e.g. `nomic-embed-text`), set
+`base_url` to `http://127.0.0.1:11434/v1`, `model` to the pulled name, and any non-empty
+`api_key` (Ollama ignores it, but TraceLab requires key+url+model or it silently falls back to
+`local`). Keep `dimensions` at the default `512` so the client omits Matryoshka truncation and
+uses the model-native size (768 for `nomic-embed-text`).
+
 `vector_store` is `sqlite` (exact in-Python cosine scan over `rag_chunk` — the default) or
 `lancedb` (optional LanceDB ANN under `data/rag-lancedb/`). LanceDB requires
 `uv sync --extra rag`; without it, search returns `rag_vector_deps_missing` rather than
