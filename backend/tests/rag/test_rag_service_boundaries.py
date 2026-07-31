@@ -16,7 +16,13 @@ from app.models.entities import (
     RagChunk,
 )
 from app.services.rag import service
-from app.services.rag.embeddings import EmbeddingError, RemoteEmbedder, encode_vector
+from app.services.rag.embeddings import (
+    EmbeddingError,
+    LangChainRemoteEmbedder,
+    RemoteEmbedder,
+    encode_vector,
+    langchain_available,
+)
 
 client = TestClient(app)
 
@@ -103,7 +109,12 @@ def test_resolve_embedder_builds_configured_remote_provider(
     rag_session.commit()
 
     embedder = service.resolve_embedder(rag_session)
-    assert isinstance(embedder, RemoteEmbedder)
+    # Prefer LangChain when the optional ``rag`` extra is installed; otherwise httpx.
+    assert isinstance(embedder, (LangChainRemoteEmbedder, RemoteEmbedder))
+    if langchain_available():
+        assert isinstance(embedder, LangChainRemoteEmbedder)
+    else:
+        assert isinstance(embedder, RemoteEmbedder)
     assert embedder.base_url == "https://embedding.example/v1"
     assert embedder.model == "embedding-model"
     assert embedder.dimensions == expected

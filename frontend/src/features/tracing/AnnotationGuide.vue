@@ -9,13 +9,6 @@
 
     <div class="guide-body">
       <p class="guide-instruction">{{ instruction }}</p>
-
-      <!-- Captured selection, shown back before it is accepted. This is the whole point of the
-           confirm step: the user can see exactly what registered. -->
-      <div v-if="pending" class="guide-preview">
-        <span v-if="pending.detail" class="preview-detail">{{ pending.detail }}</span>
-        <span class="preview-text">{{ pending.preview || '(所选内容为空)' }}</span>
-      </div>
     </div>
 
     <div class="guide-actions">
@@ -41,22 +34,16 @@ const isConfirming = computed(
   () => annotation.step === 'confirm-paper' || annotation.step === 'confirm-code',
 )
 
-const pending = computed(() => {
-  if (annotation.step === 'confirm-paper') return annotation.paperPick
-  if (annotation.step === 'confirm-code') return annotation.codePick
-  return null
-})
-
 const instruction = computed(() => {
   switch (annotation.step) {
     case 'select-paper':
       return '第 1 步：在论文中拖选一段文字（或点击段落、公式、图表）。'
     case 'confirm-paper':
-      return '已捕获这段论文内容，确认无误后进入下一步。'
+      return '已选中论文片段。可继续点选其他条目切换，确认后进入下一步。'
     case 'select-code':
       return '第 2 步：在代码编辑器中拖选需要关联的若干行。'
     case 'confirm-code':
-      return '已捕获这段代码，确认无误后填写关系信息。'
+      return '已选中代码片段。可继续拖选切换，确认后填写关系信息。'
     case 'form':
       return '第 3 步：填写关系类型、置信度与描述。'
     default:
@@ -88,10 +75,10 @@ const rail = computed(() => {
 <style scoped>
 .annotation-guide {
   grid-area: guide;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
-  flex-wrap: wrap;
   padding: 8px 14px;
   border-bottom: 1px solid #d6e4df;
   background: #f2f9f6;
@@ -101,11 +88,13 @@ const rail = computed(() => {
 
 .step-rail {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
+  white-space: nowrap;
 }
 
 .rail-item {
@@ -143,39 +132,13 @@ const rail = computed(() => {
 }
 
 .guide-body {
-  display: flex;
   min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
+  overflow: hidden;
 }
 
 .guide-instruction {
   margin: 0;
-}
-
-.guide-preview {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 8px;
-  padding: 4px 8px;
-  border-left: 3px solid #67c23a;
-  background: #ffffff;
-  border-radius: 3px;
-}
-
-.preview-detail {
-  flex: none;
-  color: #1f8f78;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-}
-
-.preview-text {
   overflow: hidden;
-  color: #55636e;
-  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -185,5 +148,6 @@ const rail = computed(() => {
   flex: none;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 </style>

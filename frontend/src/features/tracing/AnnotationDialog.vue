@@ -8,17 +8,9 @@
     @close="annotation.cancel()"
   >
     <div class="annotation-dialog">
-      <div class="selection-preview">
-        <div class="preview-item">
-          <div class="preview-label">论文</div>
-          <div class="preview-ref">{{ annotation.paperPick?.ref }}</div>
-          <div class="preview-text">{{ annotation.paperPick?.preview }}</div>
-        </div>
-        <div class="preview-item">
-          <div class="preview-label">代码</div>
-          <div class="preview-ref">{{ annotation.codePick?.ref }}</div>
-          <pre class="preview-code">{{ annotation.codePick?.preview }}</pre>
-        </div>
+      <div class="selection-refs">
+        <div><span class="ref-label">论文</span> {{ annotation.paperPick?.ref }}</div>
+        <div><span class="ref-label">代码</span> {{ annotation.codePick?.ref }}</div>
       </div>
 
       <el-form
@@ -146,51 +138,22 @@ async function create(): Promise<void> {
   gap: 18px;
 }
 
-.selection-preview {
+.selection-refs {
   display: grid;
-  gap: 12px;
-  padding: 12px;
+  gap: 6px;
+  padding: 10px 12px;
   border-radius: 4px;
   background: #f5f7fa;
-}
-
-.preview-item {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.preview-label {
-  color: #909399;
-  font-size: 12px;
-}
-
-.preview-ref {
-  color: #1f8f78;
+  color: #55636e;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
-.preview-text {
-  display: -webkit-box;
-  max-height: 66px;
-  overflow: hidden;
-  color: #55636e;
-  font-size: 13px;
-  line-height: 1.5;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-}
-
-.preview-code {
-  max-height: 108px;
-  margin: 0;
-  overflow: auto;
-  color: #55636e;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre;
+.ref-label {
+  margin-right: 6px;
+  color: #1f8f78;
+  font-family: inherit;
+  font-weight: 600;
 }
 </style>

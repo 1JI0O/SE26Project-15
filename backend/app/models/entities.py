@@ -528,6 +528,8 @@ class IntegrationConfig(SQLModel, table=True):
     rag_model: str = Field(default="", max_length=160)
     rag_dimensions: int = Field(default=512, ge=64, le=4096)
     rag_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    # "sqlite" (exact scan, default) | "lancedb" (optional ``rag`` extra).
+    rag_vector_store: str = Field(default="sqlite", max_length=16)
     updated_at: datetime = Field(default_factory=utc_now)
 
 

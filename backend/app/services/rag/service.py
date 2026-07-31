@@ -19,12 +19,11 @@ import logging
 import threading
 from typing import Any
 
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, select
 
 from app.models.entities import (
     CodeRepository,
     PaperDocument,
-    RagChunk,
     RagIndexState,
     TraceLink,
     utc_now,
@@ -33,11 +32,17 @@ from app.services.rag.chunking import code_chunks, paper_chunks, trace_chunks
 from app.services.rag.embeddings import (
     Embedder,
     EmbeddingError,
+    LangChainRemoteEmbedder,
     LocalHashingEmbedder,
     RemoteEmbedder,
-    cosine,
-    decode_vector,
-    encode_vector,
+    langchain_available,
+)
+from app.services.rag.vector_store import (
+    LanceDbStore,
+    SqliteExactStore,
+    VectorStore,
+    VectorStoreError,
+    lancedb_available,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,6 +80,9 @@ def rag_settings(session: Session) -> dict[str, Any]:
     from app.services.integration_settings import get_effective_integration_config
 
     config, _ = get_effective_integration_config(session)
+    vector_store = str(getattr(config, "rag_vector_store", "sqlite") or "sqlite")
+    if vector_store not in {"sqlite", "lancedb"}:
+        vector_store = "sqlite"
     return {
         "enabled": bool(getattr(config, "rag_enabled", True)),
         "embedder": str(getattr(config, "rag_embedder", "local") or "local"),
@@ -83,6 +91,7 @@ def rag_settings(session: Session) -> dict[str, Any]:
         "model": str(getattr(config, "rag_model", "") or ""),
         "dimensions": int(getattr(config, "rag_dimensions", 512) or 512),
         "timeout_seconds": float(getattr(config, "rag_timeout_seconds", 30.0) or 30.0),
+        "vector_store": vector_store,
     }
 
 
@@ -92,6 +101,9 @@ def resolve_embedder(session: Session) -> Embedder:
     A half-configured remote embedder (URL but no key) silently falling back to local is the
     right call here: an unusable index is worse than a lexical one, and the settings dialog
     already surfaces configuration state.
+
+    When ``embedder=remote`` is fully configured, prefer LangChain's OpenAI-compatible client
+    if the optional ``rag`` extra is installed; otherwise keep the httpx :class:`RemoteEmbedder`.
     """
 
     config = rag_settings(session)
@@ -99,14 +111,34 @@ def resolve_embedder(session: Session) -> Embedder:
         raise RagUnavailable("rag_disabled")
     remote_ready = all(config[key] for key in ("base_url", "api_key", "model"))
     if config["embedder"] == "remote" and remote_ready:
+        dimensions = config["dimensions"] if config["dimensions"] != 512 else 0
+        if langchain_available():
+            return LangChainRemoteEmbedder(
+                config["base_url"],
+                config["api_key"],
+                config["model"],
+                config["timeout_seconds"],
+                dimensions,
+            )
         return RemoteEmbedder(
             config["base_url"],
             config["api_key"],
             config["model"],
             config["timeout_seconds"],
-            config["dimensions"] if config["dimensions"] != 512 else 0,
+            dimensions,
         )
     return LocalHashingEmbedder(config["dimensions"])
+
+
+def resolve_vector_store(session: Session) -> VectorStore:
+    """Return the configured vector backend, or raise with a stable reason code."""
+
+    config = rag_settings(session)
+    if config["vector_store"] == "lancedb":
+        if not lancedb_available():
+            raise RagUnavailable("rag_vector_deps_missing")
+        return LanceDbStore()
+    return SqliteExactStore(session)
 
 
 def _latest_paper(session: Session, project_id: int) -> PaperDocument | None:
@@ -193,6 +225,17 @@ def _collect_chunks(scope: str, source: Any) -> list[dict[str, Any]]:
     return trace_chunks(source)
 
 
+def _clear_scope_stores(session: Session, project_id: int, scope: str) -> None:
+    """Drop both backends for a scope so a switch cannot leave a stale generation behind."""
+
+    SqliteExactStore(session).delete_scope(project_id, scope)
+    if lancedb_available():
+        try:
+            LanceDbStore().delete_scope(project_id, scope)
+        except Exception:  # noqa: BLE001 - clearing is best-effort
+            logger.exception("rag lance clear failed for project %s scope %s", project_id, scope)
+
+
 def build_index(
     session: Session,
     project_id: int,
@@ -215,11 +258,7 @@ def build_index(
             # Source not ready (or no reviewed traces yet). Drop any stale generation so a
             # search cannot answer from an index whose source has gone away.
             if state.chunk_count:
-                session.exec(
-                    delete(RagChunk)
-                    .where(RagChunk.project_id == project_id)
-                    .where(RagChunk.scope == scope)
-                )
+                _clear_scope_stores(session, project_id, scope)
                 state.chunk_count = 0
             state.status = "pending"
             state.source_key = ""
@@ -230,6 +269,7 @@ def build_index(
 
         try:
             embedder = resolve_embedder(session)
+            store = resolve_vector_store(session)
         except RagUnavailable as exc:
             return {"scope": scope, "status": "disabled", "chunk_count": 0, "reason": exc.reason}
 
@@ -250,6 +290,12 @@ def build_index(
 
         chunks = _collect_chunks(scope, source)[: MAX_CHUNKS[scope]]
         if not chunks:
+            store.delete_scope(project_id, scope)
+            # Avoid leaving the alternate backend with a previous generation.
+            if settings_snapshot["vector_store"] == "lancedb":
+                SqliteExactStore(session).delete_scope(project_id, scope)
+            elif lancedb_available():
+                LanceDbStore().delete_scope(project_id, scope)
             state.status = "ready"
             state.source_key = source_key
             state.chunk_count = 0
@@ -278,25 +324,35 @@ def build_index(
             logger.warning("rag %s index failed for project %s: %s", scope, project_id, exc.reason)
             return {"scope": scope, "status": "failed", "chunk_count": 0, "reason": exc.reason}
 
-        session.exec(
-            delete(RagChunk).where(RagChunk.project_id == project_id).where(RagChunk.scope == scope)
-        )
-        dimensions = len(vectors[0]) if vectors else 0
-        for chunk, vector in zip(chunks, vectors, strict=True):
-            session.add(
-                RagChunk(
-                    project_id=project_id,
-                    scope=scope,
-                    source_key=source_key,
-                    ref=str(chunk["ref"])[:500],
-                    text=chunk["text"],
-                    embedding=encode_vector(vector),
-                    dimensions=len(vector),
-                    embedder=embedder.name,
-                    token_count=len(chunk["text"]) // 4,
-                    metadata_json=chunk.get("metadata", {}),
-                )
+        rows = [
+            {
+                "ref": chunk["ref"],
+                "text": chunk["text"],
+                "vector": vector,
+                "metadata": chunk.get("metadata", {}),
+                "embedder": embedder.name,
+            }
+            for chunk, vector in zip(chunks, vectors, strict=True)
+        ]
+        try:
+            # LanceDB path must not duplicate embeddings into SQLite; clear the other backend.
+            if settings_snapshot["vector_store"] == "lancedb":
+                SqliteExactStore(session).delete_scope(project_id, scope)
+            elif lancedb_available():
+                LanceDbStore().delete_scope(project_id, scope)
+            store.replace(project_id, scope, source_key, rows)
+        except VectorStoreError as exc:
+            state.status = "failed"
+            state.error = exc.reason[:500]
+            state.updated_at = utc_now()
+            session.add(state)
+            session.commit()
+            logger.warning(
+                "rag %s store failed for project %s: %s", scope, project_id, exc.reason
             )
+            return {"scope": scope, "status": "failed", "chunk_count": 0, "reason": exc.reason}
+
+        dimensions = len(vectors[0]) if vectors else 0
         state.status = "ready"
         state.source_key = source_key
         state.embedder = embedder.name
@@ -334,9 +390,17 @@ def search(
     if not rag_settings(session)["enabled"]:
         return {"ok": False, "reason": "rag_disabled", "items": []}
 
+    try:
+        # Surface configuration/deps failures before treating an empty index as "no corpus".
+        resolve_vector_store(session)
+    except RagUnavailable as exc:
+        return {"ok": False, "reason": exc.reason, "items": []}
+
     state = _state(session, project_id, scope)
     if auto_build and state.status != "ready":
-        build_index(session, project_id, scope)
+        built = build_index(session, project_id, scope)
+        if built.get("reason") and built.get("status") in {"disabled", "failed"}:
+            return {"ok": False, "reason": str(built["reason"]), "items": []}
         state = _state(session, project_id, scope)
     if state.status == "failed":
         return {"ok": False, "reason": state.error or "rag_index_failed", "items": []}
@@ -345,51 +409,19 @@ def search(
 
     try:
         embedder = resolve_embedder(session)
+        store = resolve_vector_store(session)
         query_vector = embedder.embed([query])[0]
-    except (RagUnavailable, EmbeddingError) as exc:
+        items = store.query(project_id, scope, state.source_key, query_vector, limit)
+    except (RagUnavailable, EmbeddingError, VectorStoreError) as exc:
         return {"ok": False, "reason": getattr(exc, "reason", "rag_unavailable"), "items": []}
 
-    rows = list(
-        session.exec(
-            select(RagChunk)
-            .where(RagChunk.project_id == project_id)
-            .where(RagChunk.scope == scope)
-            .where(RagChunk.source_key == state.source_key)
-        ).all()
-    )
-    scored: list[tuple[float, RagChunk]] = []
-    for row in rows:
-        score = cosine(query_vector, decode_vector(row.embedding))
-        if score > 0:
-            scored.append((score, row))
-    scored.sort(key=lambda item: item[0], reverse=True)
-
-    items: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for score, row in scored:
-        # One hit per underlying object: overlapping windows of the same block would
-        # otherwise crowd out every other result.
-        if row.ref in seen:
-            continue
-        seen.add(row.ref)
-        metadata = dict(row.metadata_json or {})
-        items.append(
-            {
-                "ref": row.ref,
-                "score": round(score, 4),
-                "text": str(metadata.get("preview") or row.text)[:1200],
-                **{key: value for key, value in metadata.items() if key != "preview"},
-            }
-        )
-        if len(items) >= max(1, limit):
-            break
     return {
         "ok": True,
         "query": query,
         "scope": scope,
         "embedder": f"{embedder.name}:{embedder.model}",
         "items": items,
-        "searched": len(rows),
+        "searched": state.chunk_count,
     }
 
 
@@ -414,6 +446,7 @@ def index_status(session: Session, project_id: int) -> dict[str, Any]:
         "enabled": config["enabled"],
         "embedder": config["embedder"],
         "model": config["model"] if config["embedder"] == "remote" else "local-hashing",
+        "vector_store": config["vector_store"],
         "scopes": scopes,
     }
 
