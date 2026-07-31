@@ -26,6 +26,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-tracelab}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in server/.env}
       POSTGRES_DB: ${POSTGRES_DB:-tracelab}
+    # The default max_connections=100 (97 usable, 3 superuser-reserved) leaves no room
+    # once the api pool is sized for load. See the connection budget in README.md.
+    command:
+      - postgres
+      - -c
+      - max_connections=200
     volumes:
       - ${TRACELAB_DATA_ROOT:-/srv/tracelab}/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -61,6 +67,18 @@ services:
       - --proxy-headers
       - --forwarded-allow-ips
       - "*"
+    environment:
+      # A YAML merge key does not deep-merge mappings, so this block replaces the
+      # x-server one outright -- the three shared vars must be repeated here.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tracelab}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tracelab}
+      CLOUD_BLOB_ROOT: /srv/tracelab/blobs
+      CLOUD_TMP_ROOT: /srv/tracelab/tmp
+      # Widened past the 5+5 shared default: the stress run exhausted the pool and
+      # returned 500s while PostgreSQL still had capacity. 12+8 per process x 2 workers
+      # = 40 peak, which fits the budget in README.md. Not wider -- postgres is capped
+      # at cpus: 1.0, so more concurrent connections would queue on CPU, not help.
+      DATABASE_POOL_SIZE: "12"
+      DATABASE_MAX_OVERFLOW: "8"
     depends_on:
       migrator:
         condition: service_completed_successfully

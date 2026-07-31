@@ -2,9 +2,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from tracelab_server.admin import web as admin_web
 from tracelab_server.api.routes import (
@@ -35,6 +37,22 @@ app = FastAPI(
     description="Standalone account and local-first synchronization service for TraceLab.",
     lifespan=lifespan,
 )
+@app.exception_handler(PoolTimeout)
+async def _pool_timeout_handler(_request: Request, _exc: PoolTimeout) -> JSONResponse:
+    """Answer 503 when every pooled connection is checked out.
+
+    Under load the pool saturates before PostgreSQL does, because the ASGI threadpool is
+    wider than the pool. Without this the timeout escapes as an unhandled ASGI exception
+    and the client sees an opaque 500 with no signal that retrying would work.
+    """
+
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "The server is at capacity. Retry shortly."},
+        headers={"Retry-After": "5"},
+    )
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

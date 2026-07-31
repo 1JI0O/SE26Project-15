@@ -8,7 +8,14 @@ from pydantic import ValidationError
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models.entities import AgentRun, AgentToolRequest, TraceLink, as_utc, utc_now
+from app.models.entities import (
+    AgentRun,
+    AgentToolRequest,
+    Project,
+    TraceLink,
+    as_utc,
+    utc_now,
+)
 from app.schemas.agent import (
     AgentCitation,
     AgentConfirmationRead,
@@ -39,6 +46,7 @@ from app.services.agent.tools import (
     validate_tool_arguments,
 )
 from app.services.integration_settings import get_effective_integration_config
+from app.services.local_sync import record_local_operation, trace_payload
 from app.services.tracing.manual_anchors import (
     UnresolvableAnchorError,
     build_reference_evidence,
@@ -90,6 +98,32 @@ class ToolExecutionError(RuntimeError):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+def _record_trace_mutation(
+    session: Session,
+    project_id: int,
+    link: TraceLink,
+    *,
+    base_version: int,
+) -> None:
+    """Keep Agent-authored trace writes consistent with the REST trace routes."""
+
+    project = session.get(Project, project_id)
+    if project is None:
+        raise ToolExecutionError("project_not_found")
+    record_local_operation(
+        session,
+        project,
+        "trace_link",
+        link.public_id,
+        trace_payload(project, link, session=session),
+        base_version=base_version,
+    )
+    # Reviewed traces are the precedent corpus. Rebuild lazily on the next search.
+    from app.services.rag import invalidate
+
+    invalidate(session, project_id, "trace")
 
 
 def register_analysis_enqueuer(enqueuer: AnalysisEnqueuer) -> None:
@@ -351,7 +385,14 @@ def _execute_update_trace(
     link.status = arguments.status
     link.decided_at = utc_now()
     link.updated_at = link.decided_at
+    link.version += 1
     session.add(link)
+    _record_trace_mutation(
+        session,
+        request.project_id,
+        link,
+        base_version=link.version - 1,
+    )
     session.commit()
     return {"trace_id": arguments.trace_id, "status": arguments.status}
 
@@ -432,6 +473,8 @@ def _execute_create_trace(
         decided_at=utc_now(),
     )
     session.add(link)
+    session.flush()
+    _record_trace_mutation(session, request.project_id, link, base_version=0)
     session.commit()
     session.refresh(link)
     return {"trace_id": link.trace_id, "status": link.status, "created": True}
@@ -466,6 +509,12 @@ def _execute_update_trace_link(
     link.updated_at = utc_now()
     link.version += 1
     session.add(link)
+    _record_trace_mutation(
+        session,
+        request.project_id,
+        link,
+        base_version=link.version - 1,
+    )
     session.commit()
     session.refresh(link)
     return {
@@ -495,6 +544,12 @@ def _execute_delete_trace_link(
     link.updated_at = utc_now()
     link.version += 1
     session.add(link)
+    _record_trace_mutation(
+        session,
+        request.project_id,
+        link,
+        base_version=link.version - 1,
+    )
     session.commit()
     return {
         "trace_id": link.trace_id,

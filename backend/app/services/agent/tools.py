@@ -6,7 +6,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlmodel import Session, select
 
 from app.models.entities import CodeRepository, PaperDocument, Project, TraceLink
@@ -143,10 +143,23 @@ class UpdateTraceArguments(StrictArguments):
     status: Literal["accepted", "rejected"]
 
 
+TraceRelation = Literal[
+    "implements",
+    "computes",
+    "defines",
+    "constrains",
+    "updates",
+    "configures",
+    "invokes",
+    "tests",
+    "mentions",
+]
+
+
 class CreateTraceArguments(StrictArguments):
     paper_ref: str = Field(min_length=1, max_length=255)
     code_ref: str = Field(min_length=1, max_length=500)
-    relation_type: str = Field(default="implements", min_length=1, max_length=64)
+    relation_type: TraceRelation = "implements"
     confidence: float = Field(ge=0, le=1)
     rationale: str = Field(min_length=1, max_length=4000)
 
@@ -158,7 +171,7 @@ class CreateTraceArguments(StrictArguments):
 
 class UpdateTraceLinkArguments(StrictArguments):
     trace_id: str = Field(min_length=1, max_length=64)
-    relation_type: str | None = Field(default=None, min_length=1, max_length=64)
+    relation_type: TraceRelation | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     rationale: str | None = Field(default=None, min_length=1, max_length=4000)
 
@@ -168,6 +181,16 @@ class UpdateTraceLinkArguments(StrictArguments):
         if value is None or value == "":
             return None
         return normalize_relation_type(value).value
+
+    @model_validator(mode="after")
+    def require_change(self) -> UpdateTraceLinkArguments:
+        if (
+            self.relation_type is None
+            and self.confidence is None
+            and self.rationale is None
+        ):
+            raise ValueError("at_least_one_trace_field_required")
+        return self
 
 
 class DeleteTraceLinkArguments(StrictArguments):

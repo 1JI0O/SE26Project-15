@@ -12,6 +12,7 @@
     "build:desktop": "pnpm build:sidecar && pnpm assets:pdfjs && vue-tsc --noEmit && vite build --mode desktop",
     "desktop:dev": "pnpm build:sidecar && tauri dev",
     "desktop:build": "tauri build --bundles app,dmg",
+    "test:unit": "vitest run",
     "test:system": "playwright test --config=playwright.config.ts",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "vue-tsc --noEmit"
@@ -61,6 +62,7 @@
     "@vitejs/plugin-vue": "^5.1.4",
     "typescript": "^5.6.2",
     "vite": "^5.4.8",
+    "vitest": "^2.1.9",
     "vue-tsc": "^2.1.6"
   }
 }

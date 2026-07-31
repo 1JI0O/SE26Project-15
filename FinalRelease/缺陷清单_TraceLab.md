@@ -4,7 +4,7 @@
 
 | 状态 | P0 | P1 | P2 | P3 | 测试设施 |
 |---|---:|---:|---:|---:|---:|
-| 已关闭 | 0 | 4 | 3 | 1 | 2 |
+| 已关闭 | 0 | 9 | 6 | 1 | 3 |
 | 未关闭 | 0 | 0 | 0 | 0 | 0 |
 
 ## BUG-20260728-001 空白项目名称不显示校验提示
@@ -32,7 +32,7 @@
 - **等级 / 状态**：测试设施 / 已关闭
 - **现象**：Python 3.14 下对完整后端套件插入 coverage 探针时，论文后台任务 5 秒轮询曾偶发拿到非状态响应；单测或无插桩全量运行稳定通过。
 - **处理**：按验收口径只对仓库静态分析子系统执行覆盖率插桩，完整后端另行无插桩回归；CI 使用同样的两道门禁。
-- **结果**：静态分析定向测试 52 条通过、覆盖率 100.00%；RAG 定向测试 74 条通过、覆盖率 100.00%；修复本轮并发读取缺陷后完整后端 306 条通过。
+- **结果**：静态分析定向测试 52 条通过、覆盖率 100.00%；RAG 定向测试 74 条通过、覆盖率 100.00%；当前完整后端正式源 326 条通过。
 - **证据**：单元测试报告/pytest-terminal.txt、单元测试报告/backend-regression-terminal.txt
 
 ## BUG-20260728-003 冲突分析误判换行符差异
@@ -82,7 +82,7 @@
 - **影响**：删除 accepted/rejected 追溯后，`recall_trace_cases` 仍可能从旧 generation 返回已删除先例，误导后续 Agent。
 - **根因**：单条和批量复核会失效 trace 索引，但清理追溯接口删除已复核关系后没有执行同一失效逻辑。
 - **修复**：清理集合包含 accepted/rejected 关系时，将 trace 索引标记为 pending，下一次搜索按当前关系重建。
-- **回归**：定向清理测试通过；完整 backend 306 条通过。
+- **回归**：定向清理测试通过；当前完整 backend 正式源 326 条通过。
 - **证据**：单元测试报告/backend-regression-junit.xml
 
 ## BUG-20260729-003 论文任务状态文件并发读取瞬态 404
@@ -92,7 +92,7 @@
 - **影响**：Windows 上后台线程替换任务 JSON 时，轮询读取可能短暂得到“任务不存在”，客户端收到 404 而不是 queued/running/succeeded/failed。
 - **根因**：任务文件写入由 `_lock` 保护，`get()` 读取没有使用同一把锁。
 - **修复**：读取存在性检查、UTF-8 解码和反序列化全程使用同一锁；增加读取等待写入锁的确定性并发测试。
-- **回归**：论文定向 4 条通过；完整 backend 306 条通过。
+- **回归**：论文定向 4 条通过；当前完整 backend 正式源 326 条通过。
 - **证据**：单元测试报告/backend-regression-junit.xml
 
 ## TEST-20260729-001 浏览器首个冷启动组合等待不足
@@ -102,3 +102,101 @@
 - **处理**：仅对工作台项目数据加载断言设置 20 秒等待，不放宽 HTTP、控制台、布局或功能断言。
 - **结果**：Chrome、Edge、Firefox × 1366x768、1920x1080 完整复测 6 passed。
 - **证据**：系统测试证据/兼容性测试/playwright-junit.xml、playwright-terminal.txt
+
+## BUG-20260730-001 显式默认维度错误回退原始置信度
+
+- **等级 / 状态**：P2 / 已关闭
+- **发现用例**：`backend/tests/agent/test_confidence_boundaries.py`；关联 TC-F-058。
+- **影响**：调用方显式提交六个默认维度时，系统仍按“未提供维度”处理并沿用原始 confidence，导致六维评分结果与用户输入不一致。
+- **根因**：评分逻辑通过维度值是否等于默认值判断字段是否缺省，无法区分“未提交”和“显式提交默认值”。
+- **修复**：使用 Pydantic `model_fields_set` 判断六个维度是否实际出现；仅在全部缺省时采用兼容回退。
+- **回归**：追溯创作与置信度定向测试 20 条通过，188/188 语句覆盖率 100.00%；完整 backend 正式源 326 条通过。
+- **证据**：单元测试报告/trace-authoring-junit.xml、trace-authoring-coverage.xml
+
+## BUG-20260730-002 重复 penalty 被重复扣分
+
+- **等级 / 状态**：P2 / 已关闭
+- **发现用例**：`backend/tests/agent/test_confidence_boundaries.py`；关联 TC-F-058。
+- **影响**：相同 penalty 在输入中重复出现时会多次扣分，使结果低于设计公式并可能错误触发人工复核阈值。
+- **根因**：评分循环直接遍历原列表，没有按 penalty 类型去重。
+- **修复**：按首次出现顺序去重，每类 penalty 最多应用一次，同时保留上下界裁剪。
+- **回归**：评分公式、重复项、未知项和上下界测试通过；追溯创作与置信度范围 100.00%。
+- **证据**：单元测试报告/trace-authoring-junit.xml、trace-authoring-terminal.txt
+
+## BUG-20260730-003 Agent 追溯写操作遗漏同步和索引失效
+
+- **等级 / 状态**：P1 / 已关闭
+- **发现用例**：`backend/tests/agent/test_agent_confirmation.py`；关联 TC-F-057、TC-F-059。
+- **影响**：Agent 创建、修改、删除或变更追溯状态后，云同步 outbox 没有对应操作，RAG 已复核先例索引也可能继续返回旧关系，造成不同设备和 Agent 召回结果不一致。
+- **根因**：Agent 工具直接调用服务层写入路径，没有复用 REST 路由已有的同步记录与索引失效副作用。
+- **修复**：统一 Agent create/update/delete/status 路径的 outbox 记录和 trace 索引失效，并保留人工确认、项目隔离与版本校验。
+- **回归**：Agent CRUD、确认接受/拒绝、跨项目隔离、字段校验和版本测试通过；完整 backend 正式源 326 条通过。
+- **证据**：单元测试报告/backend-regression-junit.xml
+
+## BUG-20260730-004 运行中切换六维开关导致评分口径漂移
+
+- **等级 / 状态**：P1 / 已关闭
+- **发现用例**：`backend/tests/agent/test_deep_thinking_confidence.py`；关联 TC-F-058。
+- **影响**：Agent 任务启动后若项目开关发生变化，提示词、父/子代理评分和最终持久化可能使用不同模式，同一任务结果不可解释也不可复现。
+- **根因**：各阶段执行时重新读取项目设置，没有在任务边界冻结配置快照。
+- **修复**：任务启动时冻结评分模式，并显式传递给父代理、子代理、发布和持久化流程。
+- **回归**：运行快照、父/子代理传递、评分与持久化一致性测试通过；完整 backend 正式源 326 条通过。
+- **证据**：单元测试报告/backend-regression-junit.xml
+
+## BUG-20260730-005 六维设置未跨设备同步
+
+- **等级 / 状态**：P1 / 已关闭
+- **发现用例**：`backend/tests/sync/test_local_sync_modes.py`、`server/tests/integration/test_cloud_auth_sync.py`；关联 TC-F-059。
+- **影响**：项目的 `agent_deep_thinking` 设置只保存在本地，切换设备或执行 bootstrap 后可能恢复默认值，导致同一项目在不同设备采用不同评分模式。
+- **根因**：Desktop 和 Server 的项目同步 schema、payload、冲突应用及数据库模型均未包含该字段。
+- **修复**：补齐 Desktop/Server push、pull、bootstrap、冲突应用、云项目读写以及 Server 0002 迁移。
+- **回归**：本地同步模式和云同步集成测试通过；Server 42 passed、1 skipped，完整 backend 正式源 326 条通过。
+- **证据**：系统测试证据/构建与环境/server-junit.xml、单元测试报告/backend-regression-junit.xml
+
+## BUG-20260730-006 取消标注遗留选择且错误提示不准确
+
+- **等级 / 状态**：P2 / 已关闭
+- **发现用例**：TC-F-056 设计评审与 `backend/tests/tracing/test_annotation_mode.py`；关联 TC-U-007、TC-C-007。
+- **影响**：取消标注后旧的论文/代码选择仍可能带入下一次操作；本地校验异常又可能被统一显示为 API 创建失败，用户难以判断如何恢复。
+- **根因**：对话框关闭路径未完整重置选择状态，校验和网络请求共用同一异常处理分支。
+- **修复**：关闭/取消时清空选择，把本地校验错误与请求错误分开处理并显示对应反馈。
+- **回归**：后端标注锚点测试及前端 typecheck/build 通过；真实浏览器选择、高亮与失败恢复仍由 TC-F-056、TC-U-007、TC-C-007 在冻结 RC 上执行。
+- **证据**：单元测试报告/trace-authoring-junit.xml、系统测试证据/构建与环境/frontend-typecheck.txt
+
+## BUG-20260730-007 引导式标注在提交和跨项目切换时状态串扰
+
+- **等级 / 状态**：P1 / 已关闭
+- **发现用例**：`frontend/src/stores/annotation.spec.ts`；关联 TC-F-056。
+- **影响**：提交期间仍可返回、取消或关闭表单；离开工作台时 Pinia 保留旧项目的步骤和选择，旧请求完成还可能重置新项目刚开始的流程。
+- **根因**：状态转换没有提交锁，工作台卸载没有清理项目级状态，异步完成也没有代际校验。
+- **修复**：提交时锁定导航和关闭控件；工作台卸载执行项目重置；每次启动、取消或切换项目递增 generation，旧请求只允许修改其所属 generation。
+- **回归**：引导式标注状态机单元测试 6 条通过；前端 typecheck/build 通过。真实选区和布局仍由 TC-F-055、TC-F-056、TC-C-007 在冻结 RC 上执行。
+- **证据**：单元测试报告/frontend-guided-annotation-junit.xml
+
+## TEST-20260730-001 FinalRelease 归档副本被 pytest 重复收集
+
+- **等级 / 状态**：测试设施 / 已关闭
+- **现象**：CI 同时从 `backend/tests` 与 `FinalRelease/单元测试代码/trace-authoring` 导入四个同名模块，Linux pytest 报 import file mismatch；Windows 完整回归又将归档副本重复计数，形成虚高的 362 条。
+- **处理**：默认 `testpaths` 只保留正式源 `backend/tests`；静态分析覆盖率命令仅显式运行两份独立交付测试，不递归收集全部归档目录。
+- **结果**：CI 收集冲突消除；当时完整 backend 正式源口径重建为 322 条，归档副本不再重复计数；合入最新 Agent 修复的 4 条测试后，当前正式源为 326 条。
+- **证据**：单元测试报告/backend-regression-junit.xml、`.github/workflows/ci.yml`
+
+## BUG-20260730-008 引导式标注选区边界可能锚定错误内容
+
+- **等级 / 状态**：P1 / 已关闭
+- **发现用例**：`frontend/src/features/tracing/annotation-selection.spec.ts`；关联 TC-F-055、TC-F-056。
+- **影响**：跨论文块拖选可能回退到全文第一个块；代码选区结束在下一行行首时会多包含下一行；从 PDF 视图启动时没有可用选区入口，纯空格描述也可能通过 required 校验。
+- **根因**：论文选区使用共同祖先的模糊 fallback，代码把排他结束偏移直接传给 `lineAt`，引导流程没有约束论文视图，描述规则没有启用空白检查。
+- **修复**：分别解析论文选区起止容器并只接受同一块；按最后一个实际选中字符计算代码结束行；论文选择步骤强制 Markdown 并禁用 PDF 切换；描述拒绝纯空白。
+- **回归**：选区纯函数 4 条和状态机 6 条共 10 条前端单元测试通过；typecheck 与 1893 modules 生产构建通过。
+- **证据**：单元测试报告/frontend-guided-annotation-junit.xml
+
+## BUG-20260730-009 Agent 创建追溯后矩阵列表加载失败
+
+- **等级 / 状态**：P1 / 已关闭
+- **发现用例**：TC-F-057；`backend/tests/agent/test_agent_confirmation.py`。
+- **影响**：用户在 Agent 对话中确认创建追溯后，关系虽已写入数据库，但刷新追溯矩阵时列表接口可能因响应 schema 校验失败返回 500；模型产生关系别名或未知标签时也可能令列表不可读取。
+- **根因**：Agent 工具把 `source`、`confirmation_id` 等来源字段写入要求 `provider`、`name`、`prompt_version` 的 `model_info_json`，且创建准备阶段、执行阶段和读取阶段使用了不一致的锚点与关系类型规则。
+- **修复**：写入合法模型元数据并把来源信息移至 `provenance_json`；创建准备与执行复用真实锚点解析；关系别名及未知模型标签归一化；读取端兼容旧版错误元数据，避免单条坏记录拖垮整个列表。
+- **回归**：Agent 定向测试 13 条通过；完整 backend 正式源 326 条通过，JUnit 无失败。
+- **证据**：单元测试报告/backend-regression-junit.xml、单元测试报告/backend-regression-terminal.txt

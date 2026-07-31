@@ -1,0 +1,15 @@
+# Seeded identities contain live bearer tokens — never commit.
+identities.json
+*.identities.json
+
+.ruff_cache/
+__pycache__/
+
+# Raw run output and monitoring samples.
+results/
+*.csv
+*.svg
+py_spy.log
+
+# uv.lock IS committed: it pins the load generator so runs stay comparable.
+# stress/ is outside CI, so this does not affect the frozen installs there.

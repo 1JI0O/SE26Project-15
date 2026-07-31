@@ -135,6 +135,7 @@ class CloudProject(CloudSQLModel, table=True):
     version: int = Field(default=1, ge=1)
     sync_mode: str = Field(default="cloud_enabled", max_length=24, index=True)
     agent_history_sync: bool = Field(default=True)
+    agent_deep_thinking: bool = Field(default=False)
     deleted_at: datetime | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

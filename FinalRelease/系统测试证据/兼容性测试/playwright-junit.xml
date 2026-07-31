@@ -1,26 +1,26 @@
-<testsuites id="" name="" tests="6" failures="0" skipped="0" errors="0" time="38.38524099999999">
-<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-29T02:53:42.015Z" hostname="chrome-1366x768" tests="1" failures="0" skipped="0" time="10.709" errors="0">
-<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="10.709">
+<testsuites id="" name="" tests="6" failures="0" skipped="0" errors="0" time="50.603892">
+<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-30T09:38:34.376Z" hostname="chrome-1366x768" tests="1" failures="0" skipped="0" time="16.702" errors="0">
+<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="16.702">
 </testcase>
 </testsuite>
-<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-29T02:53:42.015Z" hostname="chrome-1920x1080" tests="1" failures="0" skipped="0" time="1.647" errors="0">
-<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="1.647">
+<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-30T09:38:34.376Z" hostname="chrome-1920x1080" tests="1" failures="0" skipped="0" time="1.674" errors="0">
+<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="1.674">
 </testcase>
 </testsuite>
-<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-29T02:53:42.015Z" hostname="edge-1366x768" tests="1" failures="0" skipped="0" time="1.69" errors="0">
-<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="1.69">
+<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-30T09:38:34.376Z" hostname="edge-1366x768" tests="1" failures="0" skipped="0" time="1.672" errors="0">
+<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="1.672">
 </testcase>
 </testsuite>
-<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-29T02:53:42.015Z" hostname="edge-1920x1080" tests="1" failures="0" skipped="0" time="1.706" errors="0">
-<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="1.706">
+<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-30T09:38:34.376Z" hostname="edge-1920x1080" tests="1" failures="0" skipped="0" time="1.947" errors="0">
+<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="1.947">
 </testcase>
 </testsuite>
-<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-29T02:53:42.015Z" hostname="firefox-1366x768" tests="1" failures="0" skipped="0" time="2.661" errors="0">
-<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="2.661">
+<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-30T09:38:34.376Z" hostname="firefox-1366x768" tests="1" failures="0" skipped="0" time="6.683" errors="0">
+<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="6.683">
 </testcase>
 </testsuite>
-<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-29T02:53:42.015Z" hostname="firefox-1920x1080" tests="1" failures="0" skipped="0" time="2.429" errors="0">
-<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="2.429">
+<testsuite name="browser_compatibility.spec.ts" timestamp="2026-07-30T09:38:34.376Z" hostname="firefox-1920x1080" tests="1" failures="0" skipped="0" time="2.657" errors="0">
+<testcase name="项目基本流、名称备选流与桌面布局兼容性" classname="browser_compatibility.spec.ts" time="2.657">
 </testcase>
 </testsuite>
 </testsuites>

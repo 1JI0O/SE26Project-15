@@ -29,7 +29,7 @@ from app.services.paper_markdown import (
     extract_markdown_sections,
     inject_block_anchors,
 )
-from app.services.paper_parser import parse_pdf
+from app.services.paper_parser import PdfParseError, parse_pdf
 from app.services.workspace_placeholder import workspace_payload
 from app.storage.file_store import save_upload
 
@@ -158,7 +158,13 @@ async def upload_paper(
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
     storage_path = save_upload(project_id, "paper", file)
-    parsed = parse_pdf(storage_path)
+    try:
+        parsed = parse_pdf(storage_path)
+    except PdfParseError as exc:
+        # The extension check above only looks at the filename, so an unreadable or
+        # truncated file first fails here. That is bad client input, not a server fault.
+        Path(storage_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     document = PaperDocument(
         project_id=project_id,
         filename=file.filename,

@@ -32,7 +32,12 @@ logger = logging.getLogger(__name__)
 
 APPEND_ONLY_TYPES = {"agent_message", "agent_run_event"}
 ARTIFACT_TYPES = {"paper_document", "code_repository", "code_edit", "artifact_version"}
-PROJECT_FIELDS = {"name", "description", "agent_history_sync"}
+PROJECT_FIELDS = {
+    "name",
+    "description",
+    "agent_history_sync",
+    "agent_deep_thinking",
+}
 MAX_EVENT_PAYLOAD_BYTES = 64 * 1024
 FORBIDDEN_SYNC_KEYS = {
     "storage_path",
@@ -239,6 +244,7 @@ def _project_snapshot(project: CloudProject) -> dict:
         "description": project.description,
         "sync_mode": project.sync_mode,
         "agent_history_sync": project.agent_history_sync,
+        "agent_deep_thinking": project.agent_deep_thinking,
         "version": project.version,
         "deleted_at": project.deleted_at.isoformat() if project.deleted_at else None,
     }
@@ -426,6 +432,9 @@ def apply_operation(
                     updated_by=identity.user_id,
                     sync_mode="cloud_enabled",
                     agent_history_sync=bool(operation.payload.get("agent_history_sync", True)),
+                    agent_deep_thinking=bool(
+                        operation.payload.get("agent_deep_thinking", False)
+                    ),
                 )
             elif operation.operation == "upsert":
                 for key, value in operation.payload.items():

@@ -673,6 +673,8 @@ def _persist_trace_links(
     job: AgentAnalysisJob,
     artifact: AgentAnalysisArtifact,
     payload: dict[str, Any],
+    *,
+    deep_thinking: bool | None = None,
 ) -> None:
     if job.paper_document_id is None:
         raise ValueError("paper_document_not_found")
@@ -685,7 +687,8 @@ def _persist_trace_links(
                     section_paths[str(block["id"])] = list(block.get("section_path", []))
     # The dimension breakdown is only meaningful when deep thinking produced it; recording
     # placeholder dimensions for a directly-scored run would misrepresent how the number arose.
-    deep_thinking = is_deep_thinking_enabled(session, job.project_id)
+    if deep_thinking is None:
+        deep_thinking = is_deep_thinking_enabled(session, job.project_id)
     prompt_version = "trace-agent-v3" if deep_thinking else "trace-agent-v2"
     score_basis_extra: dict[str, Any] = {}
     for candidate in payload.get("candidates", []):
@@ -817,6 +820,8 @@ def _persist_artifact(
     job: AgentAnalysisJob,
     run: AgentRun,
     payload: dict[str, Any],
+    *,
+    deep_thinking: bool | None = None,
 ) -> AgentAnalysisArtifact:
     repository = session.get(CodeRepository, job.code_repository_id)
     if repository is None or repository.revision != job.code_revision:
@@ -857,7 +862,13 @@ def _persist_artifact(
     session.add(artifact)
     session.flush()
     if job.kind == "trace":
-        _persist_trace_links(session, job, artifact, payload)
+        _persist_trace_links(
+            session,
+            job,
+            artifact,
+            payload,
+            deep_thinking=deep_thinking,
+        )
     job.artifact_id = artifact.artifact_id
     return artifact
 
@@ -867,6 +878,8 @@ def _append_trace_links(
     job: AgentAnalysisJob,
     artifact: AgentAnalysisArtifact,
     payload: dict[str, Any],
+    *,
+    deep_thinking: bool | None = None,
 ) -> None:
     """Append a later publish batch to the run's existing artifact (no new artifact row).
 
@@ -874,7 +887,13 @@ def _append_trace_links(
     accumulates candidates/unresolved so it reflects the whole run.
     """
 
-    _persist_trace_links(session, job, artifact, payload)
+    _persist_trace_links(
+        session,
+        job,
+        artifact,
+        payload,
+        deep_thinking=deep_thinking,
+    )
     merged = dict(artifact.payload_json)
     merged["candidates"] = [*merged.get("candidates", []), *payload.get("candidates", [])]
     merged["unresolved"] = [*merged.get("unresolved", []), *payload.get("unresolved", [])]
@@ -1035,6 +1054,9 @@ def _execute_job(job_id: str) -> None:
             if provider is None:
                 _fail(session, job, run, reason or "agent_not_configured")
                 return
+            # Freeze confidence scoring for the whole run. A settings change affects the next
+            # run, never a publish batch already prompted under the previous contract.
+            deep_thinking = is_deep_thinking_enabled(session, job.project_id)
             # All writes of this run (event rows, publishes, progress updates) are serialized
             # behind one re-entrant lock so parallel sub-agent threads respect SQLite's single
             # writer and the (run_id, sequence) uniqueness the SSE cursor depends on.
@@ -1049,6 +1071,7 @@ def _execute_job(job_id: str) -> None:
                     emitter,
                     persist_artifact=_persist_artifact,
                     append_links=_append_trace_links,
+                    deep_thinking=deep_thinking,
                 )
                 if job.kind == "trace"
                 else None
@@ -1065,7 +1088,6 @@ def _execute_job(job_id: str) -> None:
             emitter.emit("analysis.started", {"job_id": job.job_id, "kind": job.kind})
             soft_target = _trace_soft_target(session, job) if job.kind == "trace" else 40
             precedents = _trace_precedents(session, job) if job.kind == "trace" else ""
-            deep_thinking = is_deep_thinking_enabled(session, job.project_id)
             system_prompt, request = _system_prompt(job, soft_target, precedents, deep_thinking)
             context = {
                 "system_prompt": system_prompt,
@@ -1531,6 +1553,7 @@ def _execute_job(job_id: str) -> None:
                         job.requested_depth,
                         tool_name,
                         step.arguments,
+                        deep_thinking=deep_thinking,
                     )
                 except ValidationError as exc:
                     error = "invalid_tool_arguments"

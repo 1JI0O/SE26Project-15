@@ -67,6 +67,7 @@ class LocalCloudProjectImport(BaseModel):
     description: str = ""
     version: int = Field(ge=1)
     agent_history_sync: bool = True
+    agent_deep_thinking: bool = False
 
 
 class LocalCloudEntityImport(BaseModel):

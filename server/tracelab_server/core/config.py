@@ -8,6 +8,14 @@ class ServerSettings(BaseSettings):
     app_name: str = "TraceLab Sync Server"
     app_env: str = Field(default="development", pattern="^(development|test|staging|production)$")
     database_url: str = "postgresql+psycopg://tracelab:tracelab@postgres:5432/tracelab"
+    # Per-process pool width. The defaults are deliberately small because the worker and
+    # migrator import these settings too; the API service raises them in compose.yaml.
+    # Budget the total against PostgreSQL max_connections -- see server/README.md.
+    database_pool_size: int = Field(default=5, ge=1, le=100)
+    database_max_overflow: int = Field(default=5, ge=0, le=100)
+    # Bounded so an exhausted pool fails fast as a 503 instead of piling up requests
+    # behind SQLAlchemy's 30s default until the client times out first.
+    database_pool_timeout: int = Field(default=10, ge=1, le=120)
     public_origin: str = "http://127.0.0.1:8000"
     account_link_origin: str = "http://127.0.0.1:1420"
     allowed_origins: list[str] | str = Field(default_factory=list)

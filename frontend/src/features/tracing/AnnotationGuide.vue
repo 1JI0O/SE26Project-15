@@ -18,7 +18,14 @@
           {{ annotation.step === 'confirm-paper' ? '确认，下一步选代码' : '确认，填写信息' }}
         </el-button>
       </template>
-      <el-button size="small" text @click="annotation.cancel()">退出标注</el-button>
+      <el-button
+        size="small"
+        text
+        :disabled="annotation.submitting"
+        @click="annotation.cancel()"
+      >
+        退出标注
+      </el-button>
     </div>
   </div>
 </template>
