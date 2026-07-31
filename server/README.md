@@ -31,6 +31,26 @@
 Compose 只发布 Nginx 的 80/443。PostgreSQL、API、Worker 和 Blob 目录均位于私有网络或
 宿主机持久化目录，不发布公网端口。普通启动只执行显式 Alembic migration，不会删除数据。
 
+### 连接池预算
+
+连接池宽度按进程计算，调整时必须和 PostgreSQL `max_connections` 一起算总量，否则瓶颈只是
+从池前移到数据库，表现为直接拒绝连接而不是排队。当前配置：
+
+| 服务 | 池大小 | 进程数 | 峰值连接 |
+| --- | --- | --- | --- |
+| api | 12 + 8 overflow | `--workers 2` | 40 |
+| worker | 5 + 5（共享默认） | 1 | 10 |
+| migrator | 5 + 5（共享默认） | 1（一次性） | 10 |
+| 合计 | | | 约 60 |
+
+`max_connections=200`（其中 3 个保留给超级用户）留出充足余量。改动 `--workers` 或
+`DATABASE_POOL_SIZE` 后要重新核对这张表。
+
+池不是吞吐上限：压力测试中 postgres 容器受 `cpus: 1.0` 限制，把池继续调宽只会让更多连接
+在 CPU 上排队。要提高写入吞吐，先放宽 postgres 的 CPU 配额，并相应调整 `shared_buffers`
+（默认 128 MB，远低于 `mem_limit: 4g`）。池耗尽时 API 返回 503 + `Retry-After`，
+不再是 500。
+
 ## 本地开发与测试
 
 ```sh
