@@ -1,0 +1,143 @@
+# Isolated stress environment for the TraceLab sync server.
+#
+# Deliberately NOT server/compose.yaml: that one binds :80/:443 via nginx and
+# mounts /srv/tracelab. This stack uses high ports, a project-scoped named volume
+# and no proxy, so it cannot collide with a real deployment or another workload.
+#
+# What it DOES preserve from the release config, because these are the limits under
+# test: uvicorn --workers 2, cpus 1.5, mem_limit 3g for the api, and the default
+# SQLAlchemy pool (no pool_size override).
+#
+# Bring up:  docker compose -p tlstress -f compose.stress.yaml up -d
+# Tear down: bash teardown.sh --purge
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+x-server: &server
+  build:
+    context: ../../server
+  environment:
+    APP_ENV: staging
+    DATABASE_URL: postgresql+psycopg://tracelab:stress-local-only@postgres:5432/tracelab
+    CLOUD_BLOB_ROOT: /srv/tracelab/blobs
+    CLOUD_TMP_ROOT: /srv/tracelab/tmp
+    CLOUD_JWT_SECRET: ${TLSTRESS_JWT_SECRET:?set TLSTRESS_JWT_SECRET}
+    CLOUD_SYNC_FEATURE_ENABLED: "true"
+    # Stress accounts are seeded pre-verified; keep the check on so the code path
+    # under test matches production.
+    CLOUD_REQUIRE_EMAIL_VERIFICATION: "true"
+    PUBLIC_ORIGIN: http://127.0.0.1:58000
+  volumes:
+    - blobs:/srv/tracelab/blobs
+    - tmp:/srv/tracelab/tmp
+  logging: *default-logging
+  networks: [private]
+
+services:
+  # The image runs as UID/GID 10001 and server/README.md requires the blob/tmp dirs
+  # to be writable by it. A real deployment bind-mounts host dirs prepared in
+  # advance; named volumes start out root-owned, so fix ownership once up front.
+  volume-init:
+    image: alpine:3.20
+    restart: "no"
+    command: ["sh", "-c", "chown -R 10001:10001 /srv/tracelab/blobs /srv/tracelab/tmp"]
+    volumes:
+      - blobs:/srv/tracelab/blobs
+      - tmp:/srv/tracelab/tmp
+    logging: *default-logging
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tracelab
+      POSTGRES_PASSWORD: stress-local-only
+      POSTGRES_DB: tracelab
+    # pg_stat_statements powers the slow-query probe in monitoring/pg_probes.sql.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.max=10000
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - max_connections=200
+    ports:
+      # Exposed because seed_server.py runs on the host.
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tracelab -d tracelab"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 4g
+    cpus: 2.0
+    logging: *default-logging
+    networks: [private]
+
+  migrator:
+    <<: *server
+    restart: "no"
+    command: ["python", "-m", "tracelab_server.cli", "migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      volume-init:
+        condition: service_completed_successfully
+
+  api:
+    <<: *server
+    restart: unless-stopped
+    command:
+      - uvicorn
+      - tracelab_server.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "2"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    ports:
+      - "127.0.0.1:58000:8000"
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Same limits as the release config: this is the capacity under test.
+    mem_limit: 3g
+    cpus: 1.5
+
+  worker:
+    <<: *server
+    restart: unless-stopped
+    command: ["python", "-m", "tracelab_server.worker"]
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+    mem_limit: 1g
+    cpus: 0.75
+
+volumes:
+  pgdata:
+  blobs:
+  tmp:
+
+networks:
+  # Not internal: published ports must reach the host, and the image build needs
+  # egress. Exposure is limited by binding every port to 127.0.0.1 above.
+  private: {}
