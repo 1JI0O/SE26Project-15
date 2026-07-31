@@ -1,6 +1,8 @@
 # TraceLab 压力测试报告
 
-对应方案：`docs/stress-test-plan.md`。执行环境为一次性隔离环境，全部端口仅绑定 127.0.0.1，未接触生产或共享环境。
+对应方案：[`stress-test-plan.md`](stress-test-plan.md)。面向汇报的概要见 [`stress-test-summary.md`](stress-test-summary.md)；本文为完整执行记录与原始证据。
+
+执行环境为一次性隔离环境，全部端口仅绑定 127.0.0.1，未接触生产或共享环境。
 
 ## 1. 执行范围
 
