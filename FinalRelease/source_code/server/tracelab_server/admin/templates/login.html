@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TraceLab 管理员登录</title>
+    <link rel="stylesheet" href="/admin-console/static/admin.css" />
+  </head>
+  <body class="login-page">
+    <main class="login-card">
+      <div class="brand">TraceLab</div>
+      <h1>服务器管理</h1>
+      <p class="muted">仅限通过 CLI 创建的平台管理员。</p>
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+      <form method="post" action="/admin-console/login">
+        <label>邮箱<input name="email" type="email" autocomplete="username" required /></label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit">登录</button>
+      </form>
+    </main>
+  </body>
+</html>
