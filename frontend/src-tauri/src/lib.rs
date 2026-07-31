@@ -15,10 +15,15 @@ struct BackendProcess(Mutex<Option<Child>>);
 
 const CLOUD_CREDENTIAL_SERVICE: &str = "com.se26project.tracelab.cloud";
 const CLOUD_CREDENTIAL_USER: &str = "refresh-token";
+const CLOUD_DEVICE_USER: &str = "device-id";
+const CLOUD_LAST_USER: &str = "last-user-id";
+
+fn cloud_credential_entry(user: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(CLOUD_CREDENTIAL_SERVICE, user).map_err(|error| error.to_string())
+}
 
 fn cloud_credential() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(CLOUD_CREDENTIAL_SERVICE, CLOUD_CREDENTIAL_USER)
-        .map_err(|error| error.to_string())
+    cloud_credential_entry(CLOUD_CREDENTIAL_USER)
 }
 
 #[tauri::command]
@@ -41,6 +46,38 @@ fn load_cloud_refresh_token() -> Result<Option<String>, String> {
 fn delete_cloud_refresh_token() -> Result<(), String> {
     match cloud_credential()?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn store_cloud_device_id(device_id: String) -> Result<(), String> {
+    cloud_credential_entry(CLOUD_DEVICE_USER)?
+        .set_password(&device_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn load_cloud_device_id() -> Result<Option<String>, String> {
+    match cloud_credential_entry(CLOUD_DEVICE_USER)?.get_password() {
+        Ok(device_id) => Ok(Some(device_id)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn store_cloud_last_user_id(user_id: String) -> Result<(), String> {
+    cloud_credential_entry(CLOUD_LAST_USER)?
+        .set_password(&user_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn load_cloud_last_user_id() -> Result<Option<String>, String> {
+    match cloud_credential_entry(CLOUD_LAST_USER)?.get_password() {
+        Ok(user_id) => Ok(Some(user_id)),
+        Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -85,7 +122,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             store_cloud_refresh_token,
             load_cloud_refresh_token,
-            delete_cloud_refresh_token
+            delete_cloud_refresh_token,
+            store_cloud_device_id,
+            load_cloud_device_id,
+            store_cloud_last_user_id,
+            load_cloud_last_user_id
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

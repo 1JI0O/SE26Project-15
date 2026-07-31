@@ -93,7 +93,19 @@ export const useSyncStore = defineStore('cloud-sync', {
         this.cloudProjects = []
       }
     },
-    projectStatus(project: { public_id: string; sync_mode: string }): 'local' | 'syncing' | 'pending' | 'synced' {
+    projectStatus(project: {
+      public_id: string
+      sync_mode: string
+      cloud_workspace_id?: string | null
+    }): 'local' | 'syncing' | 'pending' | 'synced' {
+      const auth = useAuthStore()
+      if (
+        !auth.workspace ||
+        (project.cloud_workspace_id &&
+          project.cloud_workspace_id !== auth.workspace.workspace_id)
+      ) {
+        return 'local'
+      }
       if (project.sync_mode === 'local_only' || project.sync_mode === 'cloud_detached') {
         return 'local'
       }

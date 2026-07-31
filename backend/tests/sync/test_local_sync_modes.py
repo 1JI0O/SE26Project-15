@@ -132,6 +132,82 @@ def test_remote_project_metadata_does_not_resume_paused_desktop() -> None:
     assert persisted["agent_deep_thinking"] is True
 
 
+def test_rebind_device_updates_state_and_pending_outbox() -> None:
+    workspace_id = "61616161-6161-4616-8616-616161616161"
+    old_device = "62626262-6262-4626-8626-626262626262"
+    new_device = "63636363-6363-4636-8636-636363636363"
+    with TestClient(app) as client:
+        project = client.post("/api/v1/projects", json={"name": "rebind me"}).json()
+        client.post(
+            f"/api/v1/projects/{project['id']}/sync/enable",
+            json={"workspace_id": workspace_id, "device_id": old_device},
+        )
+        before = client.get(
+            "/api/v1/local-sync/outbox", params={"workspace_id": workspace_id}
+        ).json()["operations"]
+        assert before and before[0]["device_id"] == old_device
+        adopted = client.post(
+            "/api/v1/local-sync/device/adopt",
+            json={"workspace_id": workspace_id, "device_id": new_device},
+        )
+        state = client.get(
+            "/api/v1/local-sync/state", params={"workspace_id": workspace_id}
+        ).json()
+        after = client.get(
+            "/api/v1/local-sync/outbox", params={"workspace_id": workspace_id}
+        ).json()["operations"]
+        # Enable after adopt must not 409 on device mismatch.
+        client.patch(
+            f"/api/v1/projects/{project['id']}/sync", json={"sync_mode": "local_only"}
+        )
+        enabled = client.post(
+            f"/api/v1/projects/{project['id']}/sync/enable",
+            json={"workspace_id": workspace_id, "device_id": new_device},
+        )
+
+    assert adopted.status_code == 200
+    assert adopted.json()["changed"] is True
+    assert state["device_id"] == new_device
+    assert after and after[0]["device_id"] == new_device
+    assert enabled.status_code == 200
+
+
+def test_clear_cloud_bindings_detaches_all_without_deleting_local_projects() -> None:
+    workspace_id = "51515151-5151-4515-8515-515151515151"
+    device_id = "52525252-5252-4525-8525-525252525252"
+    with TestClient(app) as client:
+        enabled = client.post("/api/v1/projects", json={"name": "bound enabled"}).json()
+        paused = client.post("/api/v1/projects", json={"name": "bound paused"}).json()
+        local_only = client.post("/api/v1/projects", json={"name": "never cloud"}).json()
+        client.post(
+            f"/api/v1/projects/{enabled['id']}/sync/enable",
+            json={"workspace_id": workspace_id, "device_id": device_id},
+        )
+        client.post(
+            f"/api/v1/projects/{paused['id']}/sync/enable",
+            json={"workspace_id": workspace_id, "device_id": device_id},
+        )
+        client.patch(
+            f"/api/v1/projects/{paused['id']}/sync", json={"sync_mode": "cloud_paused"}
+        )
+        cleared = client.post("/api/v1/local-sync/clear-cloud-bindings")
+        enabled_after = client.get(f"/api/v1/projects/{enabled['id']}").json()
+        paused_after = client.get(f"/api/v1/projects/{paused['id']}").json()
+        local_after = client.get(f"/api/v1/projects/{local_only['id']}").json()
+        pending = client.get(
+            "/api/v1/local-sync/outbox", params={"workspace_id": workspace_id}
+        ).json()["operations"]
+
+    assert cleared.status_code == 200
+    assert cleared.json()["cleared"] == 2
+    assert enabled_after["sync_mode"] == "local_only"
+    assert enabled_after.get("cloud_workspace_id") in (None, "")
+    assert enabled_after["name"] == "bound enabled"
+    assert paused_after["sync_mode"] == "local_only"
+    assert local_after["sync_mode"] == "local_only"
+    assert pending == []
+
+
 def test_detach_restores_local_only_without_deleting_local_project() -> None:
     workspace_id = "55555555-5555-4555-8555-555555555555"
     device_id = "56565656-5656-4565-8565-565656565656"

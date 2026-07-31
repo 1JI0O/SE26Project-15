@@ -1268,6 +1268,51 @@ def enable_project_sync(
     return {"public_id": project.public_id, "sync_mode": project.sync_mode}
 
 
+def _suppress_pending_outbox_for_project(session: Session, project: Project) -> None:
+    if not project.cloud_workspace_id:
+        return
+    pending = session.exec(
+        select(LocalSyncOutbox).where(
+            LocalSyncOutbox.workspace_id == project.cloud_workspace_id,
+            LocalSyncOutbox.status == "pending",
+        )
+    ).all()
+    for operation in pending:
+        belongs_to_project = (
+            operation.entity_public_id == project.public_id
+            if operation.entity_type == "project"
+            else operation.payload_json.get("project_public_id") == project.public_id
+        )
+        if belongs_to_project:
+            operation.status = "suppressed"
+            session.add(operation)
+
+
+def _detach_local_cloud_binding(session: Session, project: Project) -> None:
+    """Keep local content; drop cloud binding so another account cannot sync it."""
+    _suppress_pending_outbox_for_project(session, project)
+    project.sync_mode = "local_only"
+    project.cloud_workspace_id = None
+    session.add(project)
+
+
+@router.post("/local-sync/clear-cloud-bindings")
+def clear_cloud_bindings(session: Session = Depends(get_session)) -> dict:
+    """Detach every cloud-bound local project (used on account switch).
+
+    Local rows and files stay; only sync_mode / cloud_workspace_id and pending
+    outbox entries are cleared so the next account cannot push/pull under a
+    stale foreign-workspace binding.
+    """
+    cleared = 0
+    for project in session.exec(select(Project)).all():
+        if project.sync_mode in {"cloud_enabled", "cloud_paused"} or project.cloud_workspace_id:
+            _detach_local_cloud_binding(session, project)
+            cleared += 1
+    session.commit()
+    return {"cleared": cleared}
+
+
 @router.patch("/projects/{project_id}/sync")
 def patch_project_sync(
     project_id: int,
@@ -1279,27 +1324,10 @@ def patch_project_sync(
         raise HTTPException(status_code=409, detail="Project has no cloud binding")
     # Pausing is device-local. It must never mutate the cloud project's global state.
     if payload.sync_mode in {"cloud_detached", "local_only"}:
-        if project.cloud_workspace_id:
-            pending = session.exec(
-                select(LocalSyncOutbox).where(
-                    LocalSyncOutbox.workspace_id == project.cloud_workspace_id,
-                    LocalSyncOutbox.status == "pending",
-                )
-            ).all()
-            for operation in pending:
-                belongs_to_project = (
-                    operation.entity_public_id == project.public_id
-                    if operation.entity_type == "project"
-                    else operation.payload_json.get("project_public_id") == project.public_id
-                )
-                if belongs_to_project:
-                    operation.status = "suppressed"
-                    session.add(operation)
-        project.sync_mode = "local_only"
-        project.cloud_workspace_id = None
+        _detach_local_cloud_binding(session, project)
     else:
         project.sync_mode = payload.sync_mode
-    session.add(project)
+        session.add(project)
     session.commit()
     return {"public_id": project.public_id, "sync_mode": project.sync_mode}
 

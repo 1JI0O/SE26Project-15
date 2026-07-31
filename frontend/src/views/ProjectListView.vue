@@ -119,7 +119,7 @@
                 <template v-else-if="row.local">
                   <template v-if="cloudSync">
                     <el-button
-                      v-if="row.local.sync_mode === 'local_only'"
+                      v-if="sync.projectStatus(row.local) === 'local'"
                       size="small"
                       text
                       @click.stop="openSyncDialog(row.local.id)"
@@ -133,7 +133,7 @@
                       @click.stop="syncNow(row.local.public_id)"
                     >同步</el-button>
                     <el-dropdown
-                      v-if="managing && ['cloud_enabled', 'cloud_paused', 'cloud_detached'].includes(row.local.sync_mode)"
+                      v-if="managing && sync.projectStatus(row.local) !== 'local' && ['cloud_enabled', 'cloud_paused', 'cloud_detached'].includes(row.local.sync_mode)"
                       trigger="click"
                       @command="(cmd: string) => onSyncCommand(row.local!.id, row.local!.sync_mode, cmd)"
                     >
