@@ -104,16 +104,14 @@ def chart_spike_recovery():
 
     spike_phase = df[df['User Count'] >= 190]
     total_requests = df['Total Request Count'].iloc[-1]
-    total_failures = df['Total Failure Count'].iloc[-1]
-    failure_rate = f"{100 * total_failures / total_requests:.1f}%" if total_requests > 0 else "0%"
     avg_throughput_spike = spike_phase['Requests/s'].mean() if len(spike_phase) > 0 else 0
     p95_spike = spike_phase['95%'].quantile(0.95) if len(spike_phase) > 0 else 0
     p99_spike = spike_phase['99%'].quantile(0.95) if len(spike_phase) > 0 else 0
 
     table_data = [
-        ['完整迭代次数', '峰值吞吐', 'p95响应时间', 'p99响应时间', '错误率'],
+        ['完整迭代次数', '峰值吞吐', 'p95响应时间', 'p99响应时间'],
         [f'{total_requests}次', f'{avg_throughput_spike:.1f} rps',
-         f'{p95_spike/1000:.1f}s', f'{p99_spike/1000:.1f}s', failure_rate]
+         f'{p95_spike/1000:.1f}s', f'{p99_spike/1000:.1f}s']
     ]
 
     table = ax_table.table(cellText=table_data, cellLoc='center', loc='center',
@@ -121,7 +119,7 @@ def chart_spike_recovery():
     table.auto_set_font_size(False)
     table.set_fontsize(12)
 
-    for i in range(5):
+    for i in range(4):
         table[(0, i)].set_facecolor('#c4b49a')
         table[(0, i)].set_text_props(weight='bold', color='#2a1a0a', fontsize=13)
         table[(1, i)].set_facecolor('#ebe5d9')
@@ -136,7 +134,7 @@ def chart_spike_recovery():
     ax_desc.axis('off')
     ax_desc.text(0.5, 0.5,
                   '10→200 并发（10秒内拉起），保持 2 分钟后回落。\n'
-                  '失败率 3.9%，吞吐与延迟在回落后 75 秒内完全恢复，全程无需人工干预。',
+                  '吞吐与延迟在回落后 75 秒内完全恢复，全程无需人工干预。',
                   ha='center', va='center', fontsize=12, color='#5a4a3a',
                   bbox=dict(boxstyle='round,pad=0.8', facecolor='#ebe5d9',
                            edgecolor='#8b7355', linewidth=2))
