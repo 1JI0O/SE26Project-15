@@ -244,6 +244,9 @@ class LangChainRemoteEmbedder:
             "base_url": self.base_url,
             "request_timeout": timeout_seconds,
             "chunk_size": REMOTE_BATCH_SIZE,
+            # Ollama and other non-OpenAI hosts expect raw strings; tiktoken pre-tokenization
+            # produces integer token batches that they reject with "invalid input type".
+            "check_embedding_ctx_length": False,
         }
         if dimensions:
             kwargs["dimensions"] = dimensions
