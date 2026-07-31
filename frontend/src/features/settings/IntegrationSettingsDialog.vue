@@ -255,6 +255,17 @@
               </el-radio-group>
             </el-form-item>
 
+            <el-form-item label="向量存储">
+              <el-radio-group v-model="form.rag.vector_store">
+                <el-radio-button value="sqlite">SQLite 精确扫描</el-radio-button>
+                <el-radio-button value="lancedb">LanceDB</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <p v-if="form.rag.vector_store === 'lancedb'" class="probe-hint">
+              LanceDB 需要可选依赖
+              <code>uv sync --extra rag</code>（Web 开发）或已带 rag 的 Desktop sidecar。未安装时检索会回退提示，不影响追溯与对话。
+            </p>
+
             <p v-if="form.rag.embedder === 'local'" class="probe-hint">
               本地方式无需密钥与网络，按标识符切分与中文 n-gram 做词法级向量化，
               对长论文的定位已有明显帮助；需要真正的语义改写匹配时再切换到远程 API。
@@ -317,7 +328,7 @@
               :closable="false"
               show-icon
               title="保存后需要重建索引"
-              description="嵌入方式、模型或维度变化会让已存向量不可比较，各项目的论文/代码/追溯索引将标记为待重建，并在下次检索时自动重建。"
+              description="嵌入方式、模型、维度或向量存储变化会让已存向量不可比较，各项目的论文/代码/追溯索引将标记为待重建，并在下次检索时自动重建。"
             />
             <span v-else class="probe-hint">
               索引由解析、代码分析与追溯复核自动维护，无需手动操作。
@@ -448,7 +459,8 @@ const ragKeyPlaceholder = computed(() => {
 
 /**
  * True when saving would invalidate stored vectors. Mirrors the backend rule exactly
- * (embedder / model / dimensions), so the warning never appears for a harmless edit.
+ * (embedder / model / dimensions / vector_store), so the warning never appears for a
+ * harmless edit.
  */
 const ragRebuildNotice = computed(() => {
   if (!form.value || !settings.value) return false
@@ -457,7 +469,8 @@ const ragRebuildNotice = computed(() => {
   return (
     next.embedder !== previous.embedder ||
     next.model !== previous.model ||
-    next.dimensions !== previous.dimensions
+    next.dimensions !== previous.dimensions ||
+    next.vector_store !== previous.vector_store
   )
 })
 
@@ -625,6 +638,7 @@ async function saveSettings() {
       model: form.value.rag.model,
       dimensions: form.value.rag.dimensions,
       timeout_seconds: form.value.rag.timeout_seconds,
+      vector_store: form.value.rag.vector_store ?? 'sqlite',
       clear_api_key: clearRagKey.value,
       ...(ragApiKey.value ? { api_key: ragApiKey.value } : {}),
     },

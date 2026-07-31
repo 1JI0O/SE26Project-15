@@ -66,6 +66,12 @@ def _environment_defaults() -> IntegrationConfig:
         rag_model=os.getenv("TRACELAB_RAG_MODEL", ""),
         rag_dimensions=int(os.getenv("TRACELAB_RAG_DIMENSIONS", "512")),
         rag_timeout_seconds=float(os.getenv("TRACELAB_RAG_TIMEOUT", "30")),
+        rag_vector_store=(
+            os.getenv("TRACELAB_RAG_VECTOR_STORE", "sqlite").strip().lower()
+            if os.getenv("TRACELAB_RAG_VECTOR_STORE", "sqlite").strip().lower()
+            in {"sqlite", "lancedb"}
+            else "sqlite"
+        ),
     )
 
 
@@ -115,6 +121,11 @@ def integration_config_to_read(config: IntegrationConfig, source: str) -> Integr
             dimensions=config.rag_dimensions,
             timeout_seconds=config.rag_timeout_seconds,
             api_key_configured=bool(config.rag_api_key),
+            vector_store=(
+                config.rag_vector_store
+                if getattr(config, "rag_vector_store", "sqlite") in {"sqlite", "lancedb"}
+                else "sqlite"
+            ),
         ),
         source=source,
         updated_at=config.updated_at if source == "application" else None,
@@ -157,20 +168,32 @@ def save_integration_config(
             payload.mineru.official_api_token.get_secret_value().strip()
         )
     if payload.rag is not None:
-        previous_signature = (config.rag_embedder, config.rag_model, config.rag_dimensions)
+        previous_signature = (
+            config.rag_embedder,
+            config.rag_model,
+            config.rag_dimensions,
+            getattr(config, "rag_vector_store", "sqlite"),
+        )
         config.rag_enabled = payload.rag.enabled
         config.rag_embedder = payload.rag.embedder
         config.rag_base_url = payload.rag.base_url
         config.rag_model = payload.rag.model.strip()
         config.rag_dimensions = payload.rag.dimensions
         config.rag_timeout_seconds = payload.rag.timeout_seconds
+        config.rag_vector_store = payload.rag.vector_store
         if payload.rag.clear_api_key:
             config.rag_api_key = ""
         elif payload.rag.api_key is not None:
             config.rag_api_key = payload.rag.api_key.get_secret_value().strip()
-        if (config.rag_embedder, config.rag_model, config.rag_dimensions) != previous_signature:
-            # Vectors from a different embedder or dimension are not comparable with new
-            # queries, so every stored index must be rebuilt rather than silently mixed.
+        next_signature = (
+            config.rag_embedder,
+            config.rag_model,
+            config.rag_dimensions,
+            config.rag_vector_store,
+        )
+        if next_signature != previous_signature:
+            # Vectors from a different embedder, dimension, or store backend are not
+            # comparable with new queries, so every stored index must be rebuilt.
             _invalidate_all_rag_indexes(session)
 
     config.updated_at = utc_now()

@@ -27,6 +27,7 @@ LOCAL_REVISIONS = (
     "0012_trace_link_repair",
     "0013_rag_index",
     "0014_project_deep_thinking",
+    "0015_rag_vector_store",
 )
 
 
@@ -166,6 +167,16 @@ def _detect_local_revision(engine: Engine, tables: set[str]) -> str:
         and _has_columns(inspector, "integration_config", {"rag_enabled", "rag_embedder"})
     ):
         detected = LOCAL_REVISIONS[12]
+    else:
+        return detected
+    # 0014 added the per-project deep-thinking toggle.
+    if _has_columns(inspector, "project", {"agent_deep_thinking"}):
+        detected = LOCAL_REVISIONS[13]
+    else:
+        return detected
+    # 0015 added the optional LanceDB vector-store selector.
+    if _has_columns(inspector, "integration_config", {"rag_vector_store"}):
+        detected = LOCAL_REVISIONS[14]
     return detected
 
 
@@ -344,7 +355,10 @@ def _run_sqlite_compatibility_upgrade(engine: Engine, metadata: Any) -> None:
         _add_missing_columns(
             engine,
             "integration_config",
-            {"agent_analysis_model": "VARCHAR(160) NOT NULL DEFAULT ''"},
+            {
+                "agent_analysis_model": "VARCHAR(160) NOT NULL DEFAULT ''",
+                "rag_vector_store": "VARCHAR(16) NOT NULL DEFAULT 'sqlite'",
+            },
         )
     if "agent_tool_request" in tables:
         _add_missing_columns(

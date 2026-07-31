@@ -84,6 +84,7 @@ class RagIntegrationRead(BaseModel):
     dimensions: int
     timeout_seconds: float
     api_key_configured: bool
+    vector_store: Literal["sqlite", "lancedb"] = "sqlite"
 
 
 class RagIntegrationUpdate(BaseModel):
@@ -97,6 +98,7 @@ class RagIntegrationUpdate(BaseModel):
     model: str = Field(default="", max_length=160)
     dimensions: int = Field(default=512, ge=64, le=4096)
     timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    vector_store: Literal["sqlite", "lancedb"] = "sqlite"
 
     _normalize_url = field_validator("base_url")(_validate_http_url)
 

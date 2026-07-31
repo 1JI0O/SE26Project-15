@@ -6,9 +6,10 @@
 - `paper_document`：论文文件与解析 JSON。
 - `code_repository`：代码包与静态分析 JSON。
 - `trace_link`：论文片段与代码对象的追溯关系。
-- `rag_chunk` / `rag_index_state`：语义检索的派生数据（迁移 `0013_rag_index`）。每行都可由论文、
-  代码或已复核追溯关系重建，按 `scope` + `source_key` 整代替换；向量以 base64 float32 存于 TEXT 列，
-  检索为精确余弦全扫描。详见 [语义检索契约](contracts/rag.md)。
+- `rag_chunk` / `rag_index_state`：语义检索的派生数据（迁移 `0013_rag_index`；`rag_vector_store`
+  列见 `0015_rag_vector_store`）。每行都可由论文、代码或已复核追溯关系重建，按 `scope` +
+  `source_key` 整代替换；默认向量以 base64 float32 存于 TEXT 列并精确余弦扫描，可选 LanceDB
+  时向量只落在 `data/rag-lancedb/`。详见 [语义检索契约](contracts/rag.md)。
 
 当前运行时的完整实体与迁移链以 `backend/app/models/entities.py` 和
 `backend/app/db/migrations/versions/` 为准；`database/schema.sql` 仅保留早期基础表快照。

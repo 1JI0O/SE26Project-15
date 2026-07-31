@@ -30,6 +30,7 @@ export interface MinerUIntegrationSettings {
 }
 
 export type RagEmbedder = 'local' | 'remote'
+export type RagVectorStore = 'sqlite' | 'lancedb'
 
 export interface RagIntegrationSettings {
   enabled: boolean
@@ -40,6 +41,8 @@ export interface RagIntegrationSettings {
   dimensions: number
   timeout_seconds: number
   api_key_configured: boolean
+  /** `sqlite` exact scan (default); `lancedb` needs `uv sync --extra rag`. */
+  vector_store: RagVectorStore
 }
 
 export interface IntegrationSettings {

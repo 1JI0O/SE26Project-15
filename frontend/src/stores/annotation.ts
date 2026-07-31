@@ -7,11 +7,9 @@ import type { TraceRelationType } from '@/types/tracing'
 /**
  * Guided steps for adding one trace relation by hand.
  *
- * The flow is an explicit state machine rather than "pick either side in any order" because
- * the free-form version gave no answer to the only question that matters mid-task — *did my
- * selection register?* Each pick now lands in a `*-confirm` step that shows the captured
- * preview and forces an explicit accept, so the current step alone tells the user what to do
- * next and what the tool believes they selected.
+ * Each side has a select/confirm pair so the user explicitly advances, but the pane stays
+ * pickable through confirm: clicking another paper/code target replaces the pending pick
+ * without exiting the flow.
  */
 export type AnnotationStep =
   | 'idle'
@@ -23,7 +21,7 @@ export type AnnotationStep =
 
 export interface AnnotationPick {
   ref: string
-  /** Human-readable excerpt of the captured selection, shown back before confirming. */
+  /** Human-readable excerpt kept for the submit dialog summary. */
   preview: string
   /** Extra context for the code side (path plus line range). */
   detail?: string
@@ -38,9 +36,13 @@ export const useAnnotationStore = defineStore('annotation', () => {
 
   /** True whenever the guided flow owns the panes (selection handlers, cursors, overlays). */
   const active = computed(() => step.value !== 'idle')
-  /** The paper pane accepts picks only while its own step is current. */
-  const pickingPaper = computed(() => step.value === 'select-paper')
-  const pickingCode = computed(() => step.value === 'select-code')
+  /** Paper pane accepts picks while selecting or confirming (so the user can switch). */
+  const pickingPaper = computed(
+    () => step.value === 'select-paper' || step.value === 'confirm-paper',
+  )
+  const pickingCode = computed(
+    () => step.value === 'select-code' || step.value === 'confirm-code',
+  )
   /** Keep a confirmed pick highlighted for the rest of the flow. */
   const paperConfirmed = computed(
     () => paperPick.value !== null && step.value !== 'select-paper' && step.value !== 'confirm-paper',
@@ -84,14 +86,15 @@ export const useAnnotationStore = defineStore('annotation', () => {
 
   function pickPaper(pick: AnnotationPick): void {
     if (submitting.value) return
-    if (step.value !== 'select-paper') return
+    // Stay pickable through confirm so the user can switch before advancing.
+    if (step.value !== 'select-paper' && step.value !== 'confirm-paper') return
     paperPick.value = pick
     step.value = 'confirm-paper'
   }
 
   function pickCode(pick: AnnotationPick): void {
     if (submitting.value) return
-    if (step.value !== 'select-code') return
+    if (step.value !== 'select-code' && step.value !== 'confirm-code') return
     codePick.value = pick
     step.value = 'confirm-code'
   }

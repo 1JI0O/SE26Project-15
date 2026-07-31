@@ -1390,6 +1390,9 @@ _SEMANTIC_HINTS = {
     "rag_index_empty": "Nothing is indexed for this scope yet. Use the paging and text search "
     "tools instead.",
     "rag_empty_query": "Send a non-empty natural-language description of what you are looking for.",
+    "rag_vector_deps_missing": "LanceDB retrieval needs the optional backend `rag` extra "
+    "(uv sync --extra rag). Use the paging and text search tools instead, or switch the "
+    "vector store back to SQLite in settings.",
 }
 
 

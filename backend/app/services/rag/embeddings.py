@@ -8,10 +8,13 @@ Two providers, one interface:
   morphological overlap (including CJK, where it n-grams characters directly), which is a
   real improvement over exact token matching for paper↔code retrieval, and it costs nothing.
   It is the default so retrieval works on a fresh install with no configuration.
-* :class:`RemoteEmbedder` — any OpenAI-compatible ``/embeddings`` endpoint, configured
-  through the integration settings. Used when the user supplies a base URL, key, and model.
+* :class:`RemoteEmbedder` — any OpenAI-compatible ``/embeddings`` endpoint via httpx.
+* :class:`LangChainRemoteEmbedder` — same remote contract through LangChain's
+  ``OpenAIEmbeddings`` when the optional ``rag`` extra is installed. ``resolve_embedder``
+  prefers LangChain when available and falls back to httpx otherwise.
 
-Both return L2-normalized vectors, so cosine similarity is a plain dot product.
+Both remote providers (and the local hasher) return L2-normalized vectors, so cosine
+similarity is a plain dot product.
 """
 
 from __future__ import annotations
@@ -199,6 +202,77 @@ class RemoteEmbedder:
             raise EmbeddingError("embedding_timeout") from exc
         except httpx.HTTPError as exc:
             raise EmbeddingError("embedding_unreachable") from exc
+        if vectors:
+            self.dimensions = len(vectors[0])
+        return vectors
+
+
+def langchain_available() -> bool:
+    try:
+        import langchain_openai  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+class LangChainRemoteEmbedder:
+    """OpenAI-compatible embeddings via ``langchain_openai.OpenAIEmbeddings``.
+
+    Lazy-imports LangChain so environments without the ``rag`` extra keep working. Output
+    vectors are L2-normalized to match :class:`RemoteEmbedder` / :class:`LocalHashingEmbedder`.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout_seconds: float = 30.0,
+        dimensions: int = 0,
+    ) -> None:
+        try:
+            from langchain_openai import OpenAIEmbeddings
+        except ImportError as exc:
+            raise EmbeddingError("rag_vector_deps_missing") from exc
+        self.name = "remote"
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.dimensions = dimensions
+        kwargs: dict[str, object] = {
+            "model": model,
+            "api_key": api_key,
+            "base_url": self.base_url,
+            "request_timeout": timeout_seconds,
+            "chunk_size": REMOTE_BATCH_SIZE,
+        }
+        if dimensions:
+            kwargs["dimensions"] = dimensions
+        self._client = OpenAIEmbeddings(**kwargs)
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        clipped = [text[:MAX_CHARS_PER_INPUT] or " " for text in texts]
+        try:
+            raw = self._client.embed_documents(clipped)
+        except EmbeddingError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - map provider failures to stable codes
+            message = str(exc).lower()
+            if "401" in message or "unauthorized" in message:
+                raise EmbeddingError("embedding_unauthorized") from exc
+            if "429" in message or "rate" in message:
+                raise EmbeddingError("embedding_rate_limited") from exc
+            if "timeout" in message:
+                raise EmbeddingError("embedding_timeout") from exc
+            raise EmbeddingError("embedding_unreachable") from exc
+        if not isinstance(raw, list) or len(raw) != len(clipped):
+            raise EmbeddingError("embedding_count_mismatch")
+        vectors: list[list[float]] = []
+        for item in raw:
+            if not isinstance(item, list) or not item:
+                raise EmbeddingError("embedding_response_invalid")
+            vectors.append(_normalize([float(value) for value in item]))
         if vectors:
             self.dimensions = len(vectors[0])
         return vectors

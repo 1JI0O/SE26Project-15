@@ -127,6 +127,7 @@ caller can fall back to exhaustive reading:
 | `rag_index_empty` | scope has no indexed corpus (source absent or empty) |
 | `rag_index_failed` | last build failed; `status` endpoint carries the embedder reason |
 | `rag_empty_query` | blank query |
+| `rag_vector_deps_missing` | `lancedb` selected but optional `rag` extra not installed |
 | `embedding_*` | live embedder failure while embedding the query |
 
 `ref` is always an id that can be fed straight back into an existing read tool
@@ -176,28 +177,37 @@ The `rag` section:
   "model": "",
   "dimensions": 512,
   "timeout_seconds": 30.0,
-  "api_key_configured": false
+  "api_key_configured": false,
+  "vector_store": "sqlite"
 }
 ```
 
 `embedder` is `local` (offline signed feature hashing — no key, no network; the default so
 retrieval works on a fresh install) or `remote` (any OpenAI-compatible `POST {base_url}/embeddings`).
+When `remote` is fully configured and the optional backend `rag` extra is installed, embeddings
+go through LangChain's `OpenAIEmbeddings`; otherwise the httpx client is used.
+
+`vector_store` is `sqlite` (exact in-Python cosine scan over `rag_chunk` — the default) or
+`lancedb` (optional LanceDB ANN under `data/rag-lancedb/`). LanceDB requires
+`uv sync --extra rag`; without it, search returns `rag_vector_deps_missing` rather than
+crashing the agent.
 
 On `PUT`, write the key as `rag.api_key` or drop it with `rag.clear_api_key: true`; it is never
 echoed back. The whole `rag` section is optional so an older client keeps working — omitting it
 preserves stored values rather than resetting the embedder.
 
-Changing `embedder`, `model`, or `dimensions` marks **every** project's indexes `pending`:
-vectors from different generations are not comparable. An incomplete remote configuration (URL
-without key or model) silently falls back to the local embedder, so clients should validate
-completeness before saving rather than letting the fallback look like an ignored setting.
+Changing `embedder`, `model`, `dimensions`, or `vector_store` marks **every** project's indexes
+`pending`: vectors from different generations or backends are not comparable. An incomplete
+remote configuration (URL without key or model) silently falls back to the local embedder, so
+clients should validate completeness before saving rather than letting the fallback look like an
+ignored setting.
 
 ## Storage
 
-`rag_chunk` holds one row per embedded unit (`project_id`, `scope`, `source_key`, `ref`, `text`,
-`embedding`, `dimensions`, `embedder`, `metadata_json`); `rag_index_state` holds one row per
-`(project_id, scope)` with the indexed generation and status. Vectors are base64 float32 in a
-TEXT column and search is an exact in-Python cosine scan — SQLite has no vector type, and at
-this corpus size (thousands of chunks) that beats adding a native index to the PyInstaller
-sidecar. Both tables are derived data: every row is rebuildable from its source, and a rebuild
-replaces the previous generation wholesale. Schema created by migration `0013_rag_index`.
+`rag_chunk` holds one row per embedded unit when `vector_store=sqlite` (`project_id`, `scope`,
+`source_key`, `ref`, `text`, `embedding`, `dimensions`, `embedder`, `metadata_json`);
+`rag_index_state` holds one row per `(project_id, scope)` with the indexed generation and status
+for **both** backends. With `vector_store=lancedb`, embeddings live only under
+`data/rag-lancedb/{project_id}/{scope}` (not duplicated into SQLite). Schema for the SQLite
+path was created by migration `0013_rag_index`; `rag_vector_store` was added by
+`0015_rag_vector_store`.

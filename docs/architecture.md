@@ -404,8 +404,8 @@ flowchart LR
 | `code` | 已索引 symbol + 路径/签名/docstring/callee + 真实源码片段 | `{repository_id}:{analysis_revision}` | 代码分析完成 |
 | `trace` | 已复核（accepted/rejected）的 `TraceLink` | 已复核链接 id + 状态的摘要 | 追溯复核改变结论 |
 
-- 嵌入可插拔（`rag/embeddings.py`）：默认 `local` 为离线签名哈希投影，按标识符切分与中文 n-gram 做词法级向量化，无需密钥与网络；`remote` 走任意 OpenAI-compatible `/embeddings`。切换嵌入方式、模型或维度会把全部索引标记为待重建，因为不同生成的向量不可比较。
-- 向量以 base64 float32 存在 SQLite `rag_chunk.embedding`，检索为精确余弦全扫描。千级分块规模下这比引入原生向量索引更简单，也不给 PyInstaller sidecar 增加依赖。
+- 嵌入可插拔（`rag/embeddings.py`）：默认 `local` 为离线签名哈希投影，按标识符切分与中文 n-gram 做词法级向量化，无需密钥与网络；`remote` 走任意 OpenAI-compatible `/embeddings`（装了 optional `rag` extra 时优先 LangChain `OpenAIEmbeddings`，否则 httpx）。切换嵌入方式、模型、维度或向量存储会把全部索引标记为待重建，因为不同生成的向量不可比较。
+- 向量存储可插拔（`rag/vector_store.py`）：默认 `sqlite` 把 base64 float32 存在 `rag_chunk.embedding` 并做精确余弦全扫描；可选 `lancedb`（需 `uv sync --extra rag`）写入 `data/rag-lancedb/`，不在 SQLite 中重复存向量。两种路径都更新 `rag_index_state`。千级分块下默认 SQLite 扫描更简单，也不给 PyInstaller sidecar 增加依赖。
 - 暴露给 Agent 的工具：`semantic_search_paper`、`semantic_search_code`（架构与冲突任务也可用代码检索）、`recall_trace_cases`。索引不可用时工具返回 `found: false` 与回退指引，Agent 改用分页与文本搜索继续，追溯与对话流程不中断。
 - 追溯任务的系统提示会注入本项目相似的已复核案例作为校准用少样本（`_trace_precedents`），并显式声明它们不是本次运行的证据、不得复用结论。
 
