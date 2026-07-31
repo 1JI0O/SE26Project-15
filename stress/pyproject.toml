@@ -1,0 +1,32 @@
+[project]
+name = "tracelab-stress"
+version = "0.1.0"
+description = "TraceLab stress/load test harness (server + backend)"
+requires-python = ">=3.11"
+dependencies = [
+    "locust>=2.32.0",
+    "httpx>=0.27.0",
+]
+
+# Data seeding talks to PostgreSQL directly and reuses the server package for
+# model definitions, token minting and password hashing. Installed as an extra so
+# that a pure load-generator machine does not need the DB driver.
+[project.optional-dependencies]
+seed = [
+    "psycopg[binary]>=3.2",
+    "sqlmodel>=0.0.22",
+    "argon2-cffi>=23.1.0",
+    # tracelab_server.core.config is imported transitively via the auth/token modules.
+    "pydantic-settings>=2.5.0",
+    # seed_backend builds a structurally valid PDF; the upload path parses it with pypdf.
+    "pypdf>=5.0.0",
+]
+
+[dependency-groups]
+dev = ["ruff>=0.6.0"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

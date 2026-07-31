@@ -216,13 +216,19 @@ def recover_repository_analysis() -> None:
             job.started_at = None
             session.add(job)
         session.commit()
+        # Read the ids before leaving the session. commit() expires every attribute,
+        # so touching job.job_id after the session closes raises DetachedInstanceError
+        # inside the FastAPI lifespan and the process exits without ever serving a
+        # request -- any unclean shutdown that left a queued job would otherwise make
+        # the backend permanently unstartable.
+        job_ids = [job.job_id for job in jobs]
         project_ids = {
             repository.project_id
             for repository in session.exec(select(CodeRepository)).all()
             if not analysis_is_current(repository)
         }
-    for job in jobs:
-        _submit(job.job_id)
+    for job_id in job_ids:
+        _submit(job_id)
     for project_id in project_ids:
         try:
             ensure_repository_analysis(project_id)

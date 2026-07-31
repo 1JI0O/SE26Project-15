@@ -1,6 +1,7 @@
 import hashlib
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.api.routes.helpers import parse_workspace_project_id
@@ -40,6 +41,19 @@ from app.services.workspace_placeholder import workspace_payload
 
 router = APIRouter(prefix="/projects/{project_id}/trace-links", tags=["trace-links"])
 workspace_router = APIRouter(prefix="/projects/{project_id}/workspace", tags=["tracing"])
+
+
+def _fingerprint_exists(session: Session, fingerprint: str) -> bool:
+    """Fast path for the duplicate-relation check.
+
+    Separate from the insert so the race it cannot close is handled where it happens --
+    see the IntegrityError guard in ``create_link``.
+    """
+
+    return (
+        session.exec(select(TraceLink).where(TraceLink.fingerprint == fingerprint)).first()
+        is not None
+    )
 
 
 def _invalidate_trace_index(session: Session, project_id: int) -> None:
@@ -146,8 +160,7 @@ def create_trace_link(
         f"manual\x00{paper.id}\x00{code.id}\x00{code.revision}\x00{payload.paper_ref}\x00"
         f"{payload.code_ref}\x00{payload.relation_type.value}".encode()
     ).hexdigest()
-    existing = session.exec(select(TraceLink).where(TraceLink.fingerprint == fingerprint)).first()
-    if existing is not None:
+    if _fingerprint_exists(session, fingerprint):
         raise HTTPException(status_code=409, detail="Trace relation already exists")
     link = TraceLink(
         project_id=project_id,
@@ -166,7 +179,20 @@ def create_trace_link(
         fingerprint=fingerprint,
     )
     session.add(link)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        # The check above is only a fast path. Two concurrent requests for the same
+        # relation both pass it, then one loses the uq_trace_link_fingerprint race and
+        # would otherwise surface as a 500 -- the caller sent a duplicate, so it is a 409.
+        session.rollback()
+        # SQLite names the column ("trace_link.fingerprint"), other backends the
+        # constraint ("uq_trace_link_fingerprint"); "fingerprint" covers both. The table's
+        # other unique columns are uuid4-generated, so they are not a realistic collision --
+        # anything else here is a genuine fault and must keep its 500.
+        if "fingerprint" not in str(exc.orig):
+            raise
+        raise HTTPException(status_code=409, detail="Trace relation already exists") from exc
     record_local_operation(
         session,
         project,
