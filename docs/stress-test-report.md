@@ -153,3 +153,22 @@ Argon2id 单次校验实测 59.8 ms / 64 MiB，对应约 25 logins/s 的 CPU 上
 4. 修 D2、D3 的重试与竞态语义。
 5. 为 `_client_ip` 增加可信代理白名单，不单独依赖 `X-Forwarded-For` 首值。
 6. 补 S8（Agent SSE）与 4 小时 soak，二者是本轮唯一未覆盖的判定项。
+
+## 7. 修复记录
+
+D1–D5 已全部修复，每项附回归测试。本节记录改动位置与验证方式；第 5 节的缺陷描述保留为压测发现的原始记录。
+
+| 缺陷 | 改动 | 回归测试 |
+| --- | --- | --- |
+| D1 | `backend/app/services/analysis_jobs.py` —— 在 `commit()` 前取出 `job_id`，不再依赖过期属性 | `backend/tests/repositories/test_repository_analysis_recovery.py` |
+| D2 | `server/tracelab_server/api/routes/blobs.py` —— 删除 `failed` blob 前先删子 `upload_session`，并在两次 delete 之间 `flush()` 强制顺序 | `server/tests/integration/test_blob_failed_retry.py` |
+| D3 | `backend/app/api/routes/traces.py` —— 预检查降级为快路径，`flush()` 捕获 `IntegrityError` 转 409 | `backend/tests/tracing/test_trace_duplicate_race.py` |
+| D4 | `backend/app/api/routes/papers.py`、`app/services/paper_parser.py` —— pypdf 解析异常转 400 | `backend/tests/papers/test_upload_validation.py` |
+| D5 | `server/tracelab_server/core/config.py`、`db/session.py`、`main.py`、`compose.yaml` —— 池宽度可配置、超时映射为 503 + `Retry-After` | `server/tests/unit/test_pool_config.py` |
+
+两处需要说明的细节：
+
+- **D2 的顺序问题**：这些 SQLModel 表未声明 ORM `relationship()`，工作单元没有依赖可排序，同一次 flush 内父行 DELETE 可能先于子行发出，因此显式 `flush()` 是修复的必要部分而非冗余。原有 server 套件看不到这个缺陷，是因为 SQLite 默认 `PRAGMA foreign_keys=OFF`；新测试显式打开，并单独断言约束确实生效。
+- **D5 不是把池开到最大**：`compose.yaml` 中 api 取 12+8（× 2 workers = 峰值 40），postgres 同步上调 `max_connections=200`。没有开得更宽，因为 postgres 被限在 `cpus: 1.0`，更多并发连接只会在 CPU 上排队。连接预算表见 `server/README.md`。
+
+验证：backend `336 passed` + ruff 通过；server `tests/unit` 与 D2 测试共 `6 passed`，ruff 通过。server 完整套件另有 4 项失败，位于 `tests/integration/test_cloud_auth_sync.py`，原因是 `blob_store.disk_percent()` 读宿主真实磁盘（本机 C: 92% > `cloud_disk_stop_percent` 90）导致 upload-init 返回 507。已通过在干净 HEAD 上复现确认为既有测试的环境脆弱性，与本次改动无关；该套件未打 `disk_percent` 补丁，本次也未改动它。
