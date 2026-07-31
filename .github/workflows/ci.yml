@@ -15,7 +15,9 @@ jobs:
       - name: Local backend checks
         working-directory: backend
         run: |
-          uv sync --frozen --extra dev
+          # ``rag`` extra pulls LanceDB / langchain-openai so the optional vector
+          # backends are present for the RAG coverage gate (skipped otherwise).
+          uv sync --frozen --extra dev --extra rag
           uv run ruff check app tests "../FinalRelease/单元测试代码"
           uv run pytest -q
           uv run pytest -q \

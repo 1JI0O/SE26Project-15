@@ -228,3 +228,155 @@ def test_sqlite_store_roundtrip(rag_session: Session) -> None:
     assert hits[0]["ref"] == "r1"
     store.delete_scope(project.id or 0, "paper")
     assert store.query(project.id or 0, "paper", "k", query, limit=1) == []
+
+
+def test_langchain_remote_embedder_maps_rate_limit_timeout_and_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _skip_without_langchain()
+
+    class _RateLimited:
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("429 rate limited")
+
+    monkeypatch.setattr(
+        "langchain_openai.OpenAIEmbeddings",
+        lambda **_kwargs: _RateLimited(),
+    )
+    with pytest.raises(embeddings.EmbeddingError) as rate:
+        LangChainRemoteEmbedder("https://example/v1", "k", "m").embed(["q"])
+    assert rate.value.reason == "embedding_rate_limited"
+
+    class _Timeout:
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("request timeout waiting for upstream")
+
+    monkeypatch.setattr(
+        "langchain_openai.OpenAIEmbeddings",
+        lambda **_kwargs: _Timeout(),
+    )
+    with pytest.raises(embeddings.EmbeddingError) as timed:
+        LangChainRemoteEmbedder("https://example/v1", "k", "m").embed(["q"])
+    assert timed.value.reason == "embedding_timeout"
+
+    class _BadShape:
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0], []]  # second vector empty → invalid
+
+    monkeypatch.setattr(
+        "langchain_openai.OpenAIEmbeddings",
+        lambda **_kwargs: _BadShape(),
+    )
+    with pytest.raises(embeddings.EmbeddingError) as bad:
+        LangChainRemoteEmbedder("https://example/v1", "k", "m").embed(["a", "b"])
+    assert bad.value.reason == "embedding_response_invalid"
+
+    class _CountMismatch:
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0]]  # one vector for two inputs
+
+    monkeypatch.setattr(
+        "langchain_openai.OpenAIEmbeddings",
+        lambda **_kwargs: _CountMismatch(),
+    )
+    with pytest.raises(embeddings.EmbeddingError) as count:
+        LangChainRemoteEmbedder("https://example/v1", "k", "m").embed(["a", "b"])
+    assert count.value.reason == "embedding_count_mismatch"
+
+
+def test_langchain_remote_embedder_missing_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _block_langchain(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "langchain_openai" or name.startswith("langchain_openai."):
+            raise ImportError("blocked for test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _block_langchain)
+    assert embeddings.langchain_available() is False
+    with pytest.raises(embeddings.EmbeddingError) as caught:
+        LangChainRemoteEmbedder("https://example/v1", "k", "m")
+    assert caught.value.reason == "rag_vector_deps_missing"
+
+
+def test_lancedb_store_empty_replace_and_query_edge_cases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _skip_without_lancedb()
+    from app.services.rag import vector_store as vs
+
+    store = LanceDbStore(root=tmp_path / "lance-edge")
+    # Empty replace should wipe the scope rather than create a table.
+    store.replace(1, "paper", "g", [])
+    assert store.query(1, "paper", "g", [1.0, 0.0], limit=3) == []
+
+    store.replace(
+        1,
+        "paper",
+        "g",
+        [{"ref": "r", "text": "t", "vector": [1.0, 0.0], "metadata": {"preview": "t"}}],
+    )
+
+    class _BrokenTable:
+        def search(self, _vector: list[float]) -> Any:
+            raise RuntimeError("search exploded")
+
+    class _BrokenDb:
+        def table_names(self) -> list[str]:
+            return [vs.TABLE_NAME]
+
+        def open_table(self, _name: str) -> Any:
+            return _BrokenTable()
+
+        def create_table(self, *_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("create exploded")
+
+    monkeypatch.setattr(store, "_connect", lambda *_args, **_kwargs: _BrokenDb())
+    with pytest.raises(vs.VectorStoreError) as query_err:
+        store.query(1, "paper", "g", [1.0, 0.0], limit=1)
+    assert query_err.value.reason == "rag_vector_store_failed"
+
+    with pytest.raises(vs.VectorStoreError) as replace_err:
+        store.replace(
+            1,
+            "paper",
+            "g",
+            [{"ref": "r", "text": "t", "vector": [1.0, 0.0], "metadata": {}}],
+        )
+    assert replace_err.value.reason == "rag_vector_store_failed"
+
+
+def test_lancedb_query_parses_string_and_invalid_metadata(tmp_path: Path) -> None:
+    _skip_without_lancedb()
+    store = LanceDbStore(root=tmp_path / "lance-meta")
+    store.replace(
+        2,
+        "code",
+        "gen",
+        [
+            {
+                "ref": "sym",
+                "text": "body",
+                "vector": [0.0, 1.0],
+                "metadata": {"preview": "body", "kind": "function"},
+            }
+        ],
+    )
+    hits = store.query(2, "code", "gen", [0.0, 1.0], limit=1)
+    assert hits[0]["ref"] == "sym"
+    assert hits[0]["kind"] == "function"
+
+    # Missing scope directory → empty without error.
+    assert LanceDbStore(root=tmp_path / "empty").query(9, "paper", "x", [1.0], limit=1) == []
+
+
+def test_default_lancedb_root_and_vector_store_error() -> None:
+    from app.services.rag.vector_store import VectorStoreError, default_lancedb_root
+
+    err = VectorStoreError("rag_vector_store_failed")
+    assert err.reason == "rag_vector_store_failed"
+    root = default_lancedb_root()
+    assert root.name == "rag-lancedb"
