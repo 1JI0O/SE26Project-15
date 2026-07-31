@@ -175,6 +175,21 @@ def upload_init(
     if existing is not None:
         if existing.status == "failed":
             blob_store.temporary_path(existing.blob_id).unlink(missing_ok=True)
+            # Drop the child upload_session first. Its FK to blob_object does not cascade,
+            # so deleting the blob while a session row survives raises
+            # upload_session_blob_id_fkey and every later retry of this sha256 fails the
+            # same way -- a state the client can never clear on its own.
+            # A failed blob has no other children: blob_reference and artifact_version rows
+            # are only written after the upload is promoted to ready.
+            stale_session = session.exec(
+                select(UploadSession).where(UploadSession.blob_id == existing.blob_id)
+            ).first()
+            if stale_session is not None:
+                session.delete(stale_session)
+                # Flush between the two deletes. These tables declare no ORM
+                # relationship(), so the unit of work has no dependency to sort on and may
+                # emit the parent DELETE first, which trips the FK it is meant to avoid.
+                session.flush()
             session.delete(existing)
             session.flush()
             existing = None
