@@ -11,6 +11,15 @@ SECTION_RE = re.compile(
 )
 
 
+class PdfParseError(ValueError):
+    """A PDF that pypdf cannot open: malformed xref, truncated file, encrypted.
+
+    Subclasses ValueError so the existing broad ``except Exception`` guards at the other
+    call sites keep working unchanged, while the upload route can map it to 400 -- a file
+    the client sent is bad input, not a server fault.
+    """
+
+
 def _clean_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
@@ -49,10 +58,15 @@ def parse_pdf(path: str | Path) -> dict[str, Any]:
         # Compatibility parser remains available while the UI migrates to paper-jobs.
         pass
 
-    reader = PdfReader(str(path))
-    page_texts: list[tuple[int, str]] = []
-    for index, page in enumerate(reader.pages, start=1):
-        page_texts.append((index, page.extract_text() or ""))
+    try:
+        reader = PdfReader(str(path))
+        page_texts: list[tuple[int, str]] = []
+        for index, page in enumerate(reader.pages, start=1):
+            page_texts.append((index, page.extract_text() or ""))
+    except PdfParseError:
+        raise
+    except Exception as exc:  # pypdf raises a wide range of types for bad input
+        raise PdfParseError(f"Could not read the PDF: {exc}") from exc
 
     all_lines: list[str] = []
     paragraphs: list[dict[str, Any]] = []
